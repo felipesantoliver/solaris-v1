@@ -1,114 +1,60 @@
 🌟 Solaris AI v1
 
+Solaris é um ecossistema de produtividade que utiliza histórico de Projetos Isolados e Inteligência Híbrida para aprender com conversas, arquivos e decisões. O sistema evolui com o tempo, utilizando uma estrutura de fallback para garantir alta disponibilidade e o melhor custo-benefício.
 
-
-Solaris é um ecossistema de produtividade que utiliza histórico de Projetos Isolados e Embeddings avançados para aprender com conversas, arquivos e decisões, oferecendo respostas que evoluem com o tempo.
-
-
-
-Status do Projeto: Em Construção
-
+🚀 Status do Projeto: Em Construção
 O Solaris está sendo desenvolvido para oferecer uma experiência de chat inteligente com "memória de longo prazo". Atualmente, o sistema conta com:
 
+Arquitetura de Fallback: Integração principal com DeepSeek-Chat (raciocínio lógico) e contingência automática via Gemini 1.5 Flash.
 
+Multimodalidade Pronta: Suporte estruturado para futuras gerações de imagens via Gemini Imagen.
 
-Core de IA: Integração com o modelo gemini-1.5-flash.
+Memória Semântica: Estrutura preparada para embeddings, permitindo que a IA aprenda com o contexto dos projetos.
 
+Estrutura de Projetos: Separação estrita de conversas e arquivos por objetivos específicos.
 
+Interface: Baseada em React com suporte a Dark Mode e renderização fluida de Markdown.
 
-Memória Semântica: Implementação inicial de embeddings (text-embedding-004) para que a IA aprenda com o contexto dos projetos.
-
-
-
-Estrutura de Projetos: Separação de conversas e arquivos por objetivos específicos.
-
-
-
-Interface: Baseada em React com suporte a Dark Mode e renderização de Markdown.
-
-
-
-Estrutura do Repositório
-
-
-
+📂 Estrutura do Repositório
+Plaintext
 Solaris-v1/
-
 ├── backend/                # Servidor API (Node.js + Express)
-
-│   ├── server.js           # Gerenciamento de rotas e segurança (CORS)
-
-│   ├── database.js         # Banco de dados SQLite (Persistência)
-
-│   ├── aiService.js    # Lógica da IA e processamento de memória
-
-│   └── routes/             # Endpoints de Mensagens, Projetos e Arquivos
-
+│   ├── server.js           # Servidor principal e rotas (CORS)
+│   ├── database.js         # Persistência de dados com SQLite
+│   ├── aiService.js        # Lógica de IA Híbrida (DeepSeek + Gemini)
+│   └── routes/             # Endpoints: Mensagens, Projetos, Arquivos e Share
 ├── frontend/               # Interface do Usuário (React + Vite)
+│   ├── src/
+│   │   ├── App.jsx         # Gerenciamento de estado global
+│   │   └── SolarisAgent.jsx # Componente de interface do agente
+│   └── public/             # Ativos estáticos
+⚙️ Como configurar (Deploy)
+Para colocar o Solaris online utilizando a infraestrutura gratuita:
 
-│   └── src/
-
-│       └── App.jsx         # Componente principal da aplicação
-
-
-
-
-
-Como configurar (Deploy Inicial)
-
-
-
-Para colocar o Solaris online pela primeira vez:
-
-
-
-Backend (Render):
-
-
-
+1. Backend (Render)
 Conecte este repositório ao Render.com.
 
+Configure as Variáveis de Ambiente:
 
+GEMINI_API_KEY: Sua chave do Google AI Studio.
 
-Configure a variável de ambiente GEMINI\_API\_KEY.
+DEEPSEEK_API_KEY: Sua chave da DeepSeek API.
 
+Cron-job: Utilize o cron-job.org para pingar o endpoint /api/health a cada 10 minutos e evitar que o servidor hiberne.
 
+2. Frontend (Vercel)
+Importe a pasta frontend para a Vercel.
 
-Defina a porta padrão como 3001.
+Certifique-se de que a API_BASE no código aponte para a URL gerada pelo Render.
 
+🛠️ Tecnologias Utilizadas
+Frontend: React, Tailwind CSS, Lucide Icons, Vite.
 
+Backend: Node.js, Express, SQLite (sql.js / better-sqlite3).
 
-Frontend (Vercel):
+IA & LLMs: DeepSeek API, Google Generative AI SDK (Gemini).
 
-
-
-Importe o repositório para a Vercel.
-
-
-
-Certifique-se de que a API\_BASE no App.jsx aponte para a URL do seu backend no Render.
-
-
-
-Tecnologias Utilizadas
-
-
-
-Frontend: React, Tailwind CSS, Lucide Icons.
-
-
-
-Backend: Node.js, Express, SQLite (via better-sqlite3).
-
-
-
-IA: Google Generative AI SDK.
-
-
+Infra: Render (Backend), Vercel (Frontend), Cron-job.org (Keep-alive).
 
 📄 Licença
-
-
-
 Este projeto está sob a licença MIT. Por estar em fase inicial, sinta-se à vontade para contribuir com sugestões e melhorias.
-
