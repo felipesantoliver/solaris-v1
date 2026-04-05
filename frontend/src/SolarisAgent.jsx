@@ -26,13 +26,21 @@ async function callClaude(messages, systemPrompt) {
 function OrbitLine({ size, themeColor }) {
   return <div className={`absolute border ${themeColor} rounded-full ${size} transition-colors duration-500`} />;
 }
-function PlanetDot({ size, duration, color, glow }) {
+function PlanetDot({ size, duration, color, glow, dotSize = 'w-1.5 h-1.5' }) {
   return (
-    <div className={`absolute orbit-rotate ${size}`} style={{ animationDuration: duration }}>
+    <div
+      className={`absolute ${size}`}
+      style={{ top: '50%', left: '50%', transform: 'translate(-50%, -50%)' }}
+    >
       <div
-        className={`absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full ${color} w-1.5 h-1.5 shadow-sm transition-colors duration-500`}
-        style={glow ? { boxShadow: glow } : {}}
-      />
+        className="absolute inset-0 orbit-rotate"
+        style={{ animationDuration: duration }}
+      >
+        <div
+          className={`absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full ${color} ${dotSize} shadow-sm transition-colors duration-500`}
+          style={glow ? { boxShadow: glow } : {}}
+        />
+      </div>
     </div>
   );
 }
@@ -48,6 +56,7 @@ export default function App() {
   const [workMode, setWorkMode] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [showShareToast, setShowShareToast] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const [projects, setProjects] = useState([]);
   const [chatHistory, setChatHistory] = useState([]);
@@ -266,8 +275,35 @@ export default function App() {
         </div>
       )}
 
+      {/* Botão de expandir sidebar — aparece fora da aside quando colapsada */}
+      {sidebarCollapsed && (
+        <button
+          onClick={() => setSidebarCollapsed(false)}
+          className={`hidden lg:flex fixed left-0 top-8 z-40 w-7 h-7 rounded-r-full border border-l-0 ${theme.border} ${theme.bgAside} items-center justify-center shadow-sm transition-all duration-300 ${theme.textSecondary} hover:text-current`}
+          title="Expandir sidebar"
+        >
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="4,2 8,6 4,10" />
+          </svg>
+        </button>
+      )}
+
       {/* ── Sidebar ── */}
-      <aside className={`hidden lg:flex w-80 flex-col border-r ${theme.border} ${theme.bgAside} relative transition-colors duration-500 overflow-y-auto custom-scrollbar`}>
+      <aside className={`hidden lg:flex flex-col border-r ${theme.border} ${theme.bgAside} relative transition-all duration-500 overflow-y-auto custom-scrollbar ${sidebarCollapsed ? 'w-0 border-r-0 overflow-hidden' : 'w-80'}`}>
+
+        {/* Toggle button — fica colado na borda direita da sidebar */}
+        <button
+          onClick={() => setSidebarCollapsed(c => !c)}
+          className={`absolute top-8 -right-4 z-30 w-7 h-7 rounded-full border ${theme.border} ${theme.bgAside} flex items-center justify-center shadow-sm transition-all duration-500 ${theme.textSecondary} hover:text-current`}
+          title={sidebarCollapsed ? 'Expandir sidebar' : 'Recolher sidebar'}
+        >
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            {sidebarCollapsed
+              ? <><polyline points="4,2 8,6 4,10" /></>
+              : <><polyline points="8,2 4,6 8,10" /></>
+            }
+          </svg>
+        </button>
 
         <div className={`sticky top-0 z-20 px-8 pt-8 pb-6 flex flex-col gap-5 shrink-0 ${theme.bgAside} transition-colors duration-500`}>
           <button
@@ -291,19 +327,53 @@ export default function App() {
         </div>
 
         <div className="px-8 flex flex-col transition-colors duration-500">
-          {/* Solar system animation */}
-          <div className="relative w-full aspect-square flex items-center justify-center opacity-80 hover:opacity-100 transition-opacity duration-700 mb-10 shrink-0">
-            <div className={`w-6 h-6 ${darkMode ? 'bg-[#ffd700]' : 'bg-[#ffcc00]'} rounded-full z-10 shadow-[0_0_25px_rgba(255,204,0,0.3)] transition-colors duration-500`} />
-            <OrbitLine size="w-16 h-16" themeColor={theme.orbit} />
-            <OrbitLine size="w-24 h-24" themeColor={theme.orbit} />
-            <OrbitLine size="w-32 h-32" themeColor={theme.orbit} />
-            <OrbitLine size="w-44 h-44" themeColor={theme.orbit} />
-            <OrbitLine size="w-56 h-56" themeColor={theme.orbit} />
-            <PlanetDot size="w-16 h-16" duration="4s" color={darkMode ? 'bg-[#888]' : 'bg-[#666]'} />
-            <PlanetDot size="w-24 h-24" duration="7s" color="bg-[#e3bb76]" />
-            <PlanetDot size="w-32 h-32" duration="12s" color="bg-[#2271b3]" glow={darkMode ? '0 0 12px #00ffff' : '0 0 8px #00ffff'} />
-            <PlanetDot size="w-44 h-44" duration="18s" color="bg-[#e27b58]" />
-            <PlanetDot size="w-56 h-56" duration="30s" color="bg-[#d39c7e]" />
+          {/* Solar system animation — todos os 8 planetas, modelo compacto 160×160 */}
+          <div className="relative flex items-center justify-center opacity-80 hover:opacity-100 transition-opacity duration-700 mb-10 shrink-0" style={{ width: '160px', height: '160px', margin: '0 auto 40px', overflow: 'visible' }}>
+            {/* Sol */}
+            <div className={`absolute w-[14px] h-[14px] ${darkMode ? 'bg-[#ffd700]' : 'bg-[#ffcc00]'} rounded-full z-10 shadow-[0_0_16px_rgba(255,204,0,0.5)] transition-colors duration-500`} style={{ top: '50%', left: '50%', transform: 'translate(-50%,-50%)' }} />
+
+            {/* Órbita Mercúrio r=18 */}
+            <div className={`absolute border ${theme.orbit} rounded-full transition-colors duration-500`} style={{ width: 36, height: 36, top: '50%', left: '50%', transform: 'translate(-50%,-50%)' }} />
+            {/* Órbita Vênus r=26 */}
+            <div className={`absolute border ${theme.orbit} rounded-full transition-colors duration-500`} style={{ width: 52, height: 52, top: '50%', left: '50%', transform: 'translate(-50%,-50%)' }} />
+            {/* Órbita Terra r=36 */}
+            <div className={`absolute border ${theme.orbit} rounded-full transition-colors duration-500`} style={{ width: 72, height: 72, top: '50%', left: '50%', transform: 'translate(-50%,-50%)' }} />
+            {/* Órbita Marte r=46 */}
+            <div className={`absolute border ${theme.orbit} rounded-full transition-colors duration-500`} style={{ width: 92, height: 92, top: '50%', left: '50%', transform: 'translate(-50%,-50%)' }} />
+            {/* Órbita Júpiter r=58 */}
+            <div className={`absolute border ${theme.orbit} rounded-full transition-colors duration-500`} style={{ width: 116, height: 116, top: '50%', left: '50%', transform: 'translate(-50%,-50%)' }} />
+            {/* Órbita Saturno r=70 */}
+            <div className={`absolute border ${theme.orbit} rounded-full transition-colors duration-500`} style={{ width: 140, height: 140, top: '50%', left: '50%', transform: 'translate(-50%,-50%)' }} />
+            {/* Órbita Urano r=78 */}
+            <div className={`absolute border ${theme.orbit} rounded-full transition-colors duration-500`} style={{ width: 156, height: 156, top: '50%', left: '50%', transform: 'translate(-50%,-50%)' }} />
+            {/* Órbita Netuno r=80 — fora do container, mas o container tem overflow visible */}
+            <div className={`absolute border ${theme.orbit} rounded-full transition-colors duration-500`} style={{ width: 160, height: 160, top: '50%', left: '50%', transform: 'translate(-50%,-50%)' }} />
+
+            {/* Mercúrio — cinza, 1px, 3s */}
+            <PlanetDot size="w-[36px] h-[36px]" duration="3s" color={darkMode ? 'bg-[#b0aeaa]' : 'bg-[#9c9a95]'} dotSize="w-[5px] h-[5px]" />
+            {/* Vênus — creme-amarelo, 1.5px, 7s */}
+            <PlanetDot size="w-[52px] h-[52px]" duration="7s" color="bg-[#e3c98a]" dotSize="w-[6px] h-[6px]" />
+            {/* Terra — azul, 1.5px, 12s */}
+            <PlanetDot size="w-[72px] h-[72px]" duration="12s" color="bg-[#2b7fc4]" glow={darkMode ? '0 0 6px #4af' : '0 0 5px rgba(43,127,196,0.7)'} dotSize="w-[6px] h-[6px]" />
+            {/* Marte — laranja-ferrugem, 1px, 19s */}
+            <PlanetDot size="w-[92px] h-[92px]" duration="19s" color="bg-[#c1440e]" dotSize="w-[5px] h-[5px]" />
+            {/* Júpiter — bege-laranja, 3px, 32s */}
+            <PlanetDot size="w-[116px] h-[116px]" duration="32s" color="bg-[#c8874a]" glow={darkMode ? '0 0 5px rgba(200,135,74,0.4)' : undefined} dotSize="w-[9px] h-[9px]" />
+            {/* Saturno — dourado + anel SVG, 48s */}
+            <div className="absolute w-[140px] h-[140px]" style={{ top: '50%', left: '50%', transform: 'translate(-50%,-50%)' }}>
+              <div className="absolute inset-0 orbit-rotate" style={{ animationDuration: '48s' }}>
+                <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2" style={{ width: 14, height: 14 }}>
+                  <div className="w-[8px] h-[8px] rounded-full bg-[#e4c97e] absolute shadow-sm" style={{ top: '50%', left: '50%', transform: 'translate(-50%,-50%)' }} />
+                  <svg width="16" height="8" viewBox="0 0 16 8" style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-25%)' }}>
+                    <ellipse cx="8" cy="4" rx="7" ry="2.2" fill="none" stroke={darkMode ? 'rgba(228,201,126,0.55)' : 'rgba(180,150,80,0.45)'} strokeWidth="1.2" />
+                  </svg>
+                </div>
+              </div>
+            </div>
+            {/* Urano — azul-ciano pálido, 64s */}
+            <PlanetDot size="w-[156px] h-[156px]" duration="64s" color="bg-[#7de8e8]" glow={darkMode ? '0 0 5px rgba(125,232,232,0.4)' : undefined} dotSize="w-[7px] h-[7px]" />
+            {/* Netuno — azul-violeta, 90s */}
+            <PlanetDot size="w-[160px] h-[160px]" duration="90s" color="bg-[#3f54ba]" glow={darkMode ? '0 0 5px rgba(63,84,186,0.5)' : undefined} dotSize="w-[6px] h-[6px]" />
           </div>
 
           {/* Projects */}
