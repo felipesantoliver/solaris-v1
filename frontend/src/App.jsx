@@ -320,7 +320,6 @@ export default function App() {
   };
 
   const visibleProjects = projects.slice(0, 3);
-  const hiddenProjects = projects.slice(3);
 
   const filteredChats = searchQuery.trim()
     ? chatHistory.filter(c => c.title?.toLowerCase().includes(searchQuery.toLowerCase()))
@@ -336,7 +335,7 @@ export default function App() {
       className={`flex items-center justify-between p-2.5 -ml-2 rounded-lg cursor-grab active:cursor-grabbing transition-all group/item ${isActive ? theme.projectActive : theme.projectHover
         } ${draggedItemId === project.id ? 'bg-blue-500/10' : ''}`}
     >
-      <div className="flex items-center gap-3 overflow-hidden pointer-events-none">
+      <div className="flex items-center gap-3 overflow-hidden pointer-events-none text-left">
         <GripVertical size={12} className={`${theme.textMuted} opacity-0 group-hover/item:opacity-100 transition-opacity`} />
         <Folder size={14} className={isActive ? 'text-current opacity-60' : theme.textMuted} />
         <span className={`text-xs font-light truncate max-w-[120px] ${isActive ? 'font-normal' : theme.textSecondary}`}>
@@ -401,7 +400,7 @@ export default function App() {
                   setActiveChatId(newChat.id);
                 } catch (err) { console.error(err); }
               }}
-              className={`flex items-center gap-3 w-full transition-colors duration-500 ${theme.textPrimary} group`}
+              className={`flex items-center gap-3 w-full text-left transition-colors duration-500 ${theme.textPrimary} group`}
             >
               <PencilLine size={18} strokeWidth={1.2} />
               <span className="text-sm font-light">Novo Chat</span>
@@ -460,7 +459,7 @@ export default function App() {
               ) : (
                 <button
                   onClick={() => setIsCreatingProject(true)}
-                  className={`flex items-center gap-3 p-2 -ml-2 rounded-lg transition-all ${theme.projectHover} group`}
+                  className={`flex items-center gap-3 p-2 -ml-2 rounded-lg text-left transition-all ${theme.projectHover} group`}
                 >
                   <FolderPlus size={18} className={`${theme.textSecondary} group-hover:text-current`} strokeWidth={1.5} />
                   <span className={`text-sm font-light ${theme.textPrimary}`}>Novo projeto</span>
@@ -483,12 +482,19 @@ export default function App() {
                     className={`flex items-center justify-between p-2 -ml-2 rounded-lg cursor-pointer transition-all group/chat ${activeChatId === chat.id ? theme.projectActive : theme.projectHover
                       }`}
                   >
-                    <div className="flex items-center gap-3 overflow-hidden">
+                    <div className="flex items-center gap-3 overflow-hidden text-left">
                       <History size={14} className={activeChatId === chat.id ? 'text-current opacity-60' : `${theme.textMuted}`} />
                       <span className={`text-xs font-light truncate max-w-[140px] ${activeChatId === chat.id ? 'font-normal' : theme.textSecondary}`}>
                         {chat.title}
                       </span>
                     </div>
+                    {/* Botão de excluir chat restaurado aqui */}
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setItemToDelete({ type: 'chat', data: chat }); }}
+                      className={`opacity-0 group-hover/chat:opacity-100 p-1 hover:text-red-500 transition-all duration-200`}
+                    >
+                      <Trash2 size={12} />
+                    </button>
                   </div>
                 ))}
               </div>
