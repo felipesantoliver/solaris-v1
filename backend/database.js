@@ -1,26 +1,67 @@
-import Database from 'better-sqlite3';
+import sqlite3 from 'sqlite3';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import fs from 'fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB_PATH = path.join(__dirname, 'database.sqlite');
 
-let db;
+let db = null;
+
+// Promise wrapper para sqlite3 (que usa callbacks)
+function runAsync(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.run(sql, params, function(err) {
+      if (err) reject(err);
+      else resolve({ lastID: this.lastID, changes: this.changes });
+    });
+  });
+}
+
+function getAsync(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.get(sql, params, (err, row) => {
+      if (err) reject(err);
+      else resolve(row);
+    });
+  });
+}
+
+function allAsync(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.all(sql, params, (err, rows) => {
+      if (err) reject(err);
+      else resolve(rows || []);
+    });
+  });
+}
+
+function execAsync(sql) {
+  return new Promise((resolve, reject) => {
+    db.exec(sql, (err) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
+}
 
 export function openDb() {
   if (!db) {
-    db = new Database(DB_PATH);
-    db.pragma('journal_mode = WAL');
-    db.pragma('foreign_keys = ON');
+    db = new sqlite3.Database(DB_PATH, (err) => {
+      if (err) {
+        console.error('Erro ao abrir banco de dados:', err);
+        process.exit(1);
+      }
+    });
+    db.run('PRAGMA foreign_keys = ON');
+    db.run('PRAGMA journal_mode = WAL');
   }
   return db;
 }
 
 export async function initDb() {
-  const database = openDb();
+  openDb();
 
-  database.exec(`
+  await execAsync(`
     CREATE TABLE IF NOT EXISTS projects (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
@@ -75,3 +116,6 @@ export async function initDb() {
 
   console.log('✅ Tabelas verificadas/criadas');
 }
+
+// Exporta as funções async para usar em outros arquivos
+export { runAsync, getAsync, allAsync, execAsync };

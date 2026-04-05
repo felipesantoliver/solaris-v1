@@ -1,19 +1,19 @@
 import { Router } from 'express';
-import { openDb } from '../database.js';
+import { getAsync, allAsync, runAsync } from '../database.js';
 import { randomUUID } from 'crypto';
 
 const router = Router();
 
 // Lista todos os projetos do usuário
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   const userId = req.headers['x-user-id'];
   if (!userId) return res.status(400).json({ error: 'x-user-id obrigatório' });
 
   try {
-    const db = openDb();
-    const projects = db.prepare(
-      'SELECT * FROM projects WHERE user_id = ? ORDER BY created_at DESC'
-    ).all(userId);
+    const projects = await allAsync(
+      'SELECT * FROM projects WHERE user_id = ? ORDER BY created_at DESC',
+      [userId]
+    );
     res.json(projects);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -21,16 +21,19 @@ router.get('/', (req, res) => {
 });
 
 // Busca projeto com seus chats
-router.get('/:id', (req, res) => {
+router.get('/:id', async (req, res) => {
   const userId = req.headers['x-user-id'];
   try {
-    const db = openDb();
-    const project = db.prepare('SELECT * FROM projects WHERE id = ? AND user_id = ?').get(req.params.id, userId);
+    const project = await getAsync(
+      'SELECT * FROM projects WHERE id = ? AND user_id = ?',
+      [req.params.id, userId]
+    );
     if (!project) return res.status(404).json({ error: 'Projeto não encontrado' });
 
-    const chats = db.prepare(
-      'SELECT * FROM chats WHERE project_id = ? ORDER BY updated_at DESC'
-    ).all(req.params.id);
+    const chats = await allAsync(
+      'SELECT * FROM chats WHERE project_id = ? ORDER BY updated_at DESC',
+      [req.params.id]
+    );
 
     res.json({ ...project, chats });
   } catch (err) {
@@ -39,7 +42,7 @@ router.get('/:id', (req, res) => {
 });
 
 // Cria projeto
-router.post('/', (req, res) => {
+router.post('/', async (req, res) => {
   const userId = req.headers['x-user-id'];
   if (!userId) return res.status(400).json({ error: 'x-user-id obrigatório' });
 
@@ -47,13 +50,13 @@ router.post('/', (req, res) => {
   if (!name) return res.status(400).json({ error: 'name obrigatório' });
 
   try {
-    const db = openDb();
     const id = randomUUID();
-    db.prepare(
-      'INSERT INTO projects (id, user_id, name, objective, response_style, memory_mode) VALUES (?, ?, ?, ?, ?, ?)'
-    ).run(id, userId, name, objective || null, response_style, memory_mode);
+    await runAsync(
+      'INSERT INTO projects (id, user_id, name, objective, response_style, memory_mode) VALUES (?, ?, ?, ?, ?, ?)',
+      [id, userId, name, objective || null, response_style, memory_mode]
+    );
 
-    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
+    const project = await getAsync('SELECT * FROM projects WHERE id = ?', [id]);
     res.status(201).json(project);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -61,16 +64,18 @@ router.post('/', (req, res) => {
 });
 
 // Atualiza projeto
-router.patch('/:id', (req, res) => {
+router.patch('/:id', async (req, res) => {
   const userId = req.headers['x-user-id'];
   const { name, objective, response_style, memory_mode } = req.body;
 
   try {
-    const db = openDb();
-    const project = db.prepare('SELECT * FROM projects WHERE id = ? AND user_id = ?').get(req.params.id, userId);
+    const project = await getAsync(
+      'SELECT * FROM projects WHERE id = ? AND user_id = ?',
+      [req.params.id, userId]
+    );
     if (!project) return res.status(404).json({ error: 'Projeto não encontrado' });
 
-    db.prepare(`
+    await runAsync(`
       UPDATE projects SET
         name = COALESCE(?, name),
         objective = COALESCE(?, objective),
@@ -78,23 +83,26 @@ router.patch('/:id', (req, res) => {
         memory_mode = COALESCE(?, memory_mode),
         updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
-    `).run(name ?? null, objective ?? null, response_style ?? null, memory_mode ?? null, req.params.id);
+    `, [name ?? null, objective ?? null, response_style ?? null, memory_mode ?? null, req.params.id]);
 
-    res.json(db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id));
+    const updated = await getAsync('SELECT * FROM projects WHERE id = ?', [req.params.id]);
+    res.json(updated);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
 // Deleta projeto
-router.delete('/:id', (req, res) => {
+router.delete('/:id', async (req, res) => {
   const userId = req.headers['x-user-id'];
   try {
-    const db = openDb();
-    const project = db.prepare('SELECT * FROM projects WHERE id = ? AND user_id = ?').get(req.params.id, userId);
+    const project = await getAsync(
+      'SELECT * FROM projects WHERE id = ? AND user_id = ?',
+      [req.params.id, userId]
+    );
     if (!project) return res.status(404).json({ error: 'Projeto não encontrado' });
 
-    db.prepare('DELETE FROM projects WHERE id = ?').run(req.params.id);
+    await runAsync('DELETE FROM projects WHERE id = ?', [req.params.id]);
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -102,26 +110,34 @@ router.delete('/:id', (req, res) => {
 });
 
 // Cria chat dentro de um projeto
-router.post('/:id/chats', (req, res) => {
+router.post('/:id/chats', async (req, res) => {
   const userId = req.headers['x-user-id'];
   try {
-    const db = openDb();
-    const project = db.prepare('SELECT * FROM projects WHERE id = ? AND user_id = ?').get(req.params.id, userId);
+    const project = await getAsync(
+      'SELECT * FROM projects WHERE id = ? AND user_id = ?',
+      [req.params.id, userId]
+    );
     if (!project) return res.status(404).json({ error: 'Projeto não encontrado' });
 
     const chatId = randomUUID();
-    db.prepare('INSERT INTO chats (id, project_id, title) VALUES (?, ?, ?)').run(chatId, req.params.id, 'Nova conversa');
-    res.status(201).json(db.prepare('SELECT * FROM chats WHERE id = ?').get(chatId));
+    await runAsync(
+      'INSERT INTO chats (id, project_id, title) VALUES (?, ?, ?)',
+      [chatId, req.params.id, 'Nova conversa']
+    );
+    const chat = await getAsync('SELECT * FROM chats WHERE id = ?', [chatId]);
+    res.status(201).json(chat);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
 // Deleta chat
-router.delete('/:id/chats/:chatId', (req, res) => {
+router.delete('/:id/chats/:chatId', async (req, res) => {
   try {
-    const db = openDb();
-    db.prepare('DELETE FROM chats WHERE id = ? AND project_id = ?').run(req.params.chatId, req.params.id);
+    await runAsync(
+      'DELETE FROM chats WHERE id = ? AND project_id = ?',
+      [req.params.chatId, req.params.id]
+    );
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });

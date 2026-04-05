@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { openDb } from '../database.js';
+import { allAsync, runAsync, getAsync } from '../database.js';
 import { randomUUID } from 'crypto';
 import multer from 'multer';
 import path from 'path';
@@ -27,12 +27,12 @@ const upload = multer({
 
 const router = Router();
 
-router.get('/:projectId', (req, res) => {
+router.get('/:projectId', async (req, res) => {
   try {
-    const db = openDb();
-    const files = db.prepare(
-      'SELECT id, original_name, mime_type, size, created_at FROM files WHERE project_id = ? ORDER BY created_at DESC'
-    ).all(req.params.projectId);
+    const files = await allAsync(
+      'SELECT id, original_name, mime_type, size, created_at FROM files WHERE project_id = ? ORDER BY created_at DESC',
+      [req.params.projectId]
+    );
     res.json(files);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -42,10 +42,10 @@ router.get('/:projectId', (req, res) => {
 router.post('/:projectId', upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo enviado' });
   try {
-    const db = openDb();
     let extractedText = '';
     const textExts = ['.txt', '.md', '.json', '.js', '.ts', '.py', '.css', '.html', '.csv'];
     const ext = path.extname(req.file.originalname).toLowerCase();
+    
     if (textExts.includes(ext)) {
       extractedText = fs.readFileSync(req.file.path, 'utf-8').substring(0, 50000);
     } else if (ext === '.pdf') {
@@ -58,23 +58,27 @@ router.post('/:projectId', upload.single('file'), async (req, res) => {
         extractedText = '[PDF: não foi possível extrair texto]';
       }
     }
+    
     const fileId = randomUUID();
-    db.prepare(
-      'INSERT INTO files (id, project_id, original_name, mime_type, size, extracted_text, path) VALUES (?, ?, ?, ?, ?, ?, ?)'
-    ).run(fileId, req.params.projectId, req.file.originalname, req.file.mimetype, req.file.size, extractedText, req.file.path);
+    await runAsync(
+      'INSERT INTO files (id, project_id, original_name, mime_type, size, extracted_text, path) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [fileId, req.params.projectId, req.file.originalname, req.file.mimetype, req.file.size, extractedText, req.file.path]
+    );
     res.status(201).json({ id: fileId, original_name: req.file.originalname, size: req.file.size });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.delete('/:projectId/:fileId', (req, res) => {
+router.delete('/:projectId/:fileId', async (req, res) => {
   try {
-    const db = openDb();
-    const file = db.prepare('SELECT * FROM files WHERE id = ? AND project_id = ?').get(req.params.fileId, req.params.projectId);
+    const file = await getAsync(
+      'SELECT * FROM files WHERE id = ? AND project_id = ?',
+      [req.params.fileId, req.params.projectId]
+    );
     if (!file) return res.status(404).json({ error: 'Arquivo não encontrado' });
     if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
-    db.prepare('DELETE FROM files WHERE id = ?').run(req.params.fileId);
+    await runAsync('DELETE FROM files WHERE id = ?', [req.params.fileId]);
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });

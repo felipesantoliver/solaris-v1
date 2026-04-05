@@ -1,16 +1,16 @@
 import { Router } from 'express';
-import { openDb } from '../database.js';
+import { allAsync, runAsync } from '../database.js';
 import { sendMessage } from '../geminiService.js';
 
 const router = Router();
 
 // Busca mensagens de um chat
-router.get('/chat/:chatId', (req, res) => {
+router.get('/chat/:chatId', async (req, res) => {
   try {
-    const db = openDb();
-    const messages = db.prepare(
-      'SELECT role, content, created_at FROM messages WHERE chat_id = ? ORDER BY created_at ASC'
-    ).all(req.params.chatId);
+    const messages = await allAsync(
+      'SELECT role, content, created_at FROM messages WHERE chat_id = ? ORDER BY created_at ASC',
+      [req.params.chatId]
+    );
     res.json(messages);
   } catch (err) {
     res.status(500).json({ error: err.message });
