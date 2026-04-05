@@ -584,15 +584,15 @@ export default function App() {
 
         <footer className="p-10 pt-4">
           <div className="max-w-3xl mx-auto relative">
-            <div className={`relative flex items-end border-b ${theme.inputBorder} pb-6 ${theme.inputFocus} transition-all duration-500`}>
+            <div className={`relative flex items-end border-b ${theme.inputBorder} pb-8 ${theme.inputFocus} transition-all duration-500`}>
               <textarea ref={textareaRef} value={input} onChange={handleInput} onKeyDown={handleKeyDown} rows={1} placeholder="O que deseja perguntar?" className={`flex-1 bg-transparent border-none text-lg ${darkMode ? 'text-white placeholder-white/20' : 'text-black placeholder-black/20'} resize-none focus:outline-none py-2 font-light`} />
-              <button onClick={handleSend} disabled={isLoading} className={`p-2 mb-1.5 transition-all duration-300 ${isLoading ? theme.textMuted : (darkMode ? 'text-white hover:scale-110' : 'text-black hover:scale-110')}`}>{isLoading ? <Loader2 size={20} className="animate-spin" /> : input.trim() ? <Send size={20} strokeWidth={1.5} /> : <Mic size={20} strokeWidth={1.5} />}</button>
+              <button onClick={handleSend} disabled={isLoading} className={`p-2 mb-3 transition-all duration-300 ${isLoading ? theme.textMuted : (darkMode ? 'text-white hover:scale-110' : 'text-black hover:scale-110')}`}>{isLoading ? <Loader2 size={20} className="animate-spin" /> : input.trim() ? <Send size={20} strokeWidth={1.5} /> : <Mic size={20} strokeWidth={1.5} />}</button>
             </div>
-            <div className={`mt-4 flex justify-between items-center text-[9px] ${theme.textMuted} font-bold tracking-[0.2em] uppercase transition-colors duration-500`}>
+            <div className={`mt-5 flex justify-between items-center text-[9px] ${theme.textMuted} font-bold tracking-[0.2em] uppercase transition-colors duration-500`}>
               <span className="flex items-center gap-2">aperte enter para enviar </span>
               <span
                 onClick={() => fileInputRef.current?.click()}
-                className={`flex items-center gap-1 cursor-pointer transition-colors duration-500 ${darkMode ? 'hover:text-white' : 'hover:text-black'}`}
+                className={`flex items-center gap-3 cursor-pointer transition-colors duration-500 mb-2 ${darkMode ? 'hover:text-white' : 'hover:text-black'}`}
               >
                 <Plus size={10} /> Anexo
               </span>
