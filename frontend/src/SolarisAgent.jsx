@@ -129,7 +129,7 @@ export default function App() {
       .filter(m => !(m.role === 'assistant' && m.content === WELCOME))
       .map(m => `${m.role === 'user' ? 'VOCÊ' : 'SOLARIS'}: ${m.content}`)
       .join('\n\n');
-    navigator.clipboard.writeText(text).catch(() => {});
+    navigator.clipboard.writeText(text).catch(() => { });
     setShowShareToast(true);
     setTimeout(() => setShowShareToast(false), 3000);
   };
@@ -449,7 +449,7 @@ export default function App() {
             <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} animate-in fade-in slide-in-from-bottom-2 duration-700`}>
               <div className={`max-w-[70%] ${msg.role === 'user' ? 'text-right' : 'text-left'}`}>
                 <div className={`text-[9px] uppercase tracking-[0.2em] font-bold mb-3 ${theme.textMuted}`}>
-                  {msg.role === 'user' ? 'Solicitação' : 'Solaris'}
+                  {msg.role === 'user' ? 'Usuário' : 'Solaris'}
                 </div>
                 <div className={`text-base leading-relaxed transition-colors duration-500 ${msg.role === 'user' ? (darkMode ? 'text-white font-medium' : 'text-black font-medium') : (darkMode ? 'text-white/60 font-light' : 'text-gray-600 font-light')}`}>
                   {msg.content}
@@ -501,7 +501,8 @@ export default function App() {
         </footer>
       </main>
 
-      <style dangerouslySetInnerHTML={{ __html: `
+      <style dangerouslySetInnerHTML={{
+        __html: `
         @keyframes rotate-slow { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
         .orbit-rotate { animation: rotate-slow linear infinite; }
         .custom-scrollbar::-webkit-scrollbar { width: 3px; }

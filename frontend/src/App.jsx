@@ -574,7 +574,7 @@ export default function App() {
           {messages.map((msg, i) => (
             <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} animate-in fade-in slide-in-from-bottom-2 duration-700`}>
               <div className={`max-w-[70%] ${msg.role === 'user' ? 'text-right' : 'text-left'}`}>
-                <div className={`text-[9px] uppercase tracking-[0.2em] font-bold mb-3 ${theme.textMuted} transition-colors duration-500`}>{msg.role === 'user' ? 'Solicitação' : 'Solaris'}</div>
+                <div className={`text-[9px] uppercase tracking-[0.2em] font-bold mb-3 ${theme.textMuted} transition-colors duration-500`}>{msg.role === 'user' ? 'Usuário' : 'Solaris'}</div>
                 <div className={`text-base leading-relaxed transition-colors duration-500 ${msg.role === 'user' ? (darkMode ? 'text-white font-medium' : 'text-black font-medium') : (darkMode ? 'text-white/60 font-light' : 'text-gray-600 font-light')}`}>{msg.content}</div>
               </div>
             </div>
