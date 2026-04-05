@@ -1,35 +1,63 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Loader2, Minus, Plus, Maximize2, Moon, Sun, MessageSquare, Hammer, Mic, FolderPlus, Folder, Check, X, Trash2, AlertTriangle, History, ChevronDown, GripVertical, SquarePen, Search, Share2 } from 'lucide-react';
+import {
+  Send, Loader2, Minus, Plus, Maximize2, Moon, Sun, MessageSquare, Hammer,
+  Mic, FolderPlus, Folder, Check, X, Trash2, AlertTriangle, History,
+  ChevronDown, GripVertical, SquarePen, Search, Share2
+} from 'lucide-react';
+
+const API_BASE = import.meta.env.VITE_API_URL;
+
+function getUserId() {
+  let id = localStorage.getItem('solaris_user_id');
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem('solaris_user_id', id);
+  }
+  return id;
+}
+const USER_ID = getUserId();
+
+function OrbitLine({ size, themeColor }) {
+  return <div className={`absolute border ${themeColor} rounded-full ${size} transition-colors duration-500`}></div>;
+}
+
+function PlanetDot({ size, duration, color, glow }) {
+  return (
+    <div className={`absolute orbit-rotate ${size}`} style={{ animationDuration: duration }}>
+      <div
+        className={`absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full ${color} w-1.5 h-1.5 shadow-sm transition-colors duration-500`}
+        style={glow ? { boxShadow: glow } : {}}
+      ></div>
+    </div>
+  );
+}
 
 export default function App() {
   const [messages, setMessages] = useState([
-    {
-      role: 'assistant',
-      content: 'Olá. Como posso ajudar?' 
-    }
+    { role: 'assistant', content: 'Olá. Como posso ajudar?' }
   ]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [darkMode, setDarkMode] = useState(false);
+  const [darkMode, setDarkMode] = useState(() => localStorage.getItem('solaris_dark') === 'true');
   const [workMode, setWorkMode] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [showShareToast, setShowShareToast] = useState(false);
-  
+
   const [projects, setProjects] = useState([]);
   const [chatHistory, setChatHistory] = useState([]);
-  
+
   const [isCreatingProject, setIsCreatingProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
   const [activeProjectId, setActiveProjectId] = useState(null);
   const [draggedItemId, setDraggedItemId] = useState(null);
   const [activeChatId, setActiveChatId] = useState(null);
-  
+
   const [itemToDelete, setItemToDelete] = useState(null);
 
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
+  const fileInputRef = useRef(null);
 
-  // Verifica se o usuário já enviou alguma mensagem (ignorando a saudação inicial)
   const hasUserStartedChat = messages.some(m => m.role === 'user');
 
   const scrollToBottom = () => {
@@ -40,9 +68,66 @@ export default function App() {
     scrollToBottom();
   }, [messages, isLoading]);
 
-  const toggleDarkMode = () => {
-    setDarkMode(!darkMode);
-  };
+  useEffect(() => {
+    localStorage.setItem('solaris_dark', darkMode);
+  }, [darkMode]);
+
+  // Carregar projetos do backend
+  useEffect(() => {
+    fetchProjects();
+  }, []);
+
+  async function fetchProjects() {
+    try {
+      const res = await fetch(`${API_BASE}/projects`, { headers: { 'x-user-id': USER_ID } });
+      if (!res.ok) throw new Error();
+      const data = await res.json();
+      setProjects(data);
+      if (data.length > 0 && !activeProjectId) setActiveProjectId(data[0].id);
+    } catch (err) {
+      console.error('Erro ao carregar projetos');
+    }
+  }
+
+  // Carregar chats e mensagens quando projeto ativo mudar
+  useEffect(() => {
+    if (!activeProjectId) return;
+    // Reseta o chat ativo ao trocar de projeto para evitar exibição de mensagens incorretas
+    setActiveChatId(null);
+    setMessages([]);
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/projects/${activeProjectId}`, { headers: { 'x-user-id': USER_ID } });
+        const data = await res.json();
+        setChatHistory(data.chats || []);
+        if (data.chats?.length > 0) {
+          setActiveChatId(data.chats[0].id);
+        } else {
+          setMessages([{ role: 'assistant', content: 'Nenhum chat neste projeto. Crie um novo.' }]);
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    })();
+  }, [activeProjectId]);
+
+  useEffect(() => {
+    if (!activeChatId) return;
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/messages/chat/${activeChatId}`, { headers: { 'x-user-id': USER_ID } });
+        const msgs = await res.json();
+        setMessages(msgs.length === 0
+          ? [{ role: 'assistant', content: 'Olá! Como posso ajudar neste projeto?' }]
+          : msgs
+        );
+      } catch (err) {
+        console.error(err);
+      }
+    })();
+  }, [activeChatId]);
+
+  const toggleDarkMode = () => setDarkMode(prev => !prev);
 
   const handleInput = (e) => {
     setInput(e.target.value);
@@ -52,17 +137,52 @@ export default function App() {
 
   const handleSend = async () => {
     if (!input.trim() || isLoading) return;
+
+    // Captura o chatId a ser usado nesta chamada (pode ser um recém-criado)
+    let chatId = activeChatId;
+
+    if (!chatId) {
+      // Se não houver chat ativo, cria um automaticamente antes de enviar
+      if (!activeProjectId) return;
+      try {
+        const res = await fetch(`${API_BASE}/messages/project/${activeProjectId}/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-user-id': USER_ID },
+          body: JSON.stringify({ title: 'Nova conversa' }),
+        });
+        if (!res.ok) throw new Error('Falha ao criar chat');
+        const newChat = await res.json();
+        setChatHistory(prev => [newChat, ...prev]);
+        setActiveChatId(newChat.id);
+        chatId = newChat.id; // usa o ID diretamente, sem depender do estado atualizado
+      } catch (err) {
+        console.error(err);
+        return;
+      }
+    }
+
     const userMessage = input.trim();
     setInput('');
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
     setMessages(prev => [...prev, { role: 'user', content: userMessage }]);
     setIsLoading(true);
+
     try {
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      const response = workMode 
-        ? "Modo Mãos a obra ativado. O núcleo Solaris está a preparar o ambiente para execução."
-        : "Compreendo perfeitamente. A processar os dados através das minhas camadas de processamento solar.";
-      setMessages(prev => [...prev, { role: 'assistant', content: response }]);
+      const res = await fetch(`${API_BASE}/messages/chat/${chatId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-user-id': USER_ID },
+        body: JSON.stringify({ message: userMessage }),
+      });
+      if (!res.ok) throw new Error('Erro na API');
+      const data = await res.json();
+      setMessages(prev => [...prev, { role: 'assistant', content: data.response }]);
+
+      // Atualizar título do chat na sidebar (se mudou)
+      setTimeout(async () => {
+        const projRes = await fetch(`${API_BASE}/projects/${activeProjectId}`, { headers: { 'x-user-id': USER_ID } });
+        const projData = await projRes.json();
+        setChatHistory(projData.chats || []);
+      }, 500);
     } catch (error) {
       setMessages(prev => [...prev, { role: 'assistant', content: 'Lamento, ocorreu um erro na ligação.' }]);
     } finally {
@@ -78,50 +198,65 @@ export default function App() {
   };
 
   const handleShare = () => {
-    const chatText = messages.map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n');
-    const textArea = document.createElement("textarea");
-    textArea.value = chatText;
-    document.body.appendChild(textArea);
-    textArea.select();
-    try {
-      document.execCommand('copy');
-      setShowShareToast(true);
-      setTimeout(() => setShowShareToast(false), 3000);
-    } catch (err) {
-      console.error('Erro ao copiar', err);
-    }
-    document.body.removeChild(textArea);
+    const chatText = messages
+      .filter(m => m.role !== 'assistant' || m.content !== 'Olá. Como posso ajudar?')
+      .map(m => `${m.role === 'user' ? 'VOCÊ' : 'SOLARIS'}: ${m.content}`)
+      .join('\n\n');
+    navigator.clipboard.writeText(chatText).catch(() => {});
+    setShowShareToast(true);
+    setTimeout(() => setShowShareToast(false), 3000);
   };
 
-  const createProject = () => {
+  const createProject = async () => {
     if (!newProjectName.trim()) {
       setIsCreatingProject(false);
       return;
     }
-    const newProj = {
-      id: Date.now(),
-      name: newProjectName.trim()
-    };
-    setProjects([newProj, ...projects]);
-    setNewProjectName('');
-    setIsCreatingProject(false);
-    setActiveProjectId(newProj.id);
+    try {
+      const res = await fetch(`${API_BASE}/projects`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-user-id': USER_ID },
+        body: JSON.stringify({
+          name: newProjectName.trim(),
+          objective: '',
+          response_style: 'direto',
+          memory_mode: 'isolado'
+        }),
+      });
+      const project = await res.json();
+      setProjects([project, ...projects]);
+      setNewProjectName('');
+      setIsCreatingProject(false);
+      setActiveProjectId(project.id);
+    } catch (err) {
+      console.error(err);
+      setIsCreatingProject(false);
+    }
   };
 
-  const handleDeleteConfirm = () => {
+  const handleDeleteConfirm = async () => {
     if (!itemToDelete) return;
-    if (itemToDelete.type === 'project') {
-      const updatedProjects = projects.filter(p => p.id !== itemToDelete.data.id);
-      setProjects(updatedProjects);
-      if (activeProjectId === itemToDelete.data.id) {
-        setActiveProjectId(updatedProjects.length > 0 ? updatedProjects[0].id : null);
+    const { type, data } = itemToDelete;
+    try {
+      if (type === 'project') {
+        await fetch(`${API_BASE}/projects/${data.id}`, { method: 'DELETE', headers: { 'x-user-id': USER_ID } });
+        const updated = projects.filter(p => p.id !== data.id);
+        setProjects(updated);
+        if (activeProjectId === data.id) {
+          setActiveProjectId(updated.length > 0 ? updated[0].id : null);
+          setChatHistory([]);
+          setActiveChatId(null);
+        }
+      } else if (type === 'chat') {
+        await fetch(`${API_BASE}/messages/chat/${data.id}`, { method: 'DELETE', headers: { 'x-user-id': USER_ID } });
+        const updated = chatHistory.filter(c => c.id !== data.id);
+        setChatHistory(updated);
+        if (activeChatId === data.id) {
+          setActiveChatId(updated.length > 0 ? updated[0].id : null);
+        }
       }
-    } else if (itemToDelete.type === 'chat') {
-      const updatedChats = chatHistory.filter(c => c.id !== itemToDelete.data.id);
-      setChatHistory(updatedChats);
-      if (activeChatId === itemToDelete.data.id) {
-        setActiveChatId(updatedChats.length > 0 ? updatedChats[0].id : null);
-      }
+    } catch (err) {
+      console.error(err);
     }
     setItemToDelete(null);
   };
@@ -151,6 +286,25 @@ export default function App() {
     setDraggedItemId(null);
   };
 
+  // Upload de arquivo (mantém o mesmo elemento visual "Anexo")
+  const handleFileUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !activeProjectId) return;
+    e.target.value = '';
+    const formData = new FormData();
+    formData.append('file', file);
+    try {
+      await fetch(`${API_BASE}/files/project/${activeProjectId}`, {
+        method: 'POST',
+        headers: { 'x-user-id': USER_ID },
+        body: formData,
+      });
+      // Sem toast para não adicionar elementos visuais
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   const theme = {
     bgAside: darkMode ? 'bg-[#0a0a0a]' : 'bg-white',
     bgMain: darkMode ? 'bg-[#111111]' : 'bg-[#fdfdfd]',
@@ -171,6 +325,11 @@ export default function App() {
 
   const visibleProjects = projects.slice(0, 3);
   const hiddenProjects = projects.slice(3);
+
+  // Filtra chats pelo campo de busca
+  const filteredChats = searchQuery.trim()
+    ? chatHistory.filter(c => c.title?.toLowerCase().includes(searchQuery.toLowerCase()))
+    : chatHistory;
 
   const ProjectItem = ({ project, isActive }) => (
     <div 
@@ -231,7 +390,21 @@ export default function App() {
         
         <div className={`sticky top-0 z-20 px-8 pt-8 pb-6 flex flex-col gap-5 shrink-0 ${theme.bgAside} transition-colors duration-500`}>
           <button 
-            onClick={() => setMessages([{ role: 'assistant', content: 'Olá. Como posso ajudar?' }])}
+            onClick={async () => {
+              if (!activeProjectId) return;
+              try {
+                const res = await fetch(`${API_BASE}/messages/project/${activeProjectId}/chat`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', 'x-user-id': USER_ID },
+                  body: JSON.stringify({ title: 'Nova conversa' }),
+                });
+                const newChat = await res.json();
+                setChatHistory(prev => [newChat, ...prev]);
+                setActiveChatId(newChat.id);
+              } catch (err) {
+                console.error(err);
+              }
+            }}
             className={`flex items-center gap-3 w-full transition-colors duration-500 ${theme.textPrimary} group`}
           >
             <SquarePen size={18} strokeWidth={1.2} />
@@ -323,7 +496,7 @@ export default function App() {
           <div className="flex flex-col gap-4 mb-10 shrink-0">
             <h2 className={`text-[10px] font-light tracking-[0.4em] uppercase ${theme.textSecondary} transition-colors duration-500`}>SEUS CHATS</h2>
             <div className="flex flex-col gap-1">
-                {chatHistory.map((chat) => (
+
                   <div 
                     key={chat.id}
                     onClick={() => setActiveChatId(chat.id)}
@@ -345,8 +518,10 @@ export default function App() {
                     </button>
                   </div>
                 ))}
-                {chatHistory.length === 0 && (
-                  <p className={`text-[10px] italic ${theme.textMuted} px-2 transition-colors duration-500`}>Histórico vazio</p>
+                {filteredChats.length === 0 && (
+                  <p className={`text-[10px] italic ${theme.textMuted} px-2 transition-colors duration-500`}>
+                    {searchQuery.trim() ? 'Nenhum chat encontrado' : 'Histórico vazio'}
+                  </p>
                 )}
             </div>
           </div>
@@ -383,7 +558,6 @@ export default function App() {
 
         <div className={`flex-1 relative overflow-y-auto px-6 md:px-20 py-10 space-y-12 custom-scrollbar transition-colors duration-500`}>
           
-          {/* BOTÃO COMPARTILHAR - Só aparece após o usuário enviar a primeira mensagem */}
           {hasUserStartedChat && (
             <div className="sticky top-0 z-30 flex justify-end pointer-events-none mb-[-40px] animate-in fade-in zoom-in-95 duration-500">
               <button 
@@ -422,11 +596,18 @@ export default function App() {
             </div>
             <div className={`mt-4 flex justify-between items-center text-[9px] ${theme.textMuted} font-bold tracking-[0.2em] uppercase transition-colors duration-500`}>
                 <span className="flex items-center gap-2">aperte enter para enviar {workMode && <span className="text-amber-500/60 font-black tracking-widest">• MODO EXECUÇÃO</span>}</span>
-                <span className={`flex items-center gap-1 cursor-pointer transition-colors duration-500 ${darkMode ? 'hover:text-white' : 'hover:text-black'}`}><Plus size={10}/> Anexo</span>
+                <span 
+                  onClick={() => fileInputRef.current?.click()}
+                  className={`flex items-center gap-1 cursor-pointer transition-colors duration-500 ${darkMode ? 'hover:text-white' : 'hover:text-black'}`}
+                >
+                  <Plus size={10}/> Anexo
+                </span>
             </div>
           </div>
         </footer>
       </main>
+
+      <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileUpload} accept=".pdf,.docx,.txt,.md,.json,.js,.ts,.py,.css,.html,.csv" />
 
       <style dangerouslySetInnerHTML={{ __html: `
         @keyframes rotate-slow { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
@@ -438,6 +619,3 @@ export default function App() {
     </div>
   );
 }
-
-function OrbitLine({ size, themeColor }) { return <div className={`absolute border ${themeColor} rounded-full ${size} transition-colors duration-500`}></div>; }
-function PlanetDot({ size, duration, color, glow }) { return <div className={`absolute orbit-rotate ${size}`} style={{ animationDuration: duration }}><div className={`absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full ${color} w-1.5 h-1.5 shadow-sm transition-colors duration-500`} style={glow ? { boxShadow: glow } : {}}></div></div>; }

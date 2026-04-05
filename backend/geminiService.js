@@ -1,9 +1,8 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { openDb } from './database.js';
 
-// IMPORTANTE: Substitua pela sua chave de API real
-// Recomendado: use variável de ambiente GEMINI_API_KEY
-const API_KEY = process.env.GEMINI_API_KEY || 'SUA_CHAVE_AQUI';
+// IMPORTANTE: A chave é puxada diretamente das variáveis de ambiente na nuvem
+const API_KEY = process.env.GEMINI_API_KEY;
 
 const genAI = new GoogleGenerativeAI(API_KEY);
 const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
@@ -120,10 +119,8 @@ export async function buildSystemPrompt(projectId, userMessage, memoryMode) {
 
 // Extrai e salva memórias importantes da resposta da IA
 async function extractAndSaveMemories(projectId, userMessage, assistantResponse) {
-  // Combinamos user + assistant para extrair fatos bidirecionais
-  const combined = `Pergunta: ${userMessage}\nResposta: ${assistantResponse}`;
-
-  const sentences = assistantResponse.split(/(?<=[.!?])\s+/);
+  // Divide por pontuação sem usar lookbehind (compatível com Node < 16)
+  const sentences = assistantResponse.split(/[.!?]+\s+/).filter(Boolean);
 
   const importantKeywords = [
     'importante', 'lembre-se', 'concluímos', 'aprendemos', 'descobrimos',

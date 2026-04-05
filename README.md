@@ -1,141 +1,114 @@
-# 🌟 Solaris AI v2
+🌟 Solaris AI v1
 
-Assistente de IA com organização por projetos, memória semântica evolutiva e suporte a arquivos.
 
----
 
-## 🚀 Instalação rápida
+Solaris é um ecossistema de produtividade que utiliza histórico de Projetos Isolados e Embeddings avançados para aprender com conversas, arquivos e decisões, oferecendo respostas que evoluem com o tempo.
 
-### Pré-requisitos
-- Node.js 18+
-- Chave de API do Google Gemini (https://aistudio.google.com/app/apikey)
 
-### 1. Backend
 
-```bash
-cd backend
-npm install
-```
+Status do Projeto: Em Construção
 
-**Configure sua chave de API** — edite `geminiService.js` e substitua `'SUA_CHAVE_AQUI'` pela sua chave, **ou** use variável de ambiente (recomendado):
+O Solaris está sendo desenvolvido para oferecer uma experiência de chat inteligente com "memória de longo prazo". Atualmente, o sistema conta com:
 
-```bash
-# Linux/Mac
-export GEMINI_API_KEY=sua_chave_aqui
-node server.js
 
-# Windows (PowerShell)
-$env:GEMINI_API_KEY="sua_chave_aqui"
-node server.js
-```
 
-O backend sobe em `http://localhost:3001`.
+Core de IA: Integração com o modelo gemini-1.5-flash.
 
-### 2. Frontend
 
-```bash
-cd frontend
-npm install
-npm run dev
-```
 
-Acesse `http://localhost:5173`.
+Memória Semântica: Implementação inicial de embeddings (text-embedding-004) para que a IA aprenda com o contexto dos projetos.
 
----
 
-## 📁 Estrutura
 
-```
-solaris-completo/
-├── backend/
-│   ├── server.js           # Entrada principal Express
-│   ├── database.js         # SQLite + schema
-│   ├── geminiService.js    # IA, embeddings, memória
-│   ├── fileProcessor.js    # Extração de texto (PDF, DOCX, etc.)
-│   └── routes/
-│       ├── projects.js     # CRUD projetos + memórias
-│       ├── messages.js     # Chats e mensagens
-│       ├── files.js        # Upload e gestão de arquivos
-│       └── share.js        # Links de compartilhamento
-└── frontend/
-    └── src/
-        └── App.jsx         # Interface completa
-```
+Estrutura de Projetos: Separação de conversas e arquivos por objetivos específicos.
 
----
 
-## ✅ Correções aplicadas (v1 → v2)
 
-| Problema | Correção |
-|---|---|
-| `toggleDarkMode` não definida | Função substituída por `setDarkMode(v => !v)` inline |
-| `handleInput` não definida | Função adicionada com auto-resize do textarea |
-| `handleKeyDown` não definida | Função adicionada com suporte a Shift+Enter |
-| Modelo de embedding desatualizado | `embedding-001` → `text-embedding-004` |
-| Chat não encontrava `project_id` | Rota de mensagens agora faz lookup do chat no DB |
-| Deleção de chat sem rota backend | Rota `DELETE /api/messages/chat/:id` implementada |
-| Sem tratamento de erro na API | Try/catch com timeout de 30s em todas as chamadas |
-| Memórias duplicadas | Verificação de similaridade > 0.92 antes de salvar |
-| Upload sem feedback | Toast de progresso adicionado |
-| CORS restritivo | Configuração CORS explícita com origins corretos |
-| Dark mode não persistia | Salvo no `localStorage` |
-| Sidebar sem responsividade | Sidebar mobile com overlay adicionada |
-| Sem visualização de memórias | Modal completo com listagem e deleção |
-| Sem edição de projeto | Modal de configurações com PATCH |
-| Título do chat sempre "Nova conversa" | Auto-geração de título via Gemini após 1ª mensagem |
-| Sem renderização de markdown | Parser markdown simples integrado |
+Interface: Baseada em React com suporte a Dark Mode e renderização de Markdown.
 
-## 🆕 Melhorias v2
 
-- **Renderização de markdown** nas respostas da IA (negrito, código, listas, etc.)
-- **Sidebar responsiva** com menu mobile
-- **Modal de Memórias** — visualize, gerencie e delete memórias do projeto
-- **Modal de Configurações** — edite nome, objetivo, estilo e memória do projeto ativo
-- **Indicador de contexto** no footer (modo memória, estilo, arquivos ativos)
-- **Breadcrumb** no header mostrando projeto ativo
-- **Threshold de relevância** nas buscas semânticas (score > 0.6)
-- **Deduplicação de memórias** (similaridade > 0.92)
-- **Auto-título de chats** gerado pela IA após primeira mensagem
-- **Timeout de 30s** nas chamadas à API do Gemini
-- **Suporte a mais tipos de arquivo** (.ts, .yaml, .sh, .env, etc.)
-- **WAL mode** no SQLite para melhor performance de escrita
-- **Índices no banco** para queries mais rápidas
-- **Contador de caracteres** no input
 
----
+Estrutura do Repositório
 
-## 🔑 Variáveis de ambiente (opcionais)
 
-| Variável | Padrão | Descrição |
-|---|---|---|
-| `GEMINI_API_KEY` | — | Chave da API Google Gemini (**obrigatória**) |
-| `PORT` | `3001` | Porta do backend |
-| `FRONTEND_URL` | `http://localhost:5173` | URL do frontend (para CORS e links de share) |
 
----
+Solaris-v1/
 
-## 📡 Endpoints da API
+├── backend/                # Servidor API (Node.js + Express)
 
-### Projetos
-- `GET /api/projects` — Lista projetos do usuário
-- `POST /api/projects` — Cria projeto
-- `GET /api/projects/:id` — Detalhes + chats
-- `PATCH /api/projects/:id` — Atualiza projeto
-- `DELETE /api/projects/:id` — Remove projeto
-- `GET /api/projects/:id/memories` — Lista memórias
-- `DELETE /api/projects/:id/memories/:memId` — Remove memória
+│   ├── server.js           # Gerenciamento de rotas e segurança (CORS)
 
-### Mensagens
-- `GET /api/messages/chat/:chatId` — Histórico do chat
-- `POST /api/messages/chat/:chatId` — Envia mensagem
-- `POST /api/messages/project/:projectId/chat` — Cria chat
-- `DELETE /api/messages/chat/:chatId` — Deleta chat
+│   ├── database.js         # Banco de dados SQLite (Persistência)
 
-### Arquivos
-- `GET /api/files/project/:projectId` — Lista arquivos
-- `POST /api/files/project/:projectId` — Upload (multipart)
-- `DELETE /api/files/:fileId` — Remove arquivo
+│   ├── geminiService.js    # Lógica da IA e processamento de memória
 
-### Compartilhamento
-- `POST /api/share/project/:projectId` — Gera/retorna link
-- `GET /api/share/:token` — Acessa projeto via token
+│   └── routes/             # Endpoints de Mensagens, Projetos e Arquivos
+
+├── frontend/               # Interface do Usuário (React + Vite)
+
+│   └── src/
+
+│       └── App.jsx         # Componente principal da aplicação
+
+
+
+
+
+Como configurar (Deploy Inicial)
+
+
+
+Para colocar o Solaris online pela primeira vez:
+
+
+
+Backend (Render):
+
+
+
+Conecte este repositório ao Render.com.
+
+
+
+Configure a variável de ambiente GEMINI\_API\_KEY.
+
+
+
+Defina a porta padrão como 3001.
+
+
+
+Frontend (Vercel):
+
+
+
+Importe o repositório para a Vercel.
+
+
+
+Certifique-se de que a API\_BASE no App.jsx aponte para a URL do seu backend no Render.
+
+
+
+Tecnologias Utilizadas
+
+
+
+Frontend: React, Tailwind CSS, Lucide Icons.
+
+
+
+Backend: Node.js, Express, SQLite (via better-sqlite3).
+
+
+
+IA: Google Generative AI SDK.
+
+
+
+📄 Licença
+
+
+
+Este projeto está sob a licença MIT. Por estar em fase inicial, sinta-se à vontade para contribuir com sugestões e melhorias.
+
