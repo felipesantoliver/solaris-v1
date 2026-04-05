@@ -21,13 +21,29 @@ function OrbitLine({ size, themeColor }) {
   return <div className={`absolute border ${themeColor} rounded-full ${size} transition-colors duration-500`}></div>;
 }
 
-function PlanetDot({ size, duration, color, glow, dotSize = "w-1.5 h-1.5" }) {
+function PlanetDot({ size, duration, color, glow, dotSize = "w-1.5 h-1.5", hasRing = false, darkMode = true }) {
   return (
     <div className={`absolute orbit-rotate ${size}`} style={{ animationDuration: duration }}>
-      <div
-        className={`absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full ${color} ${dotSize} shadow-sm transition-colors duration-500`}
-        style={glow ? { boxShadow: glow } : {}}
-      ></div>
+      <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center justify-center">
+        {/* Corpo do Planeta */}
+        <div
+          className={`relative z-10 rounded-full ${color} ${dotSize} shadow-sm transition-colors duration-500`}
+          style={glow ? { boxShadow: glow } : {}}
+        ></div>
+
+        {/* Anel de Saturno - Ajustado para visibilidade em ambos os modos */}
+        {hasRing && (
+          <div
+            className={`absolute border-[1px] ${darkMode ? 'border-white/20' : 'border-black/20'} rounded-[100%] w-[260%] h-[120%] rotate-[25deg]`}
+            style={{
+              boxShadow: darkMode ? '0 0 4px rgba(255, 255, 255, 0.1)' : '0 0 4px rgba(0, 0, 0, 0.05)',
+              background: darkMode
+                ? 'radial-gradient(ellipse at center, transparent 40%, rgba(255,255,255,0.05) 45%, rgba(255,255,255,0.1) 50%, transparent 60%)'
+                : 'radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.02) 45%, rgba(0,0,0,0.05) 50%, transparent 60%)'
+            }}
+          ></div>
+        )}
+      </div>
     </div>
   );
 }
@@ -41,18 +57,14 @@ export default function App() {
   const [darkMode, setDarkMode] = useState(() => localStorage.getItem('solaris_dark') !== 'false');
   const [searchQuery, setSearchQuery] = useState('');
   const [showShareToast, setShowShareToast] = useState(false);
-
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-
   const [projects, setProjects] = useState([]);
   const [chatHistory, setChatHistory] = useState([]);
-
   const [isCreatingProject, setIsCreatingProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
   const [activeProjectId, setActiveProjectId] = useState(null);
   const [draggedItemId, setDraggedItemId] = useState(null);
   const [activeChatId, setActiveChatId] = useState(null);
-
   const [itemToDelete, setItemToDelete] = useState(null);
 
   const messagesEndRef = useRef(null);
@@ -147,10 +159,8 @@ export default function App() {
 
   const handleSend = async () => {
     if (!input.trim() || isLoading || !API_BASE) return;
-
     let chatId = activeChatId;
     let projectId = activeProjectId;
-
     if (!projectId) {
       try {
         const res = await fetch(`${API_BASE}/projects`, {
@@ -164,7 +174,6 @@ export default function App() {
         projectId = newProject.id;
       } catch (err) { console.error(err); return; }
     }
-
     if (!chatId) {
       try {
         const res = await fetch(`${API_BASE}/projects/${projectId}/chats`, {
@@ -178,13 +187,11 @@ export default function App() {
         chatId = newChat.id;
       } catch (err) { console.error(err); return; }
     }
-
     const userMessage = input.trim();
     setInput('');
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
     setMessages(prev => [...prev, { role: 'user', content: userMessage }]);
     setIsLoading(true);
-
     try {
       const res = await fetch(`${API_BASE}/messages`, {
         method: 'POST',
@@ -306,12 +313,12 @@ export default function App() {
     bgMain: darkMode ? 'bg-[#111111]' : 'bg-[#fdfdfd]',
     border: darkMode ? 'border-white/10' : 'border-black/5',
     textPrimary: darkMode ? 'text-white/90' : 'text-[#1a1a1a]',
-    textSecondary: darkMode ? 'text-white/40' : 'text-black/40',
-    textMuted: darkMode ? 'text-white/20' : 'text-black/50',
+    textSecondary: darkMode ? 'text-white/40' : 'text-black/50',
+    textMuted: darkMode ? 'text-white/20' : 'text-black/30',
     inputBorder: darkMode ? 'border-white/20' : 'border-black/10',
     inputFocus: darkMode ? 'focus-within:border-white' : 'focus-within:border-black',
-    scrollbar: darkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.05)',
-    orbit: darkMode ? 'border-white/10' : 'border-black/10',
+    scrollbar: darkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.08)',
+    orbit: darkMode ? 'border-white/10' : 'border-black/20', // Órbita mais visível no claro
     projectHover: darkMode ? 'hover:bg-white/5' : 'hover:bg-black/5',
     projectActive: darkMode ? 'bg-white/10 text-white shadow-sm' : 'bg-black/5 text-black shadow-sm',
     modalOverlay: 'bg-black/60 backdrop-blur-sm',
@@ -380,10 +387,8 @@ export default function App() {
         </div>
       )}
 
-      {/* Sidebar - Rail Style */}
+      {/* Sidebar */}
       <aside className={`hidden lg:flex flex-col border-r ${theme.border} ${theme.bgAside} relative transition-all duration-500 ease-in-out shrink-0 ${isSidebarOpen ? 'w-80' : 'w-20'}`}>
-
-        {/* Sidebar Content */}
         <div className={`flex flex-col h-full overflow-hidden transition-all duration-500 ${isSidebarOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
           <div className={`px-8 pt-12 pb-6 flex flex-col gap-5 shrink-0`}>
             <button
@@ -413,15 +418,15 @@ export default function App() {
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Buscar"
-                className={`bg-transparent border-none p-0 text-sm font-light w-full focus:outline-none ${darkMode ? 'text-white placeholder:text-white/20' : 'text-black placeholder:text-black/20'}`}
+                className={`bg-transparent border-none p-0 text-sm font-light w-full focus:outline-none ${darkMode ? 'text-white placeholder:text-white/20' : 'text-black placeholder:text-black/30'}`}
               />
             </div>
           </div>
 
           <div className="px-8 flex flex-col flex-1 overflow-y-auto custom-scrollbar">
-            {/* Solar System Visual */}
+            {/* Solar System Visual - Visual Improvements for Light Mode */}
             <div className="relative w-full aspect-square flex items-center justify-center opacity-80 hover:opacity-100 transition-opacity duration-700 mb-10 shrink-0">
-              <div className={`w-6 h-6 ${darkMode ? 'bg-[#ffd700]' : 'bg-[#ffcc00]'} rounded-full z-10 shadow-[0_0_25px_rgba(255,204,0,0.3)]`}></div>
+              <div className={`w-6 h-6 ${darkMode ? 'bg-[#ffd700]' : 'bg-[#ffcc00] border border-amber-600/10'} rounded-full z-10 shadow-[0_0_25px_rgba(255,204,0,0.3)]`}></div>
               <OrbitLine size="w-10 h-10" themeColor={theme.orbit} />
               <OrbitLine size="w-14 h-14" themeColor={theme.orbit} />
               <OrbitLine size="w-20 h-20" themeColor={theme.orbit} />
@@ -430,12 +435,16 @@ export default function App() {
               <OrbitLine size="w-40 h-40" themeColor={theme.orbit} />
               <OrbitLine size="w-48 h-48" themeColor={theme.orbit} />
               <OrbitLine size="w-56 h-56" themeColor={theme.orbit} />
+
               <PlanetDot size="w-10 h-10" duration="3s" color={darkMode ? 'bg-[#888]' : 'bg-[#666]'} dotSize="w-1 h-1" />
               <PlanetDot size="w-14 h-14" duration="5s" color="bg-[#e3bb76]" />
-              <PlanetDot size="w-20 h-20" duration="8s" color="bg-[#2271b3]" glow={darkMode ? "0_0_12px_#00ffff" : "0_0_8px_#00ffff"} />
+              <PlanetDot size="w-20 h-20" duration="8s" color="bg-[#2271b3]" glow={darkMode ? "0_0_12px_#00ffff" : "0_0_8px_rgba(0,255,255,0.4)"} />
               <PlanetDot size="w-24 h-24" duration="12s" color="bg-[#e27b58]" dotSize="w-1 h-1" />
               <PlanetDot size="w-32 h-32" duration="20s" color="bg-[#d39c7e]" dotSize="w-2.5 h-2.5" />
-              <PlanetDot size="w-40 h-40" duration="28s" color="bg-[#eadaa4]" dotSize="w-2 h-2" />
+
+              {/* SATURNO (Orbit 40) */}
+              <PlanetDot size="w-40 h-40" duration="28s" color="bg-[#eadaa4]" dotSize="w-2 h-2" hasRing={true} darkMode={darkMode} />
+
               <PlanetDot size="w-48 h-48" duration="36s" color="bg-[#a6d1e6]" />
               <PlanetDot size="w-56 h-56" duration="45s" color="bg-[#4b70dd]" />
             </div>
@@ -502,17 +511,17 @@ export default function App() {
 
           <div className={`px-8 shrink-0 border-t ${theme.border}`}>
             <div className="flex flex-col py-5">
-              <span className={`text-[8px] font-extralight uppercase tracking-[0.4em] ${darkMode ? 'text-white/20' : 'text-black/50'} mb-0.5`}>Criado por</span>
-              <span className={`text-sm font-serif italic tracking-wide ${darkMode ? 'text-white/50' : 'text-black/80'}`} style={{ fontFamily: 'Georgia, "Apple Chancery", cursive' }}>felipe sant'oliver</span>
+              <span className={`text-[8px] font-extralight uppercase tracking-[0.4em] ${darkMode ? 'text-white/20' : 'text-black/30'} mb-0.5`}>Criado por</span>
+              <span className={`text-sm font-serif italic tracking-wide ${darkMode ? 'text-white/50' : 'text-black/60'}`} style={{ fontFamily: 'Georgia, "Apple Chancery", cursive' }}>felipe sant'oliver</span>
             </div>
           </div>
         </div>
 
-        {/* Icons visible only in Rail mode */}
+        {/* Rail Mode Icons */}
         {!isSidebarOpen && (
           <div className="flex-1 flex flex-col items-center pt-12 gap-8 animate-in fade-in duration-700">
             <div className={`w-8 h-8 rounded-full border ${theme.orbit} flex items-center justify-center animate-pulse`}>
-              <div className={`w-1.5 h-1.5 rounded-full ${darkMode ? 'bg-white/40' : 'bg-black/40'}`}></div>
+              <div className={`w-1.5 h-1.5 rounded-full ${darkMode ? 'bg-white/40' : 'bg-black/30'}`}></div>
             </div>
             <div className="flex flex-col gap-6 items-center">
               <PencilLine size={18} strokeWidth={1.5} className={theme.textMuted} />
@@ -525,12 +534,11 @@ export default function App() {
 
       {/* Main Content */}
       <main className={`flex-1 flex flex-col ${theme.bgMain} relative transition-colors duration-500`}>
-        {/* Header - Refined with Sidebar Toggle */}
         <header className={`h-20 flex items-center justify-between px-6 md:px-10 border-b ${theme.border} transition-colors duration-500`}>
           <div className="flex items-center gap-6">
             <button
               onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-              className={`p-2 rounded-lg transition-all duration-300 ${darkMode ? 'text-white/60 hover:text-white hover:bg-white/5' : 'text-black/60 hover:text-black hover:bg-black/5'}`}
+              className={`p-2 rounded-lg transition-all duration-300 ${darkMode ? 'text-white/60 hover:text-white hover:bg-white/5' : 'text-black/40 hover:text-black hover:bg-black/5'}`}
               title={isSidebarOpen ? "Recolher menu" : "Expandir menu"}
             >
               <PanelLeft size={20} strokeWidth={1.5} />
@@ -574,9 +582,9 @@ export default function App() {
           ))}
           {isLoading && (
             <div className="flex items-center gap-3">
-              <div className={`w-1.5 h-1.5 ${darkMode ? 'bg-white/40' : 'bg-black'} rounded-full animate-bounce [animation-delay:-0.3s]`}></div>
-              <div className={`w-1.5 h-1.5 ${darkMode ? 'bg-white/40' : 'bg-black'} rounded-full animate-bounce [animation-delay:-0.15s]`}></div>
-              <div className={`w-1.5 h-1.5 ${darkMode ? 'bg-white/40' : 'bg-black'} rounded-full animate-bounce`}></div>
+              <div className={`w-1.5 h-1.5 ${darkMode ? 'bg-white/40' : 'bg-black/60'} rounded-full animate-bounce [animation-delay:-0.3s]`}></div>
+              <div className={`w-1.5 h-1.5 ${darkMode ? 'bg-white/40' : 'bg-black/60'} rounded-full animate-bounce [animation-delay:-0.15s]`}></div>
+              <div className={`w-1.5 h-1.5 ${darkMode ? 'bg-white/40' : 'bg-black/60'} rounded-full animate-bounce`}></div>
             </div>
           )}
           <div ref={messagesEndRef} />
@@ -585,7 +593,7 @@ export default function App() {
         <footer className="p-10 pt-4">
           <div className="max-w-3xl mx-auto relative">
             <div className={`relative flex items-end border-b ${theme.inputBorder} pb-8 ${theme.inputFocus} transition-all duration-500`}>
-              <textarea ref={textareaRef} value={input} onChange={handleInput} onKeyDown={handleKeyDown} rows={1} placeholder="O que deseja perguntar?" className={`flex-1 bg-transparent border-none text-lg ${darkMode ? 'text-white placeholder-white/20' : 'text-black placeholder-black/20'} resize-none focus:outline-none py-2 font-light`} />
+              <textarea ref={textareaRef} value={input} onChange={handleInput} onKeyDown={handleKeyDown} rows={1} placeholder="O que deseja perguntar?" className={`flex-1 bg-transparent border-none text-lg ${darkMode ? 'text-white placeholder-white/20' : 'text-black placeholder-black/30'} resize-none focus:outline-none py-2 font-light`} />
               <button onClick={handleSend} disabled={isLoading} className={`p-2 mb-3 transition-all duration-300 ${isLoading ? theme.textMuted : (darkMode ? 'text-white hover:scale-110' : 'text-black hover:scale-110')}`}>{isLoading ? <Loader2 size={20} className="animate-spin" /> : input.trim() ? <Send size={20} strokeWidth={1.5} /> : <Mic size={20} strokeWidth={1.5} />}</button>
             </div>
             <div className={`mt-5 flex justify-between items-center text-[9px] ${theme.textMuted} font-bold tracking-[0.2em] uppercase transition-colors duration-500`}>
