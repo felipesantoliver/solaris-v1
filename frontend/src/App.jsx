@@ -41,18 +41,15 @@ export default function App() {
   const [darkMode, setDarkMode] = useState(() => localStorage.getItem('solaris_dark') !== 'false');
   const [searchQuery, setSearchQuery] = useState('');
   const [showShareToast, setShowShareToast] = useState(false);
-
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
 
   const [projects, setProjects] = useState([]);
   const [chatHistory, setChatHistory] = useState([]);
-
   const [isCreatingProject, setIsCreatingProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
   const [activeProjectId, setActiveProjectId] = useState(null);
   const [draggedItemId, setDraggedItemId] = useState(null);
   const [activeChatId, setActiveChatId] = useState(null);
-
   const [itemToDelete, setItemToDelete] = useState(null);
 
   const messagesEndRef = useRef(null);
@@ -320,7 +317,6 @@ export default function App() {
   };
 
   const visibleProjects = projects.slice(0, 3);
-
   const filteredChats = searchQuery.trim()
     ? chatHistory.filter(c => c.title?.toLowerCase().includes(searchQuery.toLowerCase()))
     : chatHistory;
@@ -380,10 +376,10 @@ export default function App() {
         </div>
       )}
 
-      {/* Sidebar - Rail Style */}
+      {/* Sidebar */}
       <aside className={`hidden lg:flex flex-col border-r ${theme.border} ${theme.bgAside} relative transition-all duration-500 ease-in-out shrink-0 ${isSidebarOpen ? 'w-80' : 'w-20'}`}>
 
-        {/* Sidebar Content */}
+        {/* Sidebar Content (Aberto) */}
         <div className={`flex flex-col h-full overflow-hidden transition-all duration-500 ${isSidebarOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
           <div className={`px-8 pt-12 pb-6 flex flex-col gap-5 shrink-0`}>
             <button
@@ -508,16 +504,17 @@ export default function App() {
           </div>
         </div>
 
-        {/* Icons visible only in Rail mode */}
+        {/* Sidebar Rail (Fechado) */}
         {!isSidebarOpen && (
           <div className="flex-1 flex flex-col items-center pt-12 gap-8 animate-in fade-in duration-700">
             <div className={`w-8 h-8 rounded-full border ${theme.orbit} flex items-center justify-center animate-pulse`}>
               <div className={`w-1.5 h-1.5 rounded-full ${darkMode ? 'bg-white/40' : 'bg-black/40'}`}></div>
             </div>
             <div className="flex flex-col gap-6 items-center">
-              <PencilLine size={18} strokeWidth={1.5} className={theme.textMuted} />
-              <History size={18} strokeWidth={1.5} className={theme.textMuted} />
-              <Folder size={18} strokeWidth={1.5} className={theme.textMuted} />
+              <button title="Novo Chat"><PencilLine size={18} strokeWidth={1.5} className={theme.textMuted} /></button>
+              <button title="Histórico"><History size={18} strokeWidth={1.5} className={theme.textMuted} /></button>
+              <button title="Documentos"><Folder size={18} strokeWidth={1.5} className={theme.textMuted} /></button>
+              <button title="Buscar"><Search size={18} strokeWidth={1.5} className={theme.textMuted} /></button>
             </div>
           </div>
         )}
@@ -525,13 +522,11 @@ export default function App() {
 
       {/* Main Content */}
       <main className={`flex-1 flex flex-col ${theme.bgMain} relative transition-colors duration-500`}>
-        {/* Header - Refined with Sidebar Toggle */}
         <header className={`h-20 flex items-center justify-between px-6 md:px-10 border-b ${theme.border} transition-colors duration-500`}>
           <div className="flex items-center gap-6">
             <button
               onClick={() => setIsSidebarOpen(!isSidebarOpen)}
               className={`p-2 rounded-lg transition-all duration-300 ${darkMode ? 'text-white/60 hover:text-white hover:bg-white/5' : 'text-black/60 hover:text-black hover:bg-black/5'}`}
-              title={isSidebarOpen ? "Recolher menu" : "Expandir menu"}
             >
               <PanelLeft size={20} strokeWidth={1.5} />
             </button>
