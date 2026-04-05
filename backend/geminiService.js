@@ -8,10 +8,9 @@ if (!API_KEY) {
 }
 
 const genAI = new GoogleGenerativeAI(API_KEY);
-const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
-const embeddingModel = genAI.getGenerativeModel({ model: 'text-embedding-004' });
+const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash-lite' });
+const embeddingModel = genAI.getGenerativeModel({ model: 'gemini-embedding-001' });
 
-// Gera embedding para um texto
 export async function generateEmbedding(text) {
   try {
     const result = await embeddingModel.embedContent(text);
