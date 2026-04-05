@@ -1,9 +1,7 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { openDb } from './database.js';
 
-// IMPORTANTE: A chave é puxada diretamente das variáveis de ambiente na nuvem
 const API_KEY = process.env.GEMINI_API_KEY;
-
 const genAI = new GoogleGenerativeAI(API_KEY);
 const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
 const embeddingModel = genAI.getGenerativeModel({ model: 'text-embedding-004' });
@@ -35,7 +33,7 @@ function cosineSimilarity(a, b) {
 // Busca memórias por similaridade semântica
 export async function findSimilarMemories(projectId, queryEmbedding, limit = 5, global = false) {
   if (!queryEmbedding) return [];
-  const db = await openDb();
+  const db = openDb();
 
   let sql = 'SELECT id, content, embedding, project_id FROM memories';
   const params = [];
@@ -43,26 +41,24 @@ export async function findSimilarMemories(projectId, queryEmbedding, limit = 5, 
     sql += ' WHERE project_id = ?';
     params.push(projectId);
   }
-  sql += ' ORDER BY created_at DESC LIMIT 200'; // limita busca para performance
+  sql += ' ORDER BY created_at DESC LIMIT 200';
 
-  const memories = await db.all(sql, params);
+  const memories = db.prepare(sql).all(...params);
 
-  const scored = memories
+  return memories
     .map(m => {
       const emb = m.embedding ? JSON.parse(m.embedding) : null;
       return { ...m, score: cosineSimilarity(queryEmbedding, emb) };
     })
-    .filter(m => m.score > 0.6) // threshold de relevância
+    .filter(m => m.score > 0.6)
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
-
-  return scored;
 }
 
 // Monta o system prompt completo
 export async function buildSystemPrompt(projectId, userMessage, memoryMode) {
-  const db = await openDb();
-  const project = await db.get('SELECT * FROM projects WHERE id = ?', projectId);
+  const db = openDb();
+  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId);
   if (!project) return 'Você é um assistente de IA útil e preciso.';
 
   const styleGuide = {
@@ -79,7 +75,6 @@ export async function buildSystemPrompt(projectId, userMessage, memoryMode) {
   prompt += `Estilo: ${styleGuide[project.response_style] || styleGuide.direto}\n\n`;
   prompt += `Diretrizes gerais: evite respostas genéricas, priorize utilidade prática, use o contexto fornecido. Nunca invente informações que não estão no contexto.\n\n`;
 
-  // Busca memórias por similaridade semântica
   const queryEmbedding = await generateEmbedding(userMessage);
   let memories = [];
 
@@ -98,11 +93,9 @@ export async function buildSystemPrompt(projectId, userMessage, memoryMode) {
     prompt += '\n';
   }
 
-  // Arquivos do projeto
-  const files = await db.all(
-    'SELECT original_name, extracted_text, mime_type FROM files WHERE project_id = ?',
-    projectId
-  );
+  const files = db.prepare(
+    'SELECT original_name, extracted_text, mime_type FROM files WHERE project_id = ?'
+  ).all(projectId);
 
   if (files.length > 0) {
     prompt += `=== ARQUIVOS DE REFERÊNCIA ===\n`;
@@ -119,33 +112,26 @@ export async function buildSystemPrompt(projectId, userMessage, memoryMode) {
 
 // Extrai e salva memórias importantes da resposta da IA
 async function extractAndSaveMemories(projectId, userMessage, assistantResponse) {
-  // Divide por pontuação sem usar lookbehind (compatível com Node < 16)
   const sentences = assistantResponse.split(/[.!?]+\s+/).filter(Boolean);
-
   const importantKeywords = [
     'importante', 'lembre-se', 'concluímos', 'aprendemos', 'descobrimos',
     'fato', 'sabemos que', 'definimos', 'decidimos', 'sempre', 'nunca',
     'padrão', 'regra', 'convenção', 'arquitetura', 'estrutura', 'configuração'
   ];
 
+  const db = openDb();
   for (const sent of sentences) {
     const trimmed = sent.trim();
     const lower = trimmed.toLowerCase();
-
-    const isImportant = trimmed.length > 50 &&
-      importantKeywords.some(kw => lower.includes(kw));
-
+    const isImportant = trimmed.length > 50 && importantKeywords.some(kw => lower.includes(kw));
     if (isImportant) {
       const emb = await generateEmbedding(trimmed);
       if (emb) {
-        const db = await openDb();
-        // Evita duplicatas verificando similaridade com memórias existentes
         const existing = await findSimilarMemories(projectId, emb, 1, false);
         if (existing.length === 0 || existing[0].score < 0.92) {
-          await db.run(
-            'INSERT INTO memories (project_id, content, embedding, source) VALUES (?, ?, ?, ?)',
-            projectId, trimmed, JSON.stringify(emb), 'auto'
-          );
+          db.prepare(
+            'INSERT INTO memories (project_id, content, embedding, source) VALUES (?, ?, ?, ?)'
+          ).run(projectId, trimmed, JSON.stringify(emb), 'auto');
         }
       }
     }
@@ -158,8 +144,8 @@ async function updateChatTitle(chatId, userMessage) {
     const titlePrompt = `Gere um título curto (máximo 5 palavras) para uma conversa que começa com: "${userMessage.substring(0, 100)}". Responda apenas com o título, sem aspas ou pontuação final.`;
     const result = await model.generateContent(titlePrompt);
     const title = result.response.text().trim().substring(0, 50);
-    const db = await openDb();
-    await db.run('UPDATE chats SET title = ? WHERE id = ?', title, chatId);
+    const db = openDb();
+    db.prepare('UPDATE chats SET title = ? WHERE id = ?').run(title, chatId);
     return title;
   } catch {
     return null;
@@ -167,70 +153,51 @@ async function updateChatTitle(chatId, userMessage) {
 }
 
 export async function sendMessage(projectId, chatId, userMessage) {
-  const db = await openDb();
+  const db = openDb();
 
-  // Verifica se é a primeira mensagem do usuário neste chat
-  const existingUserMsgs = await db.get(
-    'SELECT COUNT(*) as count FROM messages WHERE chat_id = ? AND role = ?',
-    chatId, 'user'
-  );
+  const existingUserMsgs = db.prepare(
+    'SELECT COUNT(*) as count FROM messages WHERE chat_id = ? AND role = ?'
+  ).get(chatId, 'user');
   const isFirstMessage = existingUserMsgs.count === 0;
 
-  // Salvar mensagem do usuário
-  await db.run(
-    'INSERT INTO messages (chat_id, role, content) VALUES (?, ?, ?)',
-    chatId, 'user', userMessage
-  );
+  db.prepare(
+    'INSERT INTO messages (chat_id, role, content) VALUES (?, ?, ?)'
+  ).run(chatId, 'user', userMessage);
 
-  // Buscar histórico recente (últimas 20 mensagens para melhor contexto)
-  const history = await db.all(
-    'SELECT role, content FROM messages WHERE chat_id = ? ORDER BY created_at ASC',
-    chatId
-  );
+  const history = db.prepare(
+    'SELECT role, content FROM messages WHERE chat_id = ? ORDER BY created_at ASC'
+  ).all(chatId);
 
-  // Configurações do projeto
-  const project = await db.get(
-    'SELECT memory_mode, response_style, objective FROM projects WHERE id = ?',
-    projectId
-  );
+  const project = db.prepare(
+    'SELECT memory_mode, response_style, objective FROM projects WHERE id = ?'
+  ).get(projectId);
   if (!project) throw new Error('Projeto não encontrado');
 
-  // Montar contexto completo
   const systemPrompt = await buildSystemPrompt(projectId, userMessage, project.memory_mode);
 
-  // Formatar histórico para o Gemini
   let fullPrompt = systemPrompt;
   fullPrompt += `=== HISTÓRICO DA CONVERSA ===\n`;
 
-  // Inclui últimas 20 mensagens (exceto a atual que acabamos de adicionar)
   const historyToInclude = history.slice(0, -1).slice(-20);
   for (const msg of historyToInclude) {
     fullPrompt += `${msg.role === 'user' ? 'Usuário' : 'Assistente'}: ${msg.content}\n`;
   }
-
   fullPrompt += `\nUsuário: ${userMessage}\nAssistente:`;
 
-  // Chamar Gemini com timeout
   const timeoutPromise = new Promise((_, reject) =>
     setTimeout(() => reject(new Error('Timeout: API demorou mais de 30s')), 30000)
   );
-
   const geminiPromise = model.generateContent(fullPrompt);
   const result = await Promise.race([geminiPromise, timeoutPromise]);
   const responseText = result.response.text();
 
-  // Salvar resposta da IA
-  await db.run(
-    'INSERT INTO messages (chat_id, role, content) VALUES (?, ?, ?)',
-    chatId, 'assistant', responseText
-  );
+  db.prepare(
+    'INSERT INTO messages (chat_id, role, content) VALUES (?, ?, ?)'
+  ).run(chatId, 'assistant', responseText);
 
-  // Atualiza título do chat na primeira mensagem (em background)
-  if (isFirstMessage) {
-    updateChatTitle(chatId, userMessage).catch(console.error);
-  }
+  db.prepare('UPDATE chats SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(chatId);
 
-  // Extrai e salva memórias (em background para não atrasar resposta)
+  if (isFirstMessage) updateChatTitle(chatId, userMessage).catch(console.error);
   extractAndSaveMemories(projectId, userMessage, responseText).catch(console.error);
 
   return responseText;
