@@ -2,10 +2,9 @@ import React, { useState, useRef, useEffect } from 'react';
 import {
   Send, Loader2, Minus, Plus, Maximize2, Moon, Sun,
   Mic, FolderPlus, Folder, Check, X, Trash2, AlertTriangle, History,
-  ChevronDown, GripVertical, PencilLine, Search, Share2
+  ChevronDown, GripVertical, PencilLine, Search, Share2, PanelLeft
 } from 'lucide-react';
 
-// Corrigido: Substituição de import.meta por uma string vazia ou variável de ambiente segura
 const API_BASE = "https://solaris-backend-s7vm.onrender.com/api";
 
 function getUserId() {
@@ -22,11 +21,12 @@ function OrbitLine({ size, themeColor }) {
   return <div className={`absolute border ${themeColor} rounded-full ${size} transition-colors duration-500`}></div>;
 }
 
-function PlanetDot({ size, duration, color, glow }) {
+// Atualizado para aceitar 'dotSize' caso queiramos planetas de tamanhos variados (como Júpiter vs Marte)
+function PlanetDot({ size, duration, color, glow, dotSize = "w-1.5 h-1.5" }) {
   return (
     <div className={`absolute orbit-rotate ${size}`} style={{ animationDuration: duration }}>
       <div
-        className={`absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full ${color} w-1.5 h-1.5 shadow-sm transition-colors duration-500`}
+        className={`absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full ${color} ${dotSize} shadow-sm transition-colors duration-500`}
         style={glow ? { boxShadow: glow } : {}}
       ></div>
     </div>
@@ -42,6 +42,9 @@ export default function App() {
   const [darkMode, setDarkMode] = useState(() => localStorage.getItem('solaris_dark') !== 'false');
   const [searchQuery, setSearchQuery] = useState('');
   const [showShareToast, setShowShareToast] = useState(false);
+
+  // Novo estado para controlar a abertura da sidebar
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
 
   const [projects, setProjects] = useState([]);
   const [chatHistory, setChatHistory] = useState([]);
@@ -72,16 +75,14 @@ export default function App() {
     localStorage.setItem('solaris_dark', darkMode);
   }, [darkMode]);
 
-  // Carregar projetos do backend
   useEffect(() => {
     fetchProjects();
   }, []);
 
-  // Ping periódico para manter o backend acordado (Render free tier)
   useEffect(() => {
     const ping = () => fetch(`${API_BASE}/health`).catch(() => { });
     ping();
-    const interval = setInterval(ping, 10 * 60 * 1000); // a cada 10 min
+    const interval = setInterval(ping, 10 * 60 * 1000);
     return () => clearInterval(interval);
   }, []);
 
@@ -89,16 +90,16 @@ export default function App() {
     if (!API_BASE) return;
     try {
       const res = await fetch(`${API_BASE}/projects`, { headers: { 'x-user-id': USER_ID } });
-      if (!res.ok) throw new Error();
+      if (!res.ok) throw new Error(`Status ${res.status}`);
       const data = await res.json();
-      setProjects(data);
-      if (data.length > 0 && !activeProjectId) setActiveProjectId(data[0].id);
+      setProjects(data || []);
+      if (data && data.length > 0 && !activeProjectId) setActiveProjectId(data[0].id);
     } catch (err) {
-      console.error('Erro ao carregar projetos');
+      console.warn('Aviso: Erro ao carregar projetos. O servidor pode estar indisponível ou iniciando.', err.message);
+      setProjects([]);
     }
   }
 
-  // Carregar chats e mensagens quando projeto ativo mudar
   useEffect(() => {
     if (!activeProjectId || !API_BASE) return;
     setActiveChatId(null);
@@ -106,6 +107,7 @@ export default function App() {
     (async () => {
       try {
         const res = await fetch(`${API_BASE}/projects/${activeProjectId}`, { headers: { 'x-user-id': USER_ID } });
+        if (!res.ok) throw new Error(`Status ${res.status}`);
         const data = await res.json();
         setChatHistory(data.chats || []);
         if (data.chats?.length > 0) {
@@ -114,7 +116,9 @@ export default function App() {
           setMessages([{ role: 'assistant', content: 'Nenhum chat neste projeto. Crie um novo.' }]);
         }
       } catch (err) {
-        console.error(err);
+        console.warn('Aviso: Erro ao carregar chats do projeto.', err.message);
+        setChatHistory([]);
+        setMessages([{ role: 'assistant', content: 'Erro ao conectar com o servidor para carregar chats. Verifique a API.' }]);
       }
     })();
   }, [activeProjectId]);
@@ -124,13 +128,15 @@ export default function App() {
     (async () => {
       try {
         const res = await fetch(`${API_BASE}/messages/chat/${activeChatId}`, { headers: { 'x-user-id': USER_ID } });
+        if (!res.ok) throw new Error(`Status ${res.status}`);
         const msgs = await res.json();
         setMessages(msgs.length === 0
           ? [{ role: 'assistant', content: 'Olá! Como posso ajudar neste projeto?' }]
           : msgs
         );
       } catch (err) {
-        console.error(err);
+        console.warn('Aviso: Erro ao carregar mensagens do chat.', err.message);
+        setMessages([{ role: 'assistant', content: 'Erro ao carregar o histórico de mensagens. O servidor pode estar iniciando (pode levar até 50s).' }]);
       }
     })();
   }, [activeChatId]);
@@ -162,7 +168,8 @@ export default function App() {
         setActiveProjectId(newProject.id);
         projectId = newProject.id;
       } catch (err) {
-        console.error(err);
+        console.warn('Falha ao criar projeto:', err.message);
+        setMessages(prev => [...prev, { role: 'assistant', content: 'Falha ao criar o projeto inicial. O servidor pode estar offline.' }]);
         return;
       }
     }
@@ -180,7 +187,8 @@ export default function App() {
         setActiveChatId(newChat.id);
         chatId = newChat.id;
       } catch (err) {
-        console.error(err);
+        console.warn('Falha ao criar chat:', err.message);
+        setMessages(prev => [...prev, { role: 'assistant', content: 'Falha ao criar a nova conversa no projeto.' }]);
         return;
       }
     }
@@ -202,12 +210,16 @@ export default function App() {
       setMessages(prev => [...prev, { role: 'assistant', content: data.response }]);
 
       setTimeout(async () => {
-        const projRes = await fetch(`${API_BASE}/projects/${projectId}`, { headers: { 'x-user-id': USER_ID } });
-        const projData = await projRes.json();
-        setChatHistory(projData.chats || []);
+        try {
+          const projRes = await fetch(`${API_BASE}/projects/${projectId}`, { headers: { 'x-user-id': USER_ID } });
+          if (projRes.ok) {
+            const projData = await projRes.json();
+            setChatHistory(projData.chats || []);
+          }
+        } catch (e) { /* silent fail on background history update */ }
       }, 500);
     } catch (error) {
-      setMessages(prev => [...prev, { role: 'assistant', content: 'Erro ao conectar com o servidor. Se for a primeira mensagem do dia, aguarde 30 segundos e tente novamente — o servidor pode estar iniciando.' }]);
+      setMessages(prev => [...prev, { role: 'assistant', content: 'Erro ao conectar com o servidor. Se for a primeira mensagem do dia, aguarde cerca de 50 segundos e tente novamente (o servidor gratuito no Render está iniciando).' }]);
     } finally {
       setIsLoading(false);
     }
@@ -246,13 +258,14 @@ export default function App() {
           memory_mode: 'isolado'
         }),
       });
+      if (!res.ok) throw new Error('Erro ao criar na API');
       const project = await res.json();
       setProjects([project, ...projects]);
       setNewProjectName('');
       setIsCreatingProject(false);
       setActiveProjectId(project.id);
     } catch (err) {
-      console.error(err);
+      console.warn('Erro ao criar projeto:', err.message);
       setIsCreatingProject(false);
     }
   };
@@ -262,7 +275,8 @@ export default function App() {
     const { type, data } = itemToDelete;
     try {
       if (type === 'project') {
-        await fetch(`${API_BASE}/projects/${data.id}`, { method: 'DELETE', headers: { 'x-user-id': USER_ID } });
+        const res = await fetch(`${API_BASE}/projects/${data.id}`, { method: 'DELETE', headers: { 'x-user-id': USER_ID } });
+        if (!res.ok) throw new Error('Erro ao excluir projeto');
         const updated = projects.filter(p => p.id !== data.id);
         setProjects(updated);
         if (activeProjectId === data.id) {
@@ -271,7 +285,8 @@ export default function App() {
           setActiveChatId(null);
         }
       } else if (type === 'chat') {
-        await fetch(`${API_BASE}/projects/${activeProjectId}/chats/${data.id}`, { method: 'DELETE', headers: { 'x-user-id': USER_ID } });
+        const res = await fetch(`${API_BASE}/projects/${activeProjectId}/chats/${data.id}`, { method: 'DELETE', headers: { 'x-user-id': USER_ID } });
+        if (!res.ok) throw new Error('Erro ao excluir chat');
         const updated = chatHistory.filter(c => c.id !== data.id);
         setChatHistory(updated);
         if (activeChatId === data.id) {
@@ -279,7 +294,7 @@ export default function App() {
         }
       }
     } catch (err) {
-      console.error(err);
+      console.warn('Erro durante a exclusão:', err.message);
     }
     setItemToDelete(null);
   };
@@ -316,13 +331,14 @@ export default function App() {
     const formData = new FormData();
     formData.append('file', file);
     try {
-      await fetch(`${API_BASE}/files/${activeProjectId}`, {
+      const res = await fetch(`${API_BASE}/files/${activeProjectId}`, {
         method: 'POST',
         headers: { 'x-user-id': USER_ID },
         body: formData,
       });
+      if (!res.ok) throw new Error('Falha no upload');
     } catch (err) {
-      console.error(err);
+      console.warn('Erro ao fazer upload do arquivo:', err.message);
     }
   };
 
@@ -336,7 +352,7 @@ export default function App() {
     inputBorder: darkMode ? 'border-white/20' : 'border-black/10',
     inputFocus: darkMode ? 'focus-within:border-white' : 'focus-within:border-black',
     scrollbar: darkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.05)',
-    orbit: darkMode ? 'border-white/15' : 'border-black/10',
+    orbit: darkMode ? 'border-white/10' : 'border-black/10',
     projectHover: darkMode ? 'hover:bg-white/5' : 'hover:bg-black/5',
     projectActive: darkMode ? 'bg-white/10 text-white shadow-sm' : 'bg-black/5 text-black shadow-sm',
     modalOverlay: 'bg-black/60 backdrop-blur-sm',
@@ -404,153 +420,191 @@ export default function App() {
         </div>
       )}
 
-      <aside className={`hidden lg:flex w-80 flex-col border-r ${theme.border} ${theme.bgAside} relative transition-colors duration-500`}>
+      {/* Sidebar com transição de width controlada pelo toggle */}
+      <aside className={`hidden lg:flex flex-col border-r ${theme.border} ${theme.bgAside} relative transition-all duration-500 ease-in-out overflow-hidden shrink-0 ${isSidebarOpen ? 'w-80 opacity-100' : 'w-0 opacity-0 !border-none'}`}>
 
-        <div className={`sticky top-0 z-20 px-8 pt-8 pb-6 flex flex-col gap-5 shrink-0 ${theme.bgAside} transition-colors duration-500`}>
-          <button
-            onClick={async () => {
-              if (!activeProjectId || !API_BASE) return;
-              try {
-                const res = await fetch(`${API_BASE}/projects/${activeProjectId}/chats`, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json', 'x-user-id': USER_ID },
-                  body: JSON.stringify({ title: 'Nova conversa' }),
-                });
-                const newChat = await res.json();
-                setChatHistory(prev => [newChat, ...prev]);
-                setActiveChatId(newChat.id);
-              } catch (err) {
-                console.error(err);
-              }
-            }}
-            className={`flex items-center gap-3 w-full transition-colors duration-500 ${theme.textPrimary} group`}
-          >
-            <PencilLine size={18} strokeWidth={1.2} />
-            <span className="text-sm font-light">Novo Chat</span>
-          </button>
+        {/* Container interno fixo em w-80 para evitar que o conteúdo esprema durante a animação */}
+        <div className="w-80 flex flex-col h-full shrink-0">
+          <div className={`sticky top-0 z-20 px-8 pt-8 pb-6 flex flex-col gap-5 shrink-0 ${theme.bgAside} transition-colors duration-500`}>
+            <button
+              onClick={async () => {
+                if (!activeProjectId || !API_BASE) return;
+                try {
+                  const res = await fetch(`${API_BASE}/projects/${activeProjectId}/chats`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'x-user-id': USER_ID },
+                    body: JSON.stringify({ title: 'Nova conversa' }),
+                  });
+                  const newChat = await res.json();
+                  setChatHistory(prev => [newChat, ...prev]);
+                  setActiveChatId(newChat.id);
+                } catch (err) {
+                  console.error(err);
+                }
+              }}
+              className={`flex items-center gap-3 w-full transition-colors duration-500 ${theme.textPrimary} group`}
+            >
+              <PencilLine size={18} strokeWidth={1.2} />
+              <span className="text-sm font-light">Novo Chat</span>
+            </button>
 
-          <div className="flex items-center gap-3 w-full">
-            <Search size={18} strokeWidth={1.2} className={`${theme.textPrimary} transition-colors duration-500`} />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Buscar"
-              className={`bg-transparent border-none p-0 text-sm font-light w-full focus:outline-none transition-colors duration-500 ${darkMode ? 'text-white placeholder:text-white' : 'text-black placeholder:text-black'}`}
-            />
-          </div>
-        </div>
-
-        <div className="px-8 flex flex-col flex-1 overflow-y-auto custom-scrollbar transition-colors duration-500">
-          <div className="relative w-full aspect-square flex items-center justify-center opacity-80 hover:opacity-100 transition-opacity duration-700 mb-10 shrink-0">
-            <div className={`w-6 h-6 ${darkMode ? 'bg-[#ffd700]' : 'bg-[#ffcc00]'} rounded-full z-10 shadow-[0_0_25px_rgba(255,204,0,0.3)] transition-colors duration-500`}></div>
-            <OrbitLine size="w-16 h-16" themeColor={theme.orbit} />
-            <OrbitLine size="w-24 h-24" themeColor={theme.orbit} />
-            <OrbitLine size="w-32 h-32" themeColor={theme.orbit} />
-            <OrbitLine size="w-44 h-44" themeColor={theme.orbit} />
-            <OrbitLine size="w-56 h-56" themeColor={theme.orbit} />
-            <PlanetDot size="w-16 h-16" duration="4s" color={darkMode ? 'bg-[#888]' : 'bg-[#666]'} />
-            <PlanetDot size="w-24 h-24" duration="7s" color="bg-[#e3bb76]" />
-            <PlanetDot size="w-32 h-32" duration="12s" color="bg-[#2271b3]" glow={darkMode ? "0_0_12px_#00ffff" : "0_0_8px_#00ffff"} />
-            <PlanetDot size="w-44 h-44" duration="18s" color="bg-[#e27b58]" />
-            <PlanetDot size="w-56 h-56" duration="30s" color="bg-[#d39c7e]" />
-          </div>
-
-          <div className="flex flex-col gap-4 mb-8 shrink-0">
-            <h2 className={`text-[10px] font-light tracking-[0.4em] uppercase ${theme.textSecondary} transition-colors duration-500`}>PROJETOS</h2>
-
-            {isCreatingProject ? (
-              <div className={`flex items-center gap-2 p-2 -ml-2 rounded-lg border ${theme.inputBorder} animate-in fade-in zoom-in-95 duration-200 transition-colors duration-500`}>
-                <input
-                  autoFocus
-                  type="text"
-                  value={newProjectName}
-                  onChange={(e) => setNewProjectName(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && createProject()}
-                  placeholder="Nome do projeto..."
-                  className="bg-transparent border-none text-xs w-full focus:outline-none font-light transition-colors duration-500"
-                />
-                <button onClick={createProject} className="text-emerald-500"><Check size={14} /></button>
-                <button onClick={() => setIsCreatingProject(false)} className="text-red-400"><X size={14} /></button>
-              </div>
-            ) : (
-              <button
-                onClick={() => setIsCreatingProject(true)}
-                className={`flex items-center gap-3 p-2 -ml-2 rounded-lg transition-all duration-500 ${theme.projectHover} group`}
-              >
-                <FolderPlus size={18} className={`${theme.textSecondary} group-hover:text-current transition-colors duration-500`} strokeWidth={1.5} />
-                <span className={`text-sm font-light ${theme.textPrimary} transition-colors duration-500`}>Novo projeto</span>
-              </button>
-            )}
-
-            <div className="flex flex-col gap-1">
-              {visibleProjects.map((project) => (
-                <ProjectItem key={project.id} project={project} isActive={activeProjectId === project.id} />
-              ))}
-              {hiddenProjects.length > 0 && (
-                <div className="relative group/more">
-                  <button className={`w-full flex items-center justify-between p-2.5 -ml-2 rounded-lg transition-all duration-500 ${theme.projectHover} ${theme.textSecondary}`}>
-                    <div className="flex items-center gap-3">
-                      <Plus size={14} className="opacity-60" />
-                      <span className="text-xs font-light">Mais ({hiddenProjects.length})</span>
-                    </div>
-                    <ChevronDown size={12} className="opacity-40 group-hover/more:rotate-180 transition-transform duration-300" />
-                  </button>
-                  <div className={`absolute left-0 top-full w-full z-50 pt-1 pointer-events-none group-hover/more:pointer-events-auto opacity-0 group-hover/more:opacity-100 transition-all duration-300 translate-y-2 group-hover/more:translate-y-0`}>
-                    <div className={`${theme.dropdownBg} border ${theme.border} rounded-xl p-2 shadow-xl max-h-48 overflow-y-auto custom-scrollbar transition-colors duration-500`}>
-                      {hiddenProjects.map((project) => (
-                        <ProjectItem key={project.id} project={project} isActive={activeProjectId === project.id} />
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              )}
+            <div className="flex items-center gap-3 w-full">
+              <Search size={18} strokeWidth={1.2} className={`${theme.textPrimary} transition-colors duration-500`} />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Buscar"
+                className={`bg-transparent border-none p-0 text-sm font-light w-full focus:outline-none transition-colors duration-500 ${darkMode ? 'text-white placeholder:text-white' : 'text-black placeholder:text-black'}`}
+              />
             </div>
           </div>
 
-          <div className="flex flex-col gap-4 mb-10 shrink-0">
-            <h2 className={`text-[10px] font-light tracking-[0.4em] uppercase ${theme.textSecondary} transition-colors duration-500`}>SEUS CHATS</h2>
-            <div className="flex flex-col gap-1">
-              {filteredChats.map((chat) => (
-                <div
-                  key={chat.id}
-                  onClick={() => setActiveChatId(chat.id)}
-                  className={`flex items-center justify-between p-2 -ml-2 rounded-lg cursor-pointer transition-all duration-500 group/chat ${activeChatId === chat.id ? theme.projectActive : theme.projectHover
-                    }`}
+          <div className="px-8 flex flex-col flex-1 overflow-y-auto custom-scrollbar transition-colors duration-500">
+
+            {/* O Sistema Solar completo */}
+            <div className="relative w-full aspect-square flex items-center justify-center opacity-80 hover:opacity-100 transition-opacity duration-700 mb-10 shrink-0">
+
+              {/* Sol */}
+              <div className={`w-6 h-6 ${darkMode ? 'bg-[#ffd700]' : 'bg-[#ffcc00]'} rounded-full z-10 shadow-[0_0_25px_rgba(255,204,0,0.3)] transition-colors duration-500`}></div>
+
+              {/* Órbitas */}
+              <OrbitLine size="w-10 h-10" themeColor={theme.orbit} />
+              <OrbitLine size="w-14 h-14" themeColor={theme.orbit} />
+              <OrbitLine size="w-20 h-20" themeColor={theme.orbit} />
+              <OrbitLine size="w-24 h-24" themeColor={theme.orbit} />
+              <OrbitLine size="w-32 h-32" themeColor={theme.orbit} />
+              <OrbitLine size="w-40 h-40" themeColor={theme.orbit} />
+              <OrbitLine size="w-48 h-48" themeColor={theme.orbit} />
+              <OrbitLine size="w-56 h-56" themeColor={theme.orbit} />
+
+              {/* Planetas */}
+              {/* Mercúrio */}
+              <PlanetDot size="w-10 h-10" duration="3s" color={darkMode ? 'bg-[#888]' : 'bg-[#666]'} dotSize="w-1 h-1" />
+              {/* Vênus */}
+              <PlanetDot size="w-14 h-14" duration="5s" color="bg-[#e3bb76]" />
+              {/* Terra */}
+              <PlanetDot size="w-20 h-20" duration="8s" color="bg-[#2271b3]" glow={darkMode ? "0_0_12px_#00ffff" : "0_0_8px_#00ffff"} />
+              {/* Marte */}
+              <PlanetDot size="w-24 h-24" duration="12s" color="bg-[#e27b58]" dotSize="w-1 h-1" />
+              {/* Júpiter */}
+              <PlanetDot size="w-32 h-32" duration="20s" color="bg-[#d39c7e]" dotSize="w-2.5 h-2.5" />
+              {/* Saturno */}
+              <PlanetDot size="w-40 h-40" duration="28s" color="bg-[#eadaa4]" dotSize="w-2 h-2" />
+              {/* Urano */}
+              <PlanetDot size="w-48 h-48" duration="36s" color="bg-[#a6d1e6]" />
+              {/* Netuno */}
+              <PlanetDot size="w-56 h-56" duration="45s" color="bg-[#4b70dd]" />
+
+            </div>
+
+            <div className="flex flex-col gap-4 mb-8 shrink-0">
+              <h2 className={`text-[10px] font-light tracking-[0.4em] uppercase ${theme.textSecondary} transition-colors duration-500`}>PROJETOS</h2>
+
+              {isCreatingProject ? (
+                <div className={`flex items-center gap-2 p-2 -ml-2 rounded-lg border ${theme.inputBorder} animate-in fade-in zoom-in-95 duration-200 transition-colors duration-500`}>
+                  <input
+                    autoFocus
+                    type="text"
+                    value={newProjectName}
+                    onChange={(e) => setNewProjectName(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && createProject()}
+                    placeholder="Nome do projeto..."
+                    className="bg-transparent border-none text-xs w-full focus:outline-none font-light transition-colors duration-500"
+                  />
+                  <button onClick={createProject} className="text-emerald-500"><Check size={14} /></button>
+                  <button onClick={() => setIsCreatingProject(false)} className="text-red-400"><X size={14} /></button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setIsCreatingProject(true)}
+                  className={`flex items-center gap-3 p-2 -ml-2 rounded-lg transition-all duration-500 ${theme.projectHover} group`}
                 >
-                  <div className="flex items-center gap-3 overflow-hidden">
-                    <History size={14} className={activeChatId === chat.id ? 'text-current opacity-60 transition-opacity duration-500' : `${theme.textMuted} transition-colors duration-500`} />
-                    <span className={`text-xs font-light truncate max-w-[140px] transition-colors duration-500 ${activeChatId === chat.id ? 'font-normal' : theme.textSecondary}`}>
-                      {chat.title}
-                    </span>
+                  <FolderPlus size={18} className={`${theme.textSecondary} group-hover:text-current transition-colors duration-500`} strokeWidth={1.5} />
+                  <span className={`text-sm font-light ${theme.textPrimary} transition-colors duration-500`}>Novo projeto</span>
+                </button>
+              )}
+
+              <div className="flex flex-col gap-1">
+                {visibleProjects.map((project) => (
+                  <ProjectItem key={project.id} project={project} isActive={activeProjectId === project.id} />
+                ))}
+                {hiddenProjects.length > 0 && (
+                  <div className="relative group/more">
+                    <button className={`w-full flex items-center justify-between p-2.5 -ml-2 rounded-lg transition-all duration-500 ${theme.projectHover} ${theme.textSecondary}`}>
+                      <div className="flex items-center gap-3">
+                        <Plus size={14} className="opacity-60" />
+                        <span className="text-xs font-light">Mais ({hiddenProjects.length})</span>
+                      </div>
+                      <ChevronDown size={12} className="opacity-40 group-hover/more:rotate-180 transition-transform duration-300" />
+                    </button>
+                    <div className={`absolute left-0 top-full w-full z-50 pt-1 pointer-events-none group-hover/more:pointer-events-auto opacity-0 group-hover/more:opacity-100 transition-all duration-300 translate-y-2 group-hover/more:translate-y-0`}>
+                      <div className={`${theme.dropdownBg} border ${theme.border} rounded-xl p-2 shadow-xl max-h-48 overflow-y-auto custom-scrollbar transition-colors duration-500`}>
+                        {hiddenProjects.map((project) => (
+                          <ProjectItem key={project.id} project={project} isActive={activeProjectId === project.id} />
+                        ))}
+                      </div>
+                    </div>
                   </div>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); setItemToDelete({ type: 'chat', data: chat }); }}
-                    className={`opacity-0 group-hover/chat:opacity-100 p-1 hover:text-red-500 transition-all duration-200`}
-                  >
-                    <Trash2 size={12} />
-                  </button>
-                </div>
-              ))}
+                )}
+              </div>
             </div>
+
+            <div className="flex flex-col gap-4 mb-10 shrink-0">
+              <h2 className={`text-[10px] font-light tracking-[0.4em] uppercase ${theme.textSecondary} transition-colors duration-500`}>SEUS CHATS</h2>
+              <div className="flex flex-col gap-1">
+                {filteredChats.map((chat) => (
+                  <div
+                    key={chat.id}
+                    onClick={() => setActiveChatId(chat.id)}
+                    className={`flex items-center justify-between p-2 -ml-2 rounded-lg cursor-pointer transition-all duration-500 group/chat ${activeChatId === chat.id ? theme.projectActive : theme.projectHover
+                      }`}
+                  >
+                    <div className="flex items-center gap-3 overflow-hidden">
+                      <History size={14} className={activeChatId === chat.id ? 'text-current opacity-60 transition-opacity duration-500' : `${theme.textMuted} transition-colors duration-500`} />
+                      <span className={`text-xs font-light truncate max-w-[140px] transition-colors duration-500 ${activeChatId === chat.id ? 'font-normal' : theme.textSecondary}`}>
+                        {chat.title}
+                      </span>
+                    </div>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setItemToDelete({ type: 'chat', data: chat }); }}
+                      className={`opacity-0 group-hover/chat:opacity-100 p-1 hover:text-red-500 transition-all duration-200`}
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+
           </div>
 
-        </div>
-
-        {/* Nota de rodapé — fixada no fundo da sidebar, fora do scroll */}
-        <div className={`px-8 shrink-0 border-t ${theme.border} transition-colors duration-500`}>
-          <div className="flex flex-col py-5 transition-colors duration-500">
-            <span className={`text-[8px] font-extralight uppercase tracking-[0.4em] ${darkMode ? 'text-white/20' : 'text-black/50'} mb-0.5 transition-colors duration-500`}>Criado por</span>
-            <span className={`text-sm font-serif italic tracking-wide transition-colors duration-500 ${darkMode ? 'text-white/50' : 'text-black/80'}`} style={{ fontFamily: 'Georgia, "Apple Chancery", cursive' }}>felipe sant'oliver</span>
+          <div className={`px-8 shrink-0 border-t ${theme.border} transition-colors duration-500`}>
+            <div className="flex flex-col py-5 transition-colors duration-500">
+              <span className={`text-[8px] font-extralight uppercase tracking-[0.4em] ${darkMode ? 'text-white/20' : 'text-black/50'} mb-0.5 transition-colors duration-500`}>Criado por</span>
+              <span className={`text-sm font-serif italic tracking-wide transition-colors duration-500 ${darkMode ? 'text-white/50' : 'text-black/80'}`} style={{ fontFamily: 'Georgia, "Apple Chancery", cursive' }}>felipe sant'oliver</span>
+            </div>
           </div>
         </div>
       </aside>
 
       <main className={`flex-1 flex flex-col ${theme.bgMain} relative transition-colors duration-500`}>
-        <header className={`h-20 flex items-center justify-between px-10 border-b ${theme.border} transition-colors duration-500`}>
-          <div className="flex items-baseline gap-1">
-            <span className="text-base font-medium tracking-tight">SOLARIS</span>
-            <span className={`text-[10px] font-bold ${theme.textMuted} tracking-tighter transition-colors duration-500`}>V1</span>
+        <header className={`h-20 flex items-center justify-between px-6 md:px-10 border-b ${theme.border} transition-colors duration-500`}>
+          <div className="flex items-center gap-4">
+
+            {/* Ícone de Toggle para a Sidebar */}
+            <button
+              onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+              className={`hidden lg:flex items-center justify-center transition-colors duration-300 ${isSidebarOpen ? theme.textMuted + ' hover:text-current' : (darkMode ? 'text-white/60 hover:text-white' : 'text-black/60 hover:text-black')}`}
+              title={isSidebarOpen ? "Recolher menu" : "Expandir menu"}
+            >
+              <PanelLeft size={20} strokeWidth={1.5} />
+            </button>
+
+            <div className="flex items-baseline gap-1">
+              <span className="text-base font-medium tracking-tight">SOLARIS</span>
+              <span className={`text-[10px] font-bold ${theme.textMuted} tracking-tighter transition-colors duration-500`}>V1</span>
+            </div>
           </div>
           <div className="flex items-center gap-6">
             <button onClick={toggleDarkMode} className={`transition-all duration-300 ${darkMode ? 'text-yellow-400 hover:text-yellow-200' : 'text-slate-400 hover:text-slate-600'}`}>{darkMode ? <Sun size={18} strokeWidth={1.5} /> : <Moon size={18} strokeWidth={1.5} />}</button>
