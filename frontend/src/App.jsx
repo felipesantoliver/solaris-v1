@@ -77,6 +77,14 @@ export default function App() {
     fetchProjects();
   }, []);
 
+  // Ping periódico para manter o backend acordado (Render free tier)
+  useEffect(() => {
+    const ping = () => fetch(`${API_BASE}/health`).catch(() => { });
+    ping();
+    const interval = setInterval(ping, 10 * 60 * 1000); // a cada 10 min
+    return () => clearInterval(interval);
+  }, []);
+
   async function fetchProjects() {
     if (!API_BASE) return;
     try {
