@@ -384,12 +384,9 @@ export default function App() {
       {/* Sidebar - Rail Style */}
       <aside className={`hidden lg:flex flex-col border-r ${theme.border} ${theme.bgAside} relative transition-all duration-500 ease-in-out shrink-0 ${isSidebarOpen ? 'w-80' : 'w-20'}`}>
 
-        {/* Placeholder for top alignment */}
-        <div className={`h-20 flex items-center shrink-0 border-b ${theme.border} transition-all duration-500`}></div>
-
         {/* Sidebar Content */}
         <div className={`flex flex-col h-full overflow-hidden transition-all duration-500 ${isSidebarOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
-          <div className={`px-8 pt-8 pb-6 flex flex-col gap-5 shrink-0`}>
+          <div className={`px-8 pt-12 pb-6 flex flex-col gap-5 shrink-0`}>
             <button
               onClick={async () => {
                 if (!activeProjectId || !API_BASE) return;
@@ -508,7 +505,7 @@ export default function App() {
 
         {/* Icons visible only in Rail mode */}
         {!isSidebarOpen && (
-          <div className="flex-1 flex flex-col items-center pt-10 gap-8 animate-in fade-in duration-700">
+          <div className="flex-1 flex flex-col items-center pt-12 gap-8 animate-in fade-in duration-700">
             <div className={`w-8 h-8 rounded-full border ${theme.orbit} flex items-center justify-center animate-pulse`}>
               <div className={`w-1.5 h-1.5 rounded-full ${darkMode ? 'bg-white/40' : 'bg-black/40'}`}></div>
             </div>
