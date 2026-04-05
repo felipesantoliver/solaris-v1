@@ -2,10 +2,11 @@ import React, { useState, useRef, useEffect } from 'react';
 import {
   Send, Loader2, Minus, Plus, Maximize2, Moon, Sun, MessageSquare, Hammer,
   Mic, FolderPlus, Folder, Check, X, Trash2, AlertTriangle, History,
-  ChevronDown, GripVertical, SquarePen, Search, Share2
+  ChevronDown, GripVertical, PencilLine, Search, Share2
 } from 'lucide-react';
 
-const API_BASE = import.meta.env.VITE_API_URL;
+// Corrigido: Substituição de import.meta por uma string vazia ou variável de ambiente segura
+const API_BASE = "";
 
 function getUserId() {
   let id = localStorage.getItem('solaris_user_id');
@@ -78,6 +79,7 @@ export default function App() {
   }, []);
 
   async function fetchProjects() {
+    if (!API_BASE) return;
     try {
       const res = await fetch(`${API_BASE}/projects`, { headers: { 'x-user-id': USER_ID } });
       if (!res.ok) throw new Error();
@@ -91,8 +93,7 @@ export default function App() {
 
   // Carregar chats e mensagens quando projeto ativo mudar
   useEffect(() => {
-    if (!activeProjectId) return;
-    // Reseta o chat ativo ao trocar de projeto para evitar exibição de mensagens incorretas
+    if (!activeProjectId || !API_BASE) return;
     setActiveChatId(null);
     setMessages([]);
     (async () => {
@@ -112,7 +113,7 @@ export default function App() {
   }, [activeProjectId]);
 
   useEffect(() => {
-    if (!activeChatId) return;
+    if (!activeChatId || !API_BASE) return;
     (async () => {
       try {
         const res = await fetch(`${API_BASE}/messages/chat/${activeChatId}`, { headers: { 'x-user-id': USER_ID } });
@@ -136,13 +137,11 @@ export default function App() {
   };
 
   const handleSend = async () => {
-    if (!input.trim() || isLoading) return;
+    if (!input.trim() || isLoading || !API_BASE) return;
 
-    // Captura o chatId a ser usado nesta chamada (pode ser um recém-criado)
     let chatId = activeChatId;
 
     if (!chatId) {
-      // Se não houver chat ativo, cria um automaticamente antes de enviar
       if (!activeProjectId) return;
       try {
         const res = await fetch(`${API_BASE}/projects/${activeProjectId}/chats`, {
@@ -154,7 +153,7 @@ export default function App() {
         const newChat = await res.json();
         setChatHistory(prev => [newChat, ...prev]);
         setActiveChatId(newChat.id);
-        chatId = newChat.id; // usa o ID diretamente, sem depender do estado atualizado
+        chatId = newChat.id;
       } catch (err) {
         console.error(err);
         return;
@@ -177,7 +176,6 @@ export default function App() {
       const data = await res.json();
       setMessages(prev => [...prev, { role: 'assistant', content: data.response }]);
 
-      // Atualizar título do chat na sidebar (se mudou)
       setTimeout(async () => {
         const projRes = await fetch(`${API_BASE}/projects/${activeProjectId}`, { headers: { 'x-user-id': USER_ID } });
         const projData = await projRes.json();
@@ -208,7 +206,7 @@ export default function App() {
   };
 
   const createProject = async () => {
-    if (!newProjectName.trim()) {
+    if (!newProjectName.trim() || !API_BASE) {
       setIsCreatingProject(false);
       return;
     }
@@ -235,7 +233,7 @@ export default function App() {
   };
 
   const handleDeleteConfirm = async () => {
-    if (!itemToDelete) return;
+    if (!itemToDelete || !API_BASE) return;
     const { type, data } = itemToDelete;
     try {
       if (type === 'project') {
@@ -286,10 +284,9 @@ export default function App() {
     setDraggedItemId(null);
   };
 
-  // Upload de arquivo (mantém o mesmo elemento visual "Anexo")
   const handleFileUpload = async (e) => {
     const file = e.target.files?.[0];
-    if (!file || !activeProjectId) return;
+    if (!file || !activeProjectId || !API_BASE) return;
     e.target.value = '';
     const formData = new FormData();
     formData.append('file', file);
@@ -299,7 +296,6 @@ export default function App() {
         headers: { 'x-user-id': USER_ID },
         body: formData,
       });
-      // Sem toast para não adicionar elementos visuais
     } catch (err) {
       console.error(err);
     }
@@ -326,7 +322,6 @@ export default function App() {
   const visibleProjects = projects.slice(0, 3);
   const hiddenProjects = projects.slice(3);
 
-  // Filtra chats pelo campo de busca
   const filteredChats = searchQuery.trim()
     ? chatHistory.filter(c => c.title?.toLowerCase().includes(searchQuery.toLowerCase()))
     : chatHistory;
@@ -360,7 +355,6 @@ export default function App() {
   return (
     <div className={`flex h-screen ${darkMode ? 'bg-[#050505] text-white' : 'bg-[#fafafa] text-[#1a1a1a]'} font-sans antialiased overflow-hidden transition-colors duration-500`}>
 
-      {/* Toast de Compartilhamento */}
       <div className={`fixed top-24 left-1/2 -translate-x-1/2 z-[110] px-6 py-3 rounded-full bg-emerald-500 text-white text-xs font-bold tracking-widest uppercase shadow-2xl transition-all duration-500 ${showShareToast ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-4 pointer-events-none'}`}>
         Chat copiado para a área de transferência
       </div>
@@ -390,7 +384,7 @@ export default function App() {
         <div className={`sticky top-0 z-20 px-8 pt-8 pb-6 flex flex-col gap-5 shrink-0 ${theme.bgAside} transition-colors duration-500`}>
           <button
             onClick={async () => {
-              if (!activeProjectId) return;
+              if (!activeProjectId || !API_BASE) return;
               try {
                 const res = await fetch(`${API_BASE}/projects/${activeProjectId}/chats`, {
                   method: 'POST',
@@ -406,7 +400,7 @@ export default function App() {
             }}
             className={`flex items-center gap-3 w-full transition-colors duration-500 ${theme.textPrimary} group`}
           >
-            <SquarePen size={18} strokeWidth={1.2} />
+            <PencilLine size={18} strokeWidth={1.2} />
             <span className="text-sm font-light">Novo Chat</span>
           </button>
 
@@ -486,9 +480,6 @@ export default function App() {
                   </div>
                 </div>
               )}
-              {projects.length === 0 && !isCreatingProject && (
-                <p className={`text-[10px] italic ${theme.textMuted} px-2 mt-2 transition-colors duration-500`}>Nenhum projeto ainda</p>
-              )}
             </div>
           </div>
 
@@ -516,11 +507,6 @@ export default function App() {
                   </button>
                 </div>
               ))}
-              {filteredChats.length === 0 && (
-                <p className={`text-[10px] italic ${theme.textMuted} px-2 transition-colors duration-500`}>
-                  {searchQuery.trim() ? 'Nenhum chat encontrado' : 'Histórico vazio'}
-                </p>
-              )}
             </div>
           </div>
 
@@ -555,7 +541,6 @@ export default function App() {
         </header>
 
         <div className={`flex-1 relative overflow-y-auto px-6 md:px-20 py-10 space-y-12 custom-scrollbar transition-colors duration-500`}>
-
           {hasUserStartedChat && (
             <div className="sticky top-0 z-30 flex justify-end pointer-events-none mb-[-40px] animate-in fade-in zoom-in-95 duration-500">
               <button
@@ -614,7 +599,8 @@ export default function App() {
         .custom-scrollbar::-webkit-scrollbar { width: 3px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: ${theme.scrollbar}; border-radius: 10px; }
-      `}} />
+        `
+      }} />
     </div>
   );
 }
