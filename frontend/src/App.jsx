@@ -42,7 +42,6 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [showShareToast, setShowShareToast] = useState(false);
 
-  // Controle da sidebar (true = aberta, false = modo rail)
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
 
   const [projects, setProjects] = useState([]);
@@ -356,13 +355,15 @@ export default function App() {
   return (
     <div className={`flex h-screen ${darkMode ? 'bg-[#050505] text-white' : 'bg-[#fafafa] text-[#1a1a1a]'} font-sans antialiased overflow-hidden transition-colors duration-500`}>
 
+      {/* Share Toast */}
       <div className={`fixed top-24 left-1/2 -translate-x-1/2 z-[110] px-6 py-3 rounded-full bg-emerald-500 text-white text-xs font-bold tracking-widest uppercase shadow-2xl transition-all duration-500 ${showShareToast ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-4 pointer-events-none'}`}>
         Chat copiado para a área de transferência
       </div>
 
+      {/* Delete Modal */}
       {itemToDelete && (
         <div className={`fixed inset-0 z-[100] flex items-center justify-center p-4 ${theme.modalOverlay} animate-in fade-in duration-300`}>
-          <div className={`${theme.modalBg} border ${theme.border} w-full max-sm rounded-2xl p-8 shadow-2xl animate-in zoom-in-95 duration-300`}>
+          <div className={`${theme.modalBg} border ${theme.border} w-full max-w-sm rounded-2xl p-8 shadow-2xl animate-in zoom-in-95 duration-300`}>
             <div className="flex flex-col items-center text-center">
               <div className="w-12 h-12 rounded-full bg-red-500/10 flex items-center justify-center mb-4">
                 <AlertTriangle className="text-red-500" size={24} />
@@ -380,21 +381,13 @@ export default function App() {
         </div>
       )}
 
-      {/* Sidebar - Estilo Rail (w-20 quando fechada) */}
+      {/* Sidebar - Rail Style */}
       <aside className={`hidden lg:flex flex-col border-r ${theme.border} ${theme.bgAside} relative transition-all duration-500 ease-in-out shrink-0 ${isSidebarOpen ? 'w-80' : 'w-20'}`}>
 
-        {/* Toggle centralizado no topo da sidebar */}
-        <div className={`h-20 flex items-center shrink-0 border-b ${theme.border} transition-all duration-500 justify-center`}>
-          <button
-            onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-            className={`flex items-center justify-center p-2 rounded-lg transition-all duration-300 ${darkMode ? 'text-white/60 hover:text-white hover:bg-white/5' : 'text-black/60 hover:text-black hover:bg-black/5'}`}
-            title={isSidebarOpen ? "Recolher menu" : "Expandir menu"}
-          >
-            <PanelLeft size={20} strokeWidth={1.5} />
-          </button>
-        </div>
+        {/* Placeholder for top alignment */}
+        <div className={`h-20 flex items-center shrink-0 border-b ${theme.border} transition-all duration-500`}></div>
 
-        {/* Conteúdo da Sidebar - Escondido suavemente no modo rail */}
+        {/* Sidebar Content */}
         <div className={`flex flex-col h-full overflow-hidden transition-all duration-500 ${isSidebarOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
           <div className={`px-8 pt-8 pb-6 flex flex-col gap-5 shrink-0`}>
             <button
@@ -430,7 +423,7 @@ export default function App() {
           </div>
 
           <div className="px-8 flex flex-col flex-1 overflow-y-auto custom-scrollbar">
-            {/* Visual do Sistema Solar */}
+            {/* Solar System Visual */}
             <div className="relative w-full aspect-square flex items-center justify-center opacity-80 hover:opacity-100 transition-opacity duration-700 mb-10 shrink-0">
               <div className={`w-6 h-6 ${darkMode ? 'bg-[#ffd700]' : 'bg-[#ffcc00]'} rounded-full z-10 shadow-[0_0_25px_rgba(255,204,0,0.3)]`}></div>
               <OrbitLine size="w-10 h-10" themeColor={theme.orbit} />
@@ -484,7 +477,7 @@ export default function App() {
             </div>
 
             <div className="flex flex-col gap-4 mb-10 shrink-0">
-              <h2 className={`text-[10px] font-light tracking-[0.4em] uppercase ${theme.textSecondary}`}>SEUS CHATS</h2>
+              <h2 className={`text-[10px] font-light tracking-[0.4em] uppercase ${theme.textSecondary}`}>CONVERSAS</h2>
               <div className="flex flex-col gap-1">
                 {filteredChats.map((chat) => (
                   <div
@@ -513,13 +506,14 @@ export default function App() {
           </div>
         </div>
 
-        {/* Ícones discretos visíveis apenas no modo Rail */}
+        {/* Icons visible only in Rail mode */}
         {!isSidebarOpen && (
           <div className="flex-1 flex flex-col items-center pt-10 gap-8 animate-in fade-in duration-700">
             <div className={`w-8 h-8 rounded-full border ${theme.orbit} flex items-center justify-center animate-pulse`}>
               <div className={`w-1.5 h-1.5 rounded-full ${darkMode ? 'bg-white/40' : 'bg-black/40'}`}></div>
             </div>
             <div className="flex flex-col gap-6 items-center">
+              <PencilLine size={18} strokeWidth={1.5} className={theme.textMuted} />
               <History size={18} strokeWidth={1.5} className={theme.textMuted} />
               <Folder size={18} strokeWidth={1.5} className={theme.textMuted} />
             </div>
@@ -529,10 +523,17 @@ export default function App() {
 
       {/* Main Content */}
       <main className={`flex-1 flex flex-col ${theme.bgMain} relative transition-colors duration-500`}>
-        {/* Header - Nome SOLARIS V1 mantido aqui */}
+        {/* Header - Refined with Sidebar Toggle */}
         <header className={`h-20 flex items-center justify-between px-6 md:px-10 border-b ${theme.border} transition-colors duration-500`}>
-          <div className="flex items-center gap-4">
-            <div className="flex items-baseline gap-1">
+          <div className="flex items-center gap-6">
+            <button
+              onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+              className={`p-2 rounded-lg transition-all duration-300 ${darkMode ? 'text-white/60 hover:text-white hover:bg-white/5' : 'text-black/60 hover:text-black hover:bg-black/5'}`}
+              title={isSidebarOpen ? "Recolher menu" : "Expandir menu"}
+            >
+              <PanelLeft size={20} strokeWidth={1.5} />
+            </button>
+            <div className="flex items-baseline gap-1 select-none">
               <span className="text-base font-medium tracking-tight">SOLARIS</span>
               <span className={`text-[10px] font-bold ${theme.textMuted} tracking-tighter`}>V1</span>
             </div>
