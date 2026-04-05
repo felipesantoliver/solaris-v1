@@ -488,7 +488,6 @@ export default function App() {
                         {chat.title}
                       </span>
                     </div>
-                    {/* Botão de excluir chat restaurado aqui */}
                     <button
                       onClick={(e) => { e.stopPropagation(); setItemToDelete({ type: 'chat', data: chat }); }}
                       className={`opacity-0 group-hover/chat:opacity-100 p-1 hover:text-red-500 transition-all duration-200`}
@@ -583,11 +582,11 @@ export default function App() {
           <div ref={messagesEndRef} />
         </div>
 
-        <footer className="p-10">
+        <footer className="p-10 pt-4">
           <div className="max-w-3xl mx-auto relative">
-            <div className={`relative flex items-end border-b ${theme.inputBorder} pb-4 ${theme.inputFocus} transition-all duration-500`}>
+            <div className={`relative flex items-end border-b ${theme.inputBorder} pb-6 ${theme.inputFocus} transition-all duration-500`}>
               <textarea ref={textareaRef} value={input} onChange={handleInput} onKeyDown={handleKeyDown} rows={1} placeholder="O que deseja perguntar?" className={`flex-1 bg-transparent border-none text-lg ${darkMode ? 'text-white placeholder-white/20' : 'text-black placeholder-black/20'} resize-none focus:outline-none py-2 font-light`} />
-              <button onClick={handleSend} disabled={isLoading} className={`p-2 transition-all duration-300 ${isLoading ? theme.textMuted : (darkMode ? 'text-white hover:scale-110' : 'text-black hover:scale-110')}`}>{isLoading ? <Loader2 size={20} className="animate-spin" /> : input.trim() ? <Send size={20} strokeWidth={1.5} /> : <Mic size={20} strokeWidth={1.5} />}</button>
+              <button onClick={handleSend} disabled={isLoading} className={`p-2 mb-1.5 transition-all duration-300 ${isLoading ? theme.textMuted : (darkMode ? 'text-white hover:scale-110' : 'text-black hover:scale-110')}`}>{isLoading ? <Loader2 size={20} className="animate-spin" /> : input.trim() ? <Send size={20} strokeWidth={1.5} /> : <Mic size={20} strokeWidth={1.5} />}</button>
             </div>
             <div className={`mt-4 flex justify-between items-center text-[9px] ${theme.textMuted} font-bold tracking-[0.2em] uppercase transition-colors duration-500`}>
               <span className="flex items-center gap-2">aperte enter para enviar </span>
