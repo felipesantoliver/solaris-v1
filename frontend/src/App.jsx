@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 
 // Corrigido: Substituição de import.meta por uma string vazia ou variável de ambiente segura
-const API_BASE = "https://solaris-backend-s7vm.onrender.com";
+const API_BASE = "https://solaris-backend-s7vm.onrender.com/api";
 
 function getUserId() {
   let id = localStorage.getItem('solaris_user_id');
@@ -39,7 +39,7 @@ export default function App() {
   ]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [darkMode, setDarkMode] = useState(() => localStorage.getItem('solaris_dark') === 'true');
+  const [darkMode, setDarkMode] = useState(() => localStorage.getItem('solaris_dark') !== 'false');
   const [workMode, setWorkMode] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [showShareToast, setShowShareToast] = useState(false);
@@ -140,11 +140,29 @@ export default function App() {
     if (!input.trim() || isLoading || !API_BASE) return;
 
     let chatId = activeChatId;
+    let projectId = activeProjectId;
+
+    if (!projectId) {
+      try {
+        const res = await fetch(`${API_BASE}/projects`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-user-id': USER_ID },
+          body: JSON.stringify({ name: 'Geral', objective: '', response_style: 'direto', memory_mode: 'isolado' }),
+        });
+        if (!res.ok) throw new Error('Falha ao criar projeto');
+        const newProject = await res.json();
+        setProjects(prev => [newProject, ...prev]);
+        setActiveProjectId(newProject.id);
+        projectId = newProject.id;
+      } catch (err) {
+        console.error(err);
+        return;
+      }
+    }
 
     if (!chatId) {
-      if (!activeProjectId) return;
       try {
-        const res = await fetch(`${API_BASE}/projects/${activeProjectId}/chats`, {
+        const res = await fetch(`${API_BASE}/projects/${projectId}/chats`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-user-id': USER_ID },
           body: JSON.stringify({ title: 'Nova conversa' }),
@@ -170,14 +188,14 @@ export default function App() {
       const res = await fetch(`${API_BASE}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-user-id': USER_ID },
-        body: JSON.stringify({ project_id: activeProjectId, chat_id: chatId, message: userMessage }),
+        body: JSON.stringify({ project_id: projectId, chat_id: chatId, message: userMessage }),
       });
       if (!res.ok) throw new Error('Erro na API');
       const data = await res.json();
       setMessages(prev => [...prev, { role: 'assistant', content: data.response }]);
 
       setTimeout(async () => {
-        const projRes = await fetch(`${API_BASE}/projects/${activeProjectId}`, { headers: { 'x-user-id': USER_ID } });
+        const projRes = await fetch(`${API_BASE}/projects/${projectId}`, { headers: { 'x-user-id': USER_ID } });
         const projData = await projRes.json();
         setChatHistory(projData.chats || []);
       }, 500);
