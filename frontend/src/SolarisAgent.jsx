@@ -69,7 +69,7 @@ export default function App() {
 
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
-  const fileInputRef = useRef(null);
+  const searchInputRef = useRef(null); // Ref para a busca
 
   const hasUserStartedChat = messages.some(m => m.role === 'user');
 
@@ -77,6 +77,30 @@ export default function App() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isLoading]);
+
+  // ── Funções de Ícones Adicionais ──
+  const handleToggleFullscreen = () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch(e => console.error(e));
+    } else {
+      if (document.exitFullscreen) document.exitFullscreen();
+    }
+  };
+
+  const handleClearChat = () => {
+    setMessages([{ role: 'assistant', content: WELCOME }]);
+    setActiveChatId(null);
+  };
+
+  const handleMicClick = () => {
+    // Feedback visual simples de que o microfone foi clicado
+    setInput('Ouvindo...');
+    setTimeout(() => setInput(''), 2000);
+  };
+
+  const focusSearch = () => {
+    searchInputRef.current?.focus();
+  };
 
   // ── Send message ──
   const handleSend = async () => {
@@ -127,22 +151,6 @@ export default function App() {
     setInput(e.target.value);
     e.target.style.height = 'auto';
     e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
-  };
-
-  // ── Funcionalidades Adicionais ──
-  const toggleFullScreen = () => {
-    if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen().catch(() => { });
-    } else {
-      if (document.exitFullscreen) document.exitFullscreen();
-    }
-  };
-
-  const handleFileUpload = (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      setMessages(prev => [...prev, { role: 'assistant', content: `Arquivo selecionado: ${file.name}. (Funcionalidade de upload em desenvolvimento)` }]);
-    }
   };
 
   const handleShare = () => {
@@ -254,12 +262,12 @@ export default function App() {
   return (
     <div className={`flex h-screen ${darkMode ? 'bg-[#050505] text-white' : 'bg-[#fafafa] text-[#1a1a1a]'} font-sans antialiased overflow-hidden transition-colors duration-500`}>
 
-      <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileUpload} />
-
+      {/* Share toast */}
       <div className={`fixed top-24 left-1/2 -translate-x-1/2 z-[110] px-6 py-3 rounded-full bg-emerald-500 text-white text-xs font-bold tracking-widest uppercase shadow-2xl transition-all duration-500 ${showShareToast ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-4 pointer-events-none'}`}>
         Chat copiado para a área de transferência
       </div>
 
+      {/* Delete modal */}
       {itemToDelete && (
         <div className={`fixed inset-0 z-[100] flex items-center justify-center p-4 ${theme.modalOverlay} animate-in fade-in duration-300`}>
           <div className={`${theme.modalBg} border ${theme.border} w-full max-w-sm rounded-2xl p-8 shadow-2xl animate-in zoom-in-95 duration-300`}>
@@ -292,7 +300,9 @@ export default function App() {
         </button>
       )}
 
+      {/* ── Sidebar ── */}
       <aside className={`hidden lg:flex flex-col border-r ${theme.border} ${theme.bgAside} relative transition-all duration-500 overflow-y-auto custom-scrollbar ${sidebarCollapsed ? 'w-0 border-r-0 overflow-hidden' : 'w-80'}`}>
+
         <button
           onClick={() => setSidebarCollapsed(c => !c)}
           className={`absolute top-8 -right-4 z-30 w-7 h-7 rounded-full border ${theme.border} ${theme.bgAside} flex items-center justify-center shadow-sm transition-all duration-500 ${theme.textSecondary} hover:text-current`}
@@ -316,8 +326,11 @@ export default function App() {
           </button>
 
           <div className="flex items-center gap-3 w-full">
-            <Search size={18} strokeWidth={1.2} className={`${theme.textPrimary} transition-colors duration-500`} />
+            <button onClick={focusSearch}>
+              <Search size={18} strokeWidth={1.2} className={`${theme.textPrimary} transition-colors duration-500 hover:scale-110`} />
+            </button>
             <input
+              ref={searchInputRef}
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
@@ -463,6 +476,7 @@ export default function App() {
         </div>
       </aside>
 
+      {/* ── Main ── */}
       <main className={`flex-1 flex flex-col ${theme.bgMain} relative transition-colors duration-500`}>
         <header className={`h-20 flex items-center justify-between px-10 border-b ${theme.border} transition-colors duration-500`}>
           <div className="flex items-baseline gap-1">
@@ -474,8 +488,8 @@ export default function App() {
               {darkMode ? <Sun size={18} strokeWidth={1.5} /> : <Moon size={18} strokeWidth={1.5} />}
             </button>
             <div className={`flex gap-4 ${theme.textMuted}`}>
-              <Minus size={16} className="cursor-pointer hover:text-current transition-colors duration-300" onClick={handleNewChat} title="Limpar chat" />
-              <Maximize2 size={14} className="cursor-pointer hover:text-current transition-colors duration-300" onClick={toggleFullScreen} title="Tela cheia" />
+              <Minus size={16} onClick={handleClearChat} className="cursor-pointer hover:text-current transition-colors duration-300 hover:scale-125" title="Limpar conversa" />
+              <Maximize2 size={14} onClick={handleToggleFullscreen} className="cursor-pointer hover:text-current transition-colors duration-300 hover:scale-125" title="Tela cheia" />
             </div>
           </div>
         </header>
@@ -526,15 +540,15 @@ export default function App() {
                 onChange={handleInput}
                 onKeyDown={handleKeyDown}
                 rows={1}
-                placeholder={workMode ? "Descreva a tarefa de obra..." : "Fale com o Solaris..."}
-                className={`bg-transparent border-none text-sm w-full focus:outline-none resize-none py-2 pr-12 transition-colors duration-500 ${darkMode ? 'text-white placeholder:text-white/20' : 'text-black placeholder:text-black/30'}`}
+                placeholder={workMode ? "Descreva a tarefa técnica..." : "Pergunte qualquer coisa ao Solaris..."}
+                className={`flex-1 bg-transparent border-none text-sm md:text-base font-light focus:outline-none resize-none px-0 custom-scrollbar transition-colors duration-500 ${darkMode ? 'text-white placeholder:text-white/20' : 'text-black placeholder:text-black/30'}`}
               />
               <button
                 onClick={handleSend}
                 disabled={isLoading}
-                className={`absolute right-0 bottom-6 transition-all duration-300 ${isLoading ? theme.textMuted : (darkMode ? 'text-white hover:scale-110' : 'text-black hover:scale-110')}`}
+                className={`ml-4 mb-1 p-2 rounded-full transition-all duration-300 ${isLoading ? theme.textMuted : (darkMode ? 'text-white hover:scale-110' : 'text-black hover:scale-110')}`}
               >
-                {isLoading ? <Loader2 size={20} className="animate-spin" /> : (input.trim() ? <Send size={20} strokeWidth={1.5} /> : <Mic size={20} strokeWidth={1.5} />)}
+                {isLoading ? <Loader2 size={20} className="animate-spin" /> : input.trim() ? <Send size={20} strokeWidth={1.5} /> : <Mic size={20} onClick={handleMicClick} strokeWidth={1.5} className="cursor-pointer hover:text-blue-500" />}
               </button>
             </div>
             <div className={`mt-4 flex justify-between items-center text-[9px] ${theme.textMuted} font-bold tracking-[0.2em] uppercase`}>
@@ -542,10 +556,7 @@ export default function App() {
                 aperte enter para enviar
                 {workMode && <span className="text-amber-500/60 font-black tracking-widest">• MODO EXECUÇÃO</span>}
               </span>
-              <span
-                className={`flex items-center gap-1 cursor-pointer transition-colors duration-500 ${darkMode ? 'hover:text-white' : 'hover:text-black'}`}
-                onClick={() => fileInputRef.current.click()}
-              >
+              <span className={`flex items-center gap-1 cursor-pointer transition-colors duration-500 ${darkMode ? 'hover:text-white' : 'hover:text-black'}`}>
                 <Plus size={10} /> Anexo
               </span>
             </div>
