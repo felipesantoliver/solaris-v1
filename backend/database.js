@@ -1,4 +1,5 @@
-import sqlite3 from 'sqlite3';
+import initSqlJs from 'sql.js';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -6,62 +7,92 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB_PATH = path.join(__dirname, 'database.sqlite');
 
 let db = null;
+let SQL = null;
 
-// Promise wrapper para sqlite3 (que usa callbacks)
-function runAsync(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.run(sql, params, function(err) {
-      if (err) reject(err);
-      else resolve({ lastID: this.lastID, changes: this.changes });
-    });
-  });
+// Inicializa sql.js
+async function initSQL() {
+  if (!SQL) {
+    SQL = await initSqlJs();
+  }
+  return SQL;
 }
 
-function getAsync(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.get(sql, params, (err, row) => {
-      if (err) reject(err);
-      else resolve(row);
-    });
-  });
-}
-
-function allAsync(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.all(sql, params, (err, rows) => {
-      if (err) reject(err);
-      else resolve(rows || []);
-    });
-  });
-}
-
-function execAsync(sql) {
-  return new Promise((resolve, reject) => {
-    db.exec(sql, (err) => {
-      if (err) reject(err);
-      else resolve();
-    });
-  });
-}
-
-export function openDb() {
+// Abre ou cria o banco de dados
+async function openDb() {
   if (!db) {
-    db = new sqlite3.Database(DB_PATH, (err) => {
-      if (err) {
-        console.error('Erro ao abrir banco de dados:', err);
-        process.exit(1);
-      }
-    });
-    db.run('PRAGMA foreign_keys = ON');
-    db.run('PRAGMA journal_mode = WAL');
+    await initSQL();
+
+    if (fs.existsSync(DB_PATH)) {
+      const fileBuffer = fs.readFileSync(DB_PATH);
+      db = new SQL.Database(fileBuffer);
+    } else {
+      db = new SQL.Database();
+    }
   }
   return db;
 }
 
-export async function initDb() {
-  openDb();
+// Salva o banco de dados em disco
+function saveDb() {
+  if (db) {
+    const data = db.export();
+    const buffer = Buffer.from(data);
+    fs.writeFileSync(DB_PATH, buffer);
+  }
+}
 
-  await execAsync(`
+// Promise wrapper para executar SQL
+async function runAsync(sql, params = []) {
+  const database = await openDb();
+  try {
+    database.run(sql, params);
+    saveDb();
+    return { lastID: null, changes: database.getRowsModified() };
+  } catch (err) {
+    throw new Error(`SQL Error: ${err.message}`);
+  }
+}
+
+// Promise wrapper para GET
+async function getAsync(sql, params = []) {
+  const database = await openDb();
+  try {
+    const stmt = database.prepare(sql);
+    stmt.bind(params);
+    if (stmt.step()) {
+      const row = stmt.getAsObject();
+      stmt.free();
+      return row;
+    }
+    stmt.free();
+    return undefined;
+  } catch (err) {
+    throw new Error(`SQL Error: ${err.message}`);
+  }
+}
+
+// Promise wrapper para ALL
+async function allAsync(sql, params = []) {
+  const database = await openDb();
+  try {
+    const stmt = database.prepare(sql);
+    stmt.bind(params);
+    const rows = [];
+    while (stmt.step()) {
+      rows.push(stmt.getAsObject());
+    }
+    stmt.free();
+    return rows;
+  } catch (err) {
+    throw new Error(`SQL Error: ${err.message}`);
+  }
+}
+
+export async function initDb() {
+  const database = await openDb();
+
+  // Cria todas as tabelas
+  const createTableSQL = `
     CREATE TABLE IF NOT EXISTS projects (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
@@ -112,10 +143,20 @@ export async function initDb() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
     );
-  `);
+  `;
 
+  // Executa cada CREATE TABLE separadamente
+  const statements = createTableSQL.split(';').filter(s => s.trim());
+  for (const stmt of statements) {
+    try {
+      database.run(stmt);
+    } catch {
+      // Tabela já existe, ignora
+    }
+  }
+
+  saveDb();
   console.log('✅ Tabelas verificadas/criadas');
 }
 
-// Exporta as funções async para usar em outros arquivos
-export { runAsync, getAsync, allAsync, execAsync };
+export { runAsync, getAsync, allAsync };

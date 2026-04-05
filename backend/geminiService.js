@@ -209,7 +209,7 @@ export async function sendMessage(projectId, chatId, userMessage) {
 
   // Atualiza título se primeira mensagem (não aguarda)
   if (isFirstMessage) updateChatTitle(chatId, userMessage).catch(console.error);
-  
+
   // Extrai memórias (não aguarda)
   extractAndSaveMemories(projectId, userMessage, responseText).catch(console.error);
 
