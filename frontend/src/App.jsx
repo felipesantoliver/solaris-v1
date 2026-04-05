@@ -404,7 +404,7 @@ export default function App() {
         </div>
       )}
 
-      <aside className={`hidden lg:flex w-80 flex-col border-r ${theme.border} ${theme.bgAside} relative transition-colors duration-500 overflow-y-auto custom-scrollbar`}>
+      <aside className={`hidden lg:flex w-80 flex-col border-r ${theme.border} ${theme.bgAside} relative transition-colors duration-500`}>
 
         <div className={`sticky top-0 z-20 px-8 pt-8 pb-6 flex flex-col gap-5 shrink-0 ${theme.bgAside} transition-colors duration-500`}>
           <button
@@ -441,7 +441,7 @@ export default function App() {
           </div>
         </div>
 
-        <div className="px-8 flex flex-col transition-colors duration-500">
+        <div className="px-8 flex flex-col flex-1 overflow-y-auto custom-scrollbar transition-colors duration-500">
           <div className="relative w-full aspect-square flex items-center justify-center opacity-80 hover:opacity-100 transition-opacity duration-700 mb-10 shrink-0">
             <div className={`w-6 h-6 ${darkMode ? 'bg-[#ffd700]' : 'bg-[#ffcc00]'} rounded-full z-10 shadow-[0_0_25px_rgba(255,204,0,0.3)] transition-colors duration-500`}></div>
             <OrbitLine size="w-16 h-16" themeColor={theme.orbit} />
@@ -535,13 +535,13 @@ export default function App() {
             </div>
           </div>
 
-          <div className="mt-auto pt-4 shrink-0 transition-colors duration-500">
+        </div>
 
-            <div className={`h-[1px] ${theme.border} w-full mb-5 transition-colors duration-500`}></div>
-            <div className="flex flex-col pb-6 transition-colors duration-500">
-              <span className={`text-[8px] font-extralight uppercase tracking-[0.4em] ${darkMode ? 'text-white/20' : 'text-black/50'} mb-0.5 transition-colors duration-500`}>Criado por</span>
-              <span className={`text-sm font-serif italic tracking-wide transition-colors duration-500 ${darkMode ? 'text-white/50' : 'text-black/80'}`} style={{ fontFamily: 'Georgia, "Apple Chancery", cursive' }}>felipe sant'oliver</span>
-            </div>
+        {/* Nota de rodapé — fixada no fundo da sidebar, fora do scroll */}
+        <div className={`px-8 shrink-0 border-t ${theme.border} transition-colors duration-500`}>
+          <div className="flex flex-col py-5 transition-colors duration-500">
+            <span className={`text-[8px] font-extralight uppercase tracking-[0.4em] ${darkMode ? 'text-white/20' : 'text-black/50'} mb-0.5 transition-colors duration-500`}>Criado por</span>
+            <span className={`text-sm font-serif italic tracking-wide transition-colors duration-500 ${darkMode ? 'text-white/50' : 'text-black/80'}`} style={{ fontFamily: 'Georgia, "Apple Chancery", cursive' }}>felipe sant'oliver</span>
           </div>
         </div>
       </aside>
