@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 
 // Corrigido: Substituição de import.meta por uma string vazia ou variável de ambiente segura
-const API_BASE = "";
+const API_BASE = "https://solaris-backend-s7vm.onrender.com";
 
 function getUserId() {
   let id = localStorage.getItem('solaris_user_id');
