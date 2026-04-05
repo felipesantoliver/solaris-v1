@@ -21,7 +21,6 @@ function OrbitLine({ size, themeColor }) {
   return <div className={`absolute border ${themeColor} rounded-full ${size} transition-colors duration-500`}></div>;
 }
 
-// Atualizado para aceitar 'dotSize' caso queiramos planetas de tamanhos variados (como Júpiter vs Marte)
 function PlanetDot({ size, duration, color, glow, dotSize = "w-1.5 h-1.5" }) {
   return (
     <div className={`absolute orbit-rotate ${size}`} style={{ animationDuration: duration }}>
@@ -43,7 +42,7 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [showShareToast, setShowShareToast] = useState(false);
 
-  // Novo estado para controlar a abertura da sidebar
+  // Estado para controlar se a sidebar está aberta ou em modo "rail"
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
 
   const [projects, setProjects] = useState([]);
@@ -95,7 +94,7 @@ export default function App() {
       setProjects(data || []);
       if (data && data.length > 0 && !activeProjectId) setActiveProjectId(data[0].id);
     } catch (err) {
-      console.warn('Aviso: Erro ao carregar projetos. O servidor pode estar indisponível ou iniciando.', err.message);
+      console.warn('Erro ao carregar projetos.', err.message);
       setProjects([]);
     }
   }
@@ -116,9 +115,8 @@ export default function App() {
           setMessages([{ role: 'assistant', content: 'Nenhum chat neste projeto. Crie um novo.' }]);
         }
       } catch (err) {
-        console.warn('Aviso: Erro ao carregar chats do projeto.', err.message);
+        console.warn('Erro ao carregar chats.', err.message);
         setChatHistory([]);
-        setMessages([{ role: 'assistant', content: 'Erro ao conectar com o servidor para carregar chats. Verifique a API.' }]);
       }
     })();
   }, [activeProjectId]);
@@ -135,8 +133,7 @@ export default function App() {
           : msgs
         );
       } catch (err) {
-        console.warn('Aviso: Erro ao carregar mensagens do chat.', err.message);
-        setMessages([{ role: 'assistant', content: 'Erro ao carregar o histórico de mensagens. O servidor pode estar iniciando (pode levar até 50s).' }]);
+        console.warn('Erro ao carregar mensagens.', err.message);
       }
     })();
   }, [activeChatId]);
@@ -162,16 +159,11 @@ export default function App() {
           headers: { 'Content-Type': 'application/json', 'x-user-id': USER_ID },
           body: JSON.stringify({ name: 'Geral', objective: '', response_style: 'direto', memory_mode: 'isolado' }),
         });
-        if (!res.ok) throw new Error('Falha ao criar projeto');
         const newProject = await res.json();
         setProjects(prev => [newProject, ...prev]);
         setActiveProjectId(newProject.id);
         projectId = newProject.id;
-      } catch (err) {
-        console.warn('Falha ao criar projeto:', err.message);
-        setMessages(prev => [...prev, { role: 'assistant', content: 'Falha ao criar o projeto inicial. O servidor pode estar offline.' }]);
-        return;
-      }
+      } catch (err) { console.error(err); return; }
     }
 
     if (!chatId) {
@@ -181,16 +173,11 @@ export default function App() {
           headers: { 'Content-Type': 'application/json', 'x-user-id': USER_ID },
           body: JSON.stringify({ title: 'Nova conversa' }),
         });
-        if (!res.ok) throw new Error('Falha ao criar chat');
         const newChat = await res.json();
         setChatHistory(prev => [newChat, ...prev]);
         setActiveChatId(newChat.id);
         chatId = newChat.id;
-      } catch (err) {
-        console.warn('Falha ao criar chat:', err.message);
-        setMessages(prev => [...prev, { role: 'assistant', content: 'Falha ao criar a nova conversa no projeto.' }]);
-        return;
-      }
+      } catch (err) { console.error(err); return; }
     }
 
     const userMessage = input.trim();
@@ -205,21 +192,10 @@ export default function App() {
         headers: { 'Content-Type': 'application/json', 'x-user-id': USER_ID },
         body: JSON.stringify({ project_id: projectId, chat_id: chatId, message: userMessage }),
       });
-      if (!res.ok) throw new Error('Erro na API');
       const data = await res.json();
       setMessages(prev => [...prev, { role: 'assistant', content: data.response }]);
-
-      setTimeout(async () => {
-        try {
-          const projRes = await fetch(`${API_BASE}/projects/${projectId}`, { headers: { 'x-user-id': USER_ID } });
-          if (projRes.ok) {
-            const projData = await projRes.json();
-            setChatHistory(projData.chats || []);
-          }
-        } catch (e) { /* silent fail on background history update */ }
-      }, 500);
     } catch (error) {
-      setMessages(prev => [...prev, { role: 'assistant', content: 'Erro ao conectar com o servidor. Se for a primeira mensagem do dia, aguarde cerca de 50 segundos e tente novamente (o servidor gratuito no Render está iniciando).' }]);
+      setMessages(prev => [...prev, { role: 'assistant', content: 'Erro ao conectar com o servidor.' }]);
     } finally {
       setIsLoading(false);
     }
@@ -251,23 +227,14 @@ export default function App() {
       const res = await fetch(`${API_BASE}/projects`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-user-id': USER_ID },
-        body: JSON.stringify({
-          name: newProjectName.trim(),
-          objective: '',
-          response_style: 'direto',
-          memory_mode: 'isolado'
-        }),
+        body: JSON.stringify({ name: newProjectName.trim(), objective: '', response_style: 'direto', memory_mode: 'isolado' }),
       });
-      if (!res.ok) throw new Error('Erro ao criar na API');
       const project = await res.json();
       setProjects([project, ...projects]);
       setNewProjectName('');
       setIsCreatingProject(false);
       setActiveProjectId(project.id);
-    } catch (err) {
-      console.warn('Erro ao criar projeto:', err.message);
-      setIsCreatingProject(false);
-    }
+    } catch (err) { console.error(err); }
   };
 
   const handleDeleteConfirm = async () => {
@@ -275,8 +242,7 @@ export default function App() {
     const { type, data } = itemToDelete;
     try {
       if (type === 'project') {
-        const res = await fetch(`${API_BASE}/projects/${data.id}`, { method: 'DELETE', headers: { 'x-user-id': USER_ID } });
-        if (!res.ok) throw new Error('Erro ao excluir projeto');
+        await fetch(`${API_BASE}/projects/${data.id}`, { method: 'DELETE', headers: { 'x-user-id': USER_ID } });
         const updated = projects.filter(p => p.id !== data.id);
         setProjects(updated);
         if (activeProjectId === data.id) {
@@ -285,17 +251,14 @@ export default function App() {
           setActiveChatId(null);
         }
       } else if (type === 'chat') {
-        const res = await fetch(`${API_BASE}/projects/${activeProjectId}/chats/${data.id}`, { method: 'DELETE', headers: { 'x-user-id': USER_ID } });
-        if (!res.ok) throw new Error('Erro ao excluir chat');
+        await fetch(`${API_BASE}/projects/${activeProjectId}/chats/${data.id}`, { method: 'DELETE', headers: { 'x-user-id': USER_ID } });
         const updated = chatHistory.filter(c => c.id !== data.id);
         setChatHistory(updated);
         if (activeChatId === data.id) {
           setActiveChatId(updated.length > 0 ? updated[0].id : null);
         }
       }
-    } catch (err) {
-      console.warn('Erro durante a exclusão:', err.message);
-    }
+    } catch (err) { console.error(err); }
     setItemToDelete(null);
   };
 
@@ -331,15 +294,12 @@ export default function App() {
     const formData = new FormData();
     formData.append('file', file);
     try {
-      const res = await fetch(`${API_BASE}/files/${activeProjectId}`, {
+      await fetch(`${API_BASE}/files/${activeProjectId}`, {
         method: 'POST',
         headers: { 'x-user-id': USER_ID },
         body: formData,
       });
-      if (!res.ok) throw new Error('Falha no upload');
-    } catch (err) {
-      console.warn('Erro ao fazer upload do arquivo:', err.message);
-    }
+    } catch (err) { console.error(err); }
   };
 
   const theme = {
@@ -420,12 +380,29 @@ export default function App() {
         </div>
       )}
 
-      {/* Sidebar com transição de width controlada pelo toggle */}
-      <aside className={`hidden lg:flex flex-col border-r ${theme.border} ${theme.bgAside} relative transition-all duration-500 ease-in-out overflow-hidden shrink-0 ${isSidebarOpen ? 'w-80 opacity-100' : 'w-0 opacity-0 !border-none'}`}>
+      {/* Sidebar com largura variável: w-80 (aberta) vs w-20 (estilo rail) */}
+      <aside className={`hidden lg:flex flex-col border-r ${theme.border} ${theme.bgAside} relative transition-all duration-500 ease-in-out shrink-0 ${isSidebarOpen ? 'w-80' : 'w-20'}`}>
 
-        {/* Container interno fixo em w-80 para evitar que o conteúdo esprema durante a animação */}
-        <div className="w-80 flex flex-col h-full shrink-0">
-          <div className={`sticky top-0 z-20 px-8 pt-8 pb-6 flex flex-col gap-5 shrink-0 ${theme.bgAside} transition-colors duration-500`}>
+        {/* Toggle Button centralizado no topo */}
+        <div className={`h-20 flex items-center shrink-0 border-b ${theme.border} transition-all duration-500 ${isSidebarOpen ? 'px-8 justify-between' : 'justify-center'}`}>
+          {isSidebarOpen && (
+            <div className="flex items-baseline gap-1 opacity-100 transition-opacity duration-300">
+              <span className="text-sm font-medium tracking-tight">SOLARIS</span>
+              <span className={`text-[8px] font-bold ${theme.textMuted} tracking-tighter transition-colors duration-500`}>V1</span>
+            </div>
+          )}
+          <button
+            onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+            className={`flex items-center justify-center p-2 rounded-lg transition-all duration-300 ${darkMode ? 'text-white/60 hover:text-white hover:bg-white/5' : 'text-black/60 hover:text-black hover:bg-black/5'}`}
+            title={isSidebarOpen ? "Recolher menu" : "Expandir menu"}
+          >
+            <PanelLeft size={20} strokeWidth={1.5} />
+          </button>
+        </div>
+
+        {/* Conteúdo da Sidebar: Visível apenas quando aberta */}
+        <div className={`flex flex-col h-full overflow-hidden transition-all duration-500 ${isSidebarOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+          <div className={`px-8 pt-8 pb-6 flex flex-col gap-5 shrink-0`}>
             <button
               onClick={async () => {
                 if (!activeProjectId || !API_BASE) return;
@@ -438,9 +415,7 @@ export default function App() {
                   const newChat = await res.json();
                   setChatHistory(prev => [newChat, ...prev]);
                   setActiveChatId(newChat.id);
-                } catch (err) {
-                  console.error(err);
-                }
+                } catch (err) { console.error(err); }
               }}
               className={`flex items-center gap-3 w-full transition-colors duration-500 ${theme.textPrimary} group`}
             >
@@ -449,26 +424,22 @@ export default function App() {
             </button>
 
             <div className="flex items-center gap-3 w-full">
-              <Search size={18} strokeWidth={1.2} className={`${theme.textPrimary} transition-colors duration-500`} />
+              <Search size={18} strokeWidth={1.2} className={`${theme.textPrimary}`} />
               <input
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Buscar"
-                className={`bg-transparent border-none p-0 text-sm font-light w-full focus:outline-none transition-colors duration-500 ${darkMode ? 'text-white placeholder:text-white' : 'text-black placeholder:text-black'}`}
+                className={`bg-transparent border-none p-0 text-sm font-light w-full focus:outline-none ${darkMode ? 'text-white placeholder:text-white/20' : 'text-black placeholder:text-black/20'}`}
               />
             </div>
           </div>
 
-          <div className="px-8 flex flex-col flex-1 overflow-y-auto custom-scrollbar transition-colors duration-500">
+          <div className="px-8 flex flex-col flex-1 overflow-y-auto custom-scrollbar">
 
-            {/* O Sistema Solar completo */}
+            {/* Visual do Sistema Solar */}
             <div className="relative w-full aspect-square flex items-center justify-center opacity-80 hover:opacity-100 transition-opacity duration-700 mb-10 shrink-0">
-
-              {/* Sol */}
-              <div className={`w-6 h-6 ${darkMode ? 'bg-[#ffd700]' : 'bg-[#ffcc00]'} rounded-full z-10 shadow-[0_0_25px_rgba(255,204,0,0.3)] transition-colors duration-500`}></div>
-
-              {/* Órbitas */}
+              <div className={`w-6 h-6 ${darkMode ? 'bg-[#ffd700]' : 'bg-[#ffcc00]'} rounded-full z-10 shadow-[0_0_25px_rgba(255,204,0,0.3)]`}></div>
               <OrbitLine size="w-10 h-10" themeColor={theme.orbit} />
               <OrbitLine size="w-14 h-14" themeColor={theme.orbit} />
               <OrbitLine size="w-20 h-20" themeColor={theme.orbit} />
@@ -477,40 +448,28 @@ export default function App() {
               <OrbitLine size="w-40 h-40" themeColor={theme.orbit} />
               <OrbitLine size="w-48 h-48" themeColor={theme.orbit} />
               <OrbitLine size="w-56 h-56" themeColor={theme.orbit} />
-
-              {/* Planetas */}
-              {/* Mercúrio */}
               <PlanetDot size="w-10 h-10" duration="3s" color={darkMode ? 'bg-[#888]' : 'bg-[#666]'} dotSize="w-1 h-1" />
-              {/* Vênus */}
               <PlanetDot size="w-14 h-14" duration="5s" color="bg-[#e3bb76]" />
-              {/* Terra */}
               <PlanetDot size="w-20 h-20" duration="8s" color="bg-[#2271b3]" glow={darkMode ? "0_0_12px_#00ffff" : "0_0_8px_#00ffff"} />
-              {/* Marte */}
               <PlanetDot size="w-24 h-24" duration="12s" color="bg-[#e27b58]" dotSize="w-1 h-1" />
-              {/* Júpiter */}
               <PlanetDot size="w-32 h-32" duration="20s" color="bg-[#d39c7e]" dotSize="w-2.5 h-2.5" />
-              {/* Saturno */}
               <PlanetDot size="w-40 h-40" duration="28s" color="bg-[#eadaa4]" dotSize="w-2 h-2" />
-              {/* Urano */}
               <PlanetDot size="w-48 h-48" duration="36s" color="bg-[#a6d1e6]" />
-              {/* Netuno */}
               <PlanetDot size="w-56 h-56" duration="45s" color="bg-[#4b70dd]" />
-
             </div>
 
             <div className="flex flex-col gap-4 mb-8 shrink-0">
-              <h2 className={`text-[10px] font-light tracking-[0.4em] uppercase ${theme.textSecondary} transition-colors duration-500`}>PROJETOS</h2>
-
+              <h2 className={`text-[10px] font-light tracking-[0.4em] uppercase ${theme.textSecondary}`}>PROJETOS</h2>
               {isCreatingProject ? (
-                <div className={`flex items-center gap-2 p-2 -ml-2 rounded-lg border ${theme.inputBorder} animate-in fade-in zoom-in-95 duration-200 transition-colors duration-500`}>
+                <div className={`flex items-center gap-2 p-2 -ml-2 rounded-lg border ${theme.inputBorder}`}>
                   <input
                     autoFocus
                     type="text"
                     value={newProjectName}
                     onChange={(e) => setNewProjectName(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && createProject()}
-                    placeholder="Nome do projeto..."
-                    className="bg-transparent border-none text-xs w-full focus:outline-none font-light transition-colors duration-500"
+                    placeholder="..."
+                    className="bg-transparent border-none text-xs w-full focus:outline-none font-light"
                   />
                   <button onClick={createProject} className="text-emerald-500"><Check size={14} /></button>
                   <button onClick={() => setIsCreatingProject(false)} className="text-red-400"><X size={14} /></button>
@@ -518,20 +477,19 @@ export default function App() {
               ) : (
                 <button
                   onClick={() => setIsCreatingProject(true)}
-                  className={`flex items-center gap-3 p-2 -ml-2 rounded-lg transition-all duration-500 ${theme.projectHover} group`}
+                  className={`flex items-center gap-3 p-2 -ml-2 rounded-lg transition-all ${theme.projectHover} group`}
                 >
-                  <FolderPlus size={18} className={`${theme.textSecondary} group-hover:text-current transition-colors duration-500`} strokeWidth={1.5} />
-                  <span className={`text-sm font-light ${theme.textPrimary} transition-colors duration-500`}>Novo projeto</span>
+                  <FolderPlus size={18} className={`${theme.textSecondary} group-hover:text-current`} strokeWidth={1.5} />
+                  <span className={`text-sm font-light ${theme.textPrimary}`}>Novo projeto</span>
                 </button>
               )}
-
               <div className="flex flex-col gap-1">
                 {visibleProjects.map((project) => (
                   <ProjectItem key={project.id} project={project} isActive={activeProjectId === project.id} />
                 ))}
                 {hiddenProjects.length > 0 && (
                   <div className="relative group/more">
-                    <button className={`w-full flex items-center justify-between p-2.5 -ml-2 rounded-lg transition-all duration-500 ${theme.projectHover} ${theme.textSecondary}`}>
+                    <button className={`w-full flex items-center justify-between p-2.5 -ml-2 rounded-lg transition-all ${theme.projectHover} ${theme.textSecondary}`}>
                       <div className="flex items-center gap-3">
                         <Plus size={14} className="opacity-60" />
                         <span className="text-xs font-light">Mais ({hiddenProjects.length})</span>
@@ -539,7 +497,7 @@ export default function App() {
                       <ChevronDown size={12} className="opacity-40 group-hover/more:rotate-180 transition-transform duration-300" />
                     </button>
                     <div className={`absolute left-0 top-full w-full z-50 pt-1 pointer-events-none group-hover/more:pointer-events-auto opacity-0 group-hover/more:opacity-100 transition-all duration-300 translate-y-2 group-hover/more:translate-y-0`}>
-                      <div className={`${theme.dropdownBg} border ${theme.border} rounded-xl p-2 shadow-xl max-h-48 overflow-y-auto custom-scrollbar transition-colors duration-500`}>
+                      <div className={`${theme.dropdownBg} border ${theme.border} rounded-xl p-2 shadow-xl max-h-48 overflow-y-auto custom-scrollbar`}>
                         {hiddenProjects.map((project) => (
                           <ProjectItem key={project.id} project={project} isActive={activeProjectId === project.id} />
                         ))}
@@ -551,18 +509,18 @@ export default function App() {
             </div>
 
             <div className="flex flex-col gap-4 mb-10 shrink-0">
-              <h2 className={`text-[10px] font-light tracking-[0.4em] uppercase ${theme.textSecondary} transition-colors duration-500`}>SEUS CHATS</h2>
+              <h2 className={`text-[10px] font-light tracking-[0.4em] uppercase ${theme.textSecondary}`}>SEUS CHATS</h2>
               <div className="flex flex-col gap-1">
                 {filteredChats.map((chat) => (
                   <div
                     key={chat.id}
                     onClick={() => setActiveChatId(chat.id)}
-                    className={`flex items-center justify-between p-2 -ml-2 rounded-lg cursor-pointer transition-all duration-500 group/chat ${activeChatId === chat.id ? theme.projectActive : theme.projectHover
+                    className={`flex items-center justify-between p-2 -ml-2 rounded-lg cursor-pointer transition-all group/chat ${activeChatId === chat.id ? theme.projectActive : theme.projectHover
                       }`}
                   >
                     <div className="flex items-center gap-3 overflow-hidden">
-                      <History size={14} className={activeChatId === chat.id ? 'text-current opacity-60 transition-opacity duration-500' : `${theme.textMuted} transition-colors duration-500`} />
-                      <span className={`text-xs font-light truncate max-w-[140px] transition-colors duration-500 ${activeChatId === chat.id ? 'font-normal' : theme.textSecondary}`}>
+                      <History size={14} className={activeChatId === chat.id ? 'text-current opacity-60' : `${theme.textMuted}`} />
+                      <span className={`text-xs font-light truncate max-w-[140px] ${activeChatId === chat.id ? 'font-normal' : theme.textSecondary}`}>
                         {chat.title}
                       </span>
                     </div>
@@ -576,39 +534,51 @@ export default function App() {
                 ))}
               </div>
             </div>
-
           </div>
 
-          <div className={`px-8 shrink-0 border-t ${theme.border} transition-colors duration-500`}>
-            <div className="flex flex-col py-5 transition-colors duration-500">
-              <span className={`text-[8px] font-extralight uppercase tracking-[0.4em] ${darkMode ? 'text-white/20' : 'text-black/50'} mb-0.5 transition-colors duration-500`}>Criado por</span>
-              <span className={`text-sm font-serif italic tracking-wide transition-colors duration-500 ${darkMode ? 'text-white/50' : 'text-black/80'}`} style={{ fontFamily: 'Georgia, "Apple Chancery", cursive' }}>felipe sant'oliver</span>
+          <div className={`px-8 shrink-0 border-t ${theme.border}`}>
+            <div className="flex flex-col py-5">
+              <span className={`text-[8px] font-extralight uppercase tracking-[0.4em] ${darkMode ? 'text-white/20' : 'text-black/50'} mb-0.5`}>Criado por</span>
+              <span className={`text-sm font-serif italic tracking-wide ${darkMode ? 'text-white/50' : 'text-black/80'}`} style={{ fontFamily: 'Georgia, "Apple Chancery", cursive' }}>felipe sant'oliver</span>
             </div>
           </div>
         </div>
+
+        {/* Elementos visíveis apenas no modo Recolhido (Rail) */}
+        {!isSidebarOpen && (
+          <div className="flex-1 flex flex-col items-center pt-10 gap-8 animate-in fade-in duration-700">
+            <div className={`w-8 h-8 rounded-full border ${theme.orbit} flex items-center justify-center animate-pulse`}>
+              <div className={`w-1.5 h-1.5 rounded-full ${darkMode ? 'bg-white/40' : 'bg-black/40'}`}></div>
+            </div>
+            <div className="flex flex-col gap-6 items-center">
+              <History size={18} strokeWidth={1.5} className={theme.textMuted} />
+              <Folder size={18} strokeWidth={1.5} className={theme.textMuted} />
+              <Search size={18} strokeWidth={1.5} className={theme.textMuted} />
+            </div>
+          </div>
+        )}
       </aside>
 
+      {/* Main Content */}
       <main className={`flex-1 flex flex-col ${theme.bgMain} relative transition-colors duration-500`}>
         <header className={`h-20 flex items-center justify-between px-6 md:px-10 border-b ${theme.border} transition-colors duration-500`}>
           <div className="flex items-center gap-4">
-
-            {/* Ícone de Toggle para a Sidebar */}
-            <button
-              onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-              className={`hidden lg:flex items-center justify-center transition-colors duration-300 ${isSidebarOpen ? theme.textMuted + ' hover:text-current' : (darkMode ? 'text-white/60 hover:text-white' : 'text-black/60 hover:text-black')}`}
-              title={isSidebarOpen ? "Recolher menu" : "Expandir menu"}
-            >
-              <PanelLeft size={20} strokeWidth={1.5} />
-            </button>
-
-            <div className="flex items-baseline gap-1">
-              <span className="text-base font-medium tracking-tight">SOLARIS</span>
-              <span className={`text-[10px] font-bold ${theme.textMuted} tracking-tighter transition-colors duration-500`}>V1</span>
-            </div>
+            {!isSidebarOpen && (
+              <div className="flex items-baseline gap-1 animate-in slide-in-from-left-2 duration-300">
+                <span className="text-base font-medium tracking-tight">SOLARIS</span>
+                <span className={`text-[10px] font-bold ${theme.textMuted} tracking-tighter`}>V1</span>
+              </div>
+            )}
+            {isSidebarOpen && <div className="w-4"></div>}
           </div>
           <div className="flex items-center gap-6">
-            <button onClick={toggleDarkMode} className={`transition-all duration-300 ${darkMode ? 'text-yellow-400 hover:text-yellow-200' : 'text-slate-400 hover:text-slate-600'}`}>{darkMode ? <Sun size={18} strokeWidth={1.5} /> : <Moon size={18} strokeWidth={1.5} />}</button>
-            <div className={`flex gap-4 ${theme.textMuted} transition-colors duration-500`}><Minus size={16} className="cursor-pointer hover:text-current transition-colors duration-300" /><Maximize2 size={14} className="cursor-pointer hover:text-current transition-colors duration-300" /></div>
+            <button onClick={toggleDarkMode} className={`transition-all duration-300 ${darkMode ? 'text-yellow-400 hover:text-yellow-200' : 'text-slate-400 hover:text-slate-600'}`}>
+              {darkMode ? <Sun size={18} strokeWidth={1.5} /> : <Moon size={18} strokeWidth={1.5} />}
+            </button>
+            <div className={`flex gap-4 ${theme.textMuted}`}>
+              <Minus size={16} className="cursor-pointer hover:text-current transition-colors duration-300" />
+              <Maximize2 size={14} className="cursor-pointer hover:text-current transition-colors duration-300" />
+            </div>
           </div>
         </header>
 
@@ -619,8 +589,8 @@ export default function App() {
                 onClick={handleShare}
                 className={`pointer-events-auto flex items-center gap-2 px-4 py-2 rounded-full border ${theme.border} ${darkMode ? 'bg-white/5 hover:bg-white/10' : 'bg-black/5 hover:bg-black/10'} backdrop-blur-md transition-all duration-300 group shadow-sm`}
               >
-                <Share2 size={14} className={`${theme.textSecondary} group-hover:text-current transition-colors duration-500`} />
-                <span className={`text-[10px] font-bold uppercase tracking-widest ${theme.textSecondary} group-hover:text-current transition-colors duration-500`}>Compartilhar</span>
+                <Share2 size={14} className={`${theme.textSecondary} group-hover:text-current`} />
+                <span className={`text-[10px] font-bold uppercase tracking-widest ${theme.textSecondary} group-hover:text-current`}>Compartilhar</span>
               </button>
             </div>
           )}
@@ -628,25 +598,25 @@ export default function App() {
           {messages.map((msg, i) => (
             <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} animate-in fade-in slide-in-from-bottom-2 duration-700`}>
               <div className={`max-w-[70%] ${msg.role === 'user' ? 'text-right' : 'text-left'}`}>
-                <div className={`text-[9px] uppercase tracking-[0.2em] font-bold mb-3 ${theme.textMuted} transition-colors duration-500`}>{msg.role === 'user' ? 'Usuário' : 'Solaris'}</div>
+                <div className={`text-[9px] uppercase tracking-[0.2em] font-bold mb-3 ${theme.textMuted}`}>{msg.role === 'user' ? 'Usuário' : 'Solaris'}</div>
                 <div className={`text-base leading-relaxed transition-colors duration-500 ${msg.role === 'user' ? (darkMode ? 'text-white font-medium' : 'text-black font-medium') : (darkMode ? 'text-white/60 font-light' : 'text-gray-600 font-light')}`}>{msg.content}</div>
               </div>
             </div>
           ))}
           {isLoading && (
             <div className="flex items-center gap-3">
-              <div className={`w-1.5 h-1.5 ${darkMode ? 'bg-white/40' : 'bg-black'} rounded-full animate-bounce [animation-delay:-0.3s] transition-colors duration-500`}></div>
-              <div className={`w-1.5 h-1.5 ${darkMode ? 'bg-white/40' : 'bg-black'} rounded-full animate-bounce [animation-delay:-0.15s] transition-colors duration-500`}></div>
-              <div className={`w-1.5 h-1.5 ${darkMode ? 'bg-white/40' : 'bg-black'} rounded-full animate-bounce transition-colors duration-500`}></div>
+              <div className={`w-1.5 h-1.5 ${darkMode ? 'bg-white/40' : 'bg-black'} rounded-full animate-bounce [animation-delay:-0.3s]`}></div>
+              <div className={`w-1.5 h-1.5 ${darkMode ? 'bg-white/40' : 'bg-black'} rounded-full animate-bounce [animation-delay:-0.15s]`}></div>
+              <div className={`w-1.5 h-1.5 ${darkMode ? 'bg-white/40' : 'bg-black'} rounded-full animate-bounce`}></div>
             </div>
           )}
           <div ref={messagesEndRef} />
         </div>
 
-        <footer className="p-10 transition-colors duration-500">
+        <footer className="p-10">
           <div className="max-w-3xl mx-auto relative">
             <div className={`relative flex items-end border-b ${theme.inputBorder} pb-4 ${theme.inputFocus} transition-all duration-500`}>
-              <textarea ref={textareaRef} value={input} onChange={handleInput} onKeyDown={handleKeyDown} rows={1} placeholder="O que deseja perguntar?" className={`flex-1 bg-transparent border-none text-lg ${darkMode ? 'text-white placeholder-white/20' : 'text-black placeholder-black/20'} resize-none focus:outline-none py-2 font-light transition-colors duration-500`} />
+              <textarea ref={textareaRef} value={input} onChange={handleInput} onKeyDown={handleKeyDown} rows={1} placeholder="O que deseja perguntar?" className={`flex-1 bg-transparent border-none text-lg ${darkMode ? 'text-white placeholder-white/20' : 'text-black placeholder-black/20'} resize-none focus:outline-none py-2 font-light`} />
               <button onClick={handleSend} disabled={isLoading} className={`p-2 transition-all duration-300 ${isLoading ? theme.textMuted : (darkMode ? 'text-white hover:scale-110' : 'text-black hover:scale-110')}`}>{isLoading ? <Loader2 size={20} className="animate-spin" /> : input.trim() ? <Send size={20} strokeWidth={1.5} /> : <Mic size={20} strokeWidth={1.5} />}</button>
             </div>
             <div className={`mt-4 flex justify-between items-center text-[9px] ${theme.textMuted} font-bold tracking-[0.2em] uppercase transition-colors duration-500`}>
