@@ -1,8 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
-  Send, Loader2, Minus, Plus, Maximize2, Moon, Sun,
+  Send, Loader2, Plus, Moon, Sun,
   Mic, FolderPlus, Folder, Check, X, Trash2, AlertTriangle, History,
-  ChevronDown, GripVertical, PencilLine, Search, Share2, PanelLeft
+  GripVertical, PencilLine, Search, Share2, PanelLeft
 } from 'lucide-react';
 
 const API_BASE = "https://solaris-backend-s7vm.onrender.com/api";
@@ -31,7 +31,7 @@ function PlanetDot({ size, duration, color, glow, dotSize = "w-1.5 h-1.5", hasRi
           style={glow ? { boxShadow: glow } : {}}
         ></div>
 
-        {/* Anel de Saturno - Ajustado para visibilidade em ambos os modos */}
+        {/* Anel de Saturno */}
         {hasRing && (
           <div
             className={`absolute border-[1px] ${darkMode ? 'border-white/20' : 'border-black/20'} rounded-[100%] w-[260%] h-[120%] rotate-[25deg]`}
@@ -318,7 +318,7 @@ export default function App() {
     inputBorder: darkMode ? 'border-white/20' : 'border-black/10',
     inputFocus: darkMode ? 'focus-within:border-white' : 'focus-within:border-black',
     scrollbar: darkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.08)',
-    orbit: darkMode ? 'border-white/10' : 'border-black/20', // Órbita mais visível no claro
+    orbit: darkMode ? 'border-white/10' : 'border-black/20',
     projectHover: darkMode ? 'hover:bg-white/5' : 'hover:bg-black/5',
     projectActive: darkMode ? 'bg-white/10 text-white shadow-sm' : 'bg-black/5 text-black shadow-sm',
     modalOverlay: 'bg-black/60 backdrop-blur-sm',
@@ -345,7 +345,7 @@ export default function App() {
       <div className="flex items-center gap-3 overflow-hidden pointer-events-none text-left">
         <GripVertical size={12} className={`${theme.textMuted} opacity-0 group-hover/item:opacity-100 transition-opacity`} />
         <Folder size={14} className={isActive ? 'text-current opacity-60' : theme.textMuted} />
-        <span className={`text-xs font-light truncate max-w-[120px] ${isActive ? 'font-normal' : theme.textSecondary}`}>
+        <span className={`text-xs font-light truncate max-w-[100px] ${isActive ? 'font-normal' : theme.textSecondary}`}>
           {project.name}
         </span>
       </div>
@@ -387,8 +387,8 @@ export default function App() {
         </div>
       )}
 
-      {/* Sidebar */}
-      <aside className={`hidden lg:flex flex-col border-r ${theme.border} ${theme.bgAside} relative transition-all duration-500 ease-in-out shrink-0 ${isSidebarOpen ? 'w-80' : 'w-20'}`}>
+      {/* Sidebar - Largura reduzida para w-72 */}
+      <aside className={`hidden lg:flex flex-col border-r ${theme.border} ${theme.bgAside} relative transition-all duration-500 ease-in-out shrink-0 ${isSidebarOpen ? 'w-72' : 'w-20'}`}>
         <div className={`flex flex-col h-full overflow-hidden transition-all duration-500 ${isSidebarOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
           <div className={`px-8 pt-12 pb-6 flex flex-col gap-5 shrink-0`}>
             <button
@@ -424,7 +424,7 @@ export default function App() {
           </div>
 
           <div className="px-8 flex flex-col flex-1 overflow-y-auto custom-scrollbar">
-            {/* Solar System Visual - Visual Improvements for Light Mode */}
+            {/* Solar System Visual */}
             <div className="relative w-full aspect-square flex items-center justify-center opacity-80 hover:opacity-100 transition-opacity duration-700 mb-10 shrink-0">
               <div className={`w-6 h-6 ${darkMode ? 'bg-[#ffd700]' : 'bg-[#ffcc00] border border-amber-600/10'} rounded-full z-10 shadow-[0_0_25px_rgba(255,204,0,0.3)]`}></div>
               <OrbitLine size="w-10 h-10" themeColor={theme.orbit} />
@@ -441,10 +441,7 @@ export default function App() {
               <PlanetDot size="w-20 h-20" duration="8s" color="bg-[#2271b3]" glow={darkMode ? "0_0_12px_#00ffff" : "0_0_8px_rgba(0,255,255,0.4)"} />
               <PlanetDot size="w-24 h-24" duration="12s" color="bg-[#e27b58]" dotSize="w-1 h-1" />
               <PlanetDot size="w-32 h-32" duration="20s" color="bg-[#d39c7e]" dotSize="w-2.5 h-2.5" />
-
-              {/* SATURNO (Orbit 40) */}
               <PlanetDot size="w-40 h-40" duration="28s" color="bg-[#eadaa4]" dotSize="w-2 h-2" hasRing={true} darkMode={darkMode} />
-
               <PlanetDot size="w-48 h-48" duration="36s" color="bg-[#a6d1e6]" />
               <PlanetDot size="w-56 h-56" duration="45s" color="bg-[#4b70dd]" />
             </div>
@@ -493,7 +490,7 @@ export default function App() {
                   >
                     <div className="flex items-center gap-3 overflow-hidden text-left">
                       <History size={14} className={activeChatId === chat.id ? 'text-current opacity-60' : `${theme.textMuted}`} />
-                      <span className={`text-xs font-light truncate max-w-[140px] ${activeChatId === chat.id ? 'font-normal' : theme.textSecondary}`}>
+                      <span className={`text-xs font-light truncate max-w-[120px] ${activeChatId === chat.id ? 'font-normal' : theme.textSecondary}`}>
                         {chat.title}
                       </span>
                     </div>
@@ -552,10 +549,6 @@ export default function App() {
             <button onClick={toggleDarkMode} className={`transition-all duration-300 ${darkMode ? 'text-yellow-400 hover:text-yellow-200' : 'text-slate-400 hover:text-slate-600'}`}>
               {darkMode ? <Sun size={18} strokeWidth={1.5} /> : <Moon size={18} strokeWidth={1.5} />}
             </button>
-            <div className={`flex gap-4 ${theme.textMuted}`}>
-              <Minus size={16} className="cursor-pointer hover:text-current transition-colors duration-300" />
-              <Maximize2 size={14} className="cursor-pointer hover:text-current transition-colors duration-300" />
-            </div>
           </div>
         </header>
 
