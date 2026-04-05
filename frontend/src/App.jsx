@@ -42,7 +42,7 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [showShareToast, setShowShareToast] = useState(false);
 
-  // Estado para controlar se a sidebar está aberta ou em modo "rail"
+  // Controle da sidebar (true = aberta, false = modo rail)
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
 
   const [projects, setProjects] = useState([]);
@@ -362,7 +362,7 @@ export default function App() {
 
       {itemToDelete && (
         <div className={`fixed inset-0 z-[100] flex items-center justify-center p-4 ${theme.modalOverlay} animate-in fade-in duration-300`}>
-          <div className={`${theme.modalBg} border ${theme.border} w-full max-w-sm rounded-2xl p-8 shadow-2xl animate-in zoom-in-95 duration-300`}>
+          <div className={`${theme.modalBg} border ${theme.border} w-full max-sm rounded-2xl p-8 shadow-2xl animate-in zoom-in-95 duration-300`}>
             <div className="flex flex-col items-center text-center">
               <div className="w-12 h-12 rounded-full bg-red-500/10 flex items-center justify-center mb-4">
                 <AlertTriangle className="text-red-500" size={24} />
@@ -380,17 +380,11 @@ export default function App() {
         </div>
       )}
 
-      {/* Sidebar com largura variável: w-80 (aberta) vs w-20 (estilo rail) */}
+      {/* Sidebar - Estilo Rail (w-20 quando fechada) */}
       <aside className={`hidden lg:flex flex-col border-r ${theme.border} ${theme.bgAside} relative transition-all duration-500 ease-in-out shrink-0 ${isSidebarOpen ? 'w-80' : 'w-20'}`}>
 
-        {/* Toggle Button centralizado no topo */}
-        <div className={`h-20 flex items-center shrink-0 border-b ${theme.border} transition-all duration-500 ${isSidebarOpen ? 'px-8 justify-between' : 'justify-center'}`}>
-          {isSidebarOpen && (
-            <div className="flex items-baseline gap-1 opacity-100 transition-opacity duration-300">
-              <span className="text-sm font-medium tracking-tight">SOLARIS</span>
-              <span className={`text-[8px] font-bold ${theme.textMuted} tracking-tighter transition-colors duration-500`}>V1</span>
-            </div>
-          )}
+        {/* Toggle centralizado no topo da sidebar */}
+        <div className={`h-20 flex items-center shrink-0 border-b ${theme.border} transition-all duration-500 justify-center`}>
           <button
             onClick={() => setIsSidebarOpen(!isSidebarOpen)}
             className={`flex items-center justify-center p-2 rounded-lg transition-all duration-300 ${darkMode ? 'text-white/60 hover:text-white hover:bg-white/5' : 'text-black/60 hover:text-black hover:bg-black/5'}`}
@@ -400,7 +394,7 @@ export default function App() {
           </button>
         </div>
 
-        {/* Conteúdo da Sidebar: Visível apenas quando aberta */}
+        {/* Conteúdo da Sidebar - Escondido suavemente no modo rail */}
         <div className={`flex flex-col h-full overflow-hidden transition-all duration-500 ${isSidebarOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
           <div className={`px-8 pt-8 pb-6 flex flex-col gap-5 shrink-0`}>
             <button
@@ -436,7 +430,6 @@ export default function App() {
           </div>
 
           <div className="px-8 flex flex-col flex-1 overflow-y-auto custom-scrollbar">
-
             {/* Visual do Sistema Solar */}
             <div className="relative w-full aspect-square flex items-center justify-center opacity-80 hover:opacity-100 transition-opacity duration-700 mb-10 shrink-0">
               <div className={`w-6 h-6 ${darkMode ? 'bg-[#ffd700]' : 'bg-[#ffcc00]'} rounded-full z-10 shadow-[0_0_25px_rgba(255,204,0,0.3)]`}></div>
@@ -487,24 +480,6 @@ export default function App() {
                 {visibleProjects.map((project) => (
                   <ProjectItem key={project.id} project={project} isActive={activeProjectId === project.id} />
                 ))}
-                {hiddenProjects.length > 0 && (
-                  <div className="relative group/more">
-                    <button className={`w-full flex items-center justify-between p-2.5 -ml-2 rounded-lg transition-all ${theme.projectHover} ${theme.textSecondary}`}>
-                      <div className="flex items-center gap-3">
-                        <Plus size={14} className="opacity-60" />
-                        <span className="text-xs font-light">Mais ({hiddenProjects.length})</span>
-                      </div>
-                      <ChevronDown size={12} className="opacity-40 group-hover/more:rotate-180 transition-transform duration-300" />
-                    </button>
-                    <div className={`absolute left-0 top-full w-full z-50 pt-1 pointer-events-none group-hover/more:pointer-events-auto opacity-0 group-hover/more:opacity-100 transition-all duration-300 translate-y-2 group-hover/more:translate-y-0`}>
-                      <div className={`${theme.dropdownBg} border ${theme.border} rounded-xl p-2 shadow-xl max-h-48 overflow-y-auto custom-scrollbar`}>
-                        {hiddenProjects.map((project) => (
-                          <ProjectItem key={project.id} project={project} isActive={activeProjectId === project.id} />
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                )}
               </div>
             </div>
 
@@ -524,12 +499,6 @@ export default function App() {
                         {chat.title}
                       </span>
                     </div>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); setItemToDelete({ type: 'chat', data: chat }); }}
-                      className={`opacity-0 group-hover/chat:opacity-100 p-1 hover:text-red-500 transition-all duration-200`}
-                    >
-                      <Trash2 size={12} />
-                    </button>
                   </div>
                 ))}
               </div>
@@ -544,7 +513,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* Elementos visíveis apenas no modo Recolhido (Rail) */}
+        {/* Ícones discretos visíveis apenas no modo Rail */}
         {!isSidebarOpen && (
           <div className="flex-1 flex flex-col items-center pt-10 gap-8 animate-in fade-in duration-700">
             <div className={`w-8 h-8 rounded-full border ${theme.orbit} flex items-center justify-center animate-pulse`}>
@@ -553,7 +522,6 @@ export default function App() {
             <div className="flex flex-col gap-6 items-center">
               <History size={18} strokeWidth={1.5} className={theme.textMuted} />
               <Folder size={18} strokeWidth={1.5} className={theme.textMuted} />
-              <Search size={18} strokeWidth={1.5} className={theme.textMuted} />
             </div>
           </div>
         )}
@@ -561,15 +529,13 @@ export default function App() {
 
       {/* Main Content */}
       <main className={`flex-1 flex flex-col ${theme.bgMain} relative transition-colors duration-500`}>
+        {/* Header - Nome SOLARIS V1 mantido aqui */}
         <header className={`h-20 flex items-center justify-between px-6 md:px-10 border-b ${theme.border} transition-colors duration-500`}>
           <div className="flex items-center gap-4">
-            {!isSidebarOpen && (
-              <div className="flex items-baseline gap-1 animate-in slide-in-from-left-2 duration-300">
-                <span className="text-base font-medium tracking-tight">SOLARIS</span>
-                <span className={`text-[10px] font-bold ${theme.textMuted} tracking-tighter`}>V1</span>
-              </div>
-            )}
-            {isSidebarOpen && <div className="w-4"></div>}
+            <div className="flex items-baseline gap-1">
+              <span className="text-base font-medium tracking-tight">SOLARIS</span>
+              <span className={`text-[10px] font-bold ${theme.textMuted} tracking-tighter`}>V1</span>
+            </div>
           </div>
           <div className="flex items-center gap-6">
             <button onClick={toggleDarkMode} className={`transition-all duration-300 ${darkMode ? 'text-yellow-400 hover:text-yellow-200' : 'text-slate-400 hover:text-slate-600'}`}>
