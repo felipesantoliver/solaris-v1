@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
-  Send, Loader2, Minus, Plus, Maximize2, Moon, Sun, MessageSquare, Hammer,
+  Send, Loader2, Minus, Plus, Maximize2, Moon, Sun,
   Mic, FolderPlus, Folder, Check, X, Trash2, AlertTriangle, History,
   ChevronDown, GripVertical, PencilLine, Search, Share2
 } from 'lucide-react';
@@ -40,7 +40,6 @@ export default function App() {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [darkMode, setDarkMode] = useState(() => localStorage.getItem('solaris_dark') !== 'false');
-  const [workMode, setWorkMode] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [showShareToast, setShowShareToast] = useState(false);
 
@@ -200,7 +199,7 @@ export default function App() {
         setChatHistory(projData.chats || []);
       }, 500);
     } catch (error) {
-      setMessages(prev => [...prev, { role: 'assistant', content: 'Lamento, ocorreu um erro na ligação.' }]);
+      setMessages(prev => [...prev, { role: 'assistant', content: 'Erro ao conectar com o servidor. Se for a primeira mensagem do dia, aguarde 30 segundos e tente novamente — o servidor pode estar iniciando.' }]);
     } finally {
       setIsLoading(false);
     }
@@ -529,14 +528,7 @@ export default function App() {
           </div>
 
           <div className="mt-auto pt-4 shrink-0 transition-colors duration-500">
-            <div className="mb-8 flex flex-col gap-3">
-              <span className={`text-[9px] font-medium uppercase tracking-[0.3em] ${theme.textMuted} ml-1 transition-colors duration-500`}>Operação</span>
-              <div className={`relative flex items-center p-1 rounded-full border ${theme.border} bg-black/5 dark:bg-white/5 h-11 w-full overflow-hidden transition-colors duration-500`}>
-                <div className={`absolute top-1 bottom-1 w-[calc(50%-4px)] rounded-full transition-all duration-500 shadow-sm ${workMode ? 'translate-x-[calc(100%+0px)] bg-amber-500/10 border border-amber-500/20' : 'translate-x-0 bg-blue-500/10 border border-blue-500/20'}`} />
-                <button onClick={() => setWorkMode(false)} className={`flex-1 relative flex items-center justify-center gap-2 text-[9px] font-bold uppercase tracking-widest z-10 transition-all duration-500 ${!workMode ? (darkMode ? 'text-blue-400 scale-105' : 'text-blue-700 scale-105') : 'text-gray-400 opacity-60'}`}><MessageSquare size={12} strokeWidth={workMode ? 1.5 : 2.5} /> Chat</button>
-                <button onClick={() => setWorkMode(true)} className={`flex-1 relative flex items-center justify-center gap-2 text-[9px] font-bold uppercase tracking-widest z-10 transition-all duration-500 ${workMode ? (darkMode ? 'text-amber-400 scale-105' : 'text-amber-700 scale-105') : 'text-gray-400 opacity-60'}`}><Hammer size={12} strokeWidth={workMode ? 2.5 : 1.5} /> Obra</button>
-              </div>
-            </div>
+
             <div className={`h-[1px] ${theme.border} w-full mb-5 transition-colors duration-500`}></div>
             <div className="flex flex-col pb-6 transition-colors duration-500">
               <span className={`text-[8px] font-extralight uppercase tracking-[0.4em] ${darkMode ? 'text-white/20' : 'text-black/50'} mb-0.5 transition-colors duration-500`}>Criado por</span>
@@ -592,11 +584,11 @@ export default function App() {
         <footer className="p-10 transition-colors duration-500">
           <div className="max-w-3xl mx-auto relative">
             <div className={`relative flex items-end border-b ${theme.inputBorder} pb-4 ${theme.inputFocus} transition-all duration-500`}>
-              <textarea ref={textareaRef} value={input} onChange={handleInput} onKeyDown={handleKeyDown} rows={1} placeholder={workMode ? "Descreva a tarefa..." : "O que deseja perguntar?"} className={`flex-1 bg-transparent border-none text-lg ${darkMode ? 'text-white placeholder-white/20' : 'text-black placeholder-black/20'} resize-none focus:outline-none py-2 font-light transition-colors duration-500`} />
+              <textarea ref={textareaRef} value={input} onChange={handleInput} onKeyDown={handleKeyDown} rows={1} placeholder="O que deseja perguntar?" className={`flex-1 bg-transparent border-none text-lg ${darkMode ? 'text-white placeholder-white/20' : 'text-black placeholder-black/20'} resize-none focus:outline-none py-2 font-light transition-colors duration-500`} />
               <button onClick={handleSend} disabled={isLoading} className={`p-2 transition-all duration-300 ${isLoading ? theme.textMuted : (darkMode ? 'text-white hover:scale-110' : 'text-black hover:scale-110')}`}>{isLoading ? <Loader2 size={20} className="animate-spin" /> : input.trim() ? <Send size={20} strokeWidth={1.5} /> : <Mic size={20} strokeWidth={1.5} />}</button>
             </div>
             <div className={`mt-4 flex justify-between items-center text-[9px] ${theme.textMuted} font-bold tracking-[0.2em] uppercase transition-colors duration-500`}>
-              <span className="flex items-center gap-2">aperte enter para enviar {workMode && <span className="text-amber-500/60 font-black tracking-widest">• MODO EXECUÇÃO</span>}</span>
+              <span className="flex items-center gap-2">aperte enter para enviar </span>
               <span
                 onClick={() => fileInputRef.current?.click()}
                 className={`flex items-center gap-1 cursor-pointer transition-colors duration-500 ${darkMode ? 'hover:text-white' : 'hover:text-black'}`}
