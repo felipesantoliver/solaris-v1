@@ -69,6 +69,7 @@ export default function App() {
 
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
+  const searchInputRef = useRef(null); // Ref para a busca
 
   const hasUserStartedChat = messages.some(m => m.role === 'user');
 
@@ -76,6 +77,30 @@ export default function App() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isLoading]);
+
+  // ── Funções de Ícones Adicionais ──
+  const handleToggleFullscreen = () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch(e => console.error(e));
+    } else {
+      if (document.exitFullscreen) document.exitFullscreen();
+    }
+  };
+
+  const handleClearChat = () => {
+    setMessages([{ role: 'assistant', content: WELCOME }]);
+    setActiveChatId(null);
+  };
+
+  const handleMicClick = () => {
+    // Feedback visual simples de que o microfone foi clicado
+    setInput('Ouvindo...');
+    setTimeout(() => setInput(''), 2000);
+  };
+
+  const focusSearch = () => {
+    searchInputRef.current?.focus();
+  };
 
   // ── Send message ──
   const handleSend = async () => {
@@ -89,13 +114,11 @@ export default function App() {
     setMessages(newMessages);
     setIsLoading(true);
 
-    // Build system prompt based on active project and mode
     const activeProject = projects.find(p => p.id === activeProjectId);
     const systemPrompt = activeProject
       ? `Você é o Solaris, um assistente de IA especializado operando dentro do projeto "${activeProject.name}". ${workMode ? 'O usuário está no MODO EXECUÇÃO — foque em tarefas práticas e objetivas.' : 'Seja útil, preciso e direto.'}`
       : `Você é o Solaris, um assistente de IA. ${workMode ? 'O usuário está no MODO EXECUÇÃO — foque em tarefas práticas e objetivas.' : 'Seja útil, preciso e direto.'}`;
 
-    // Convert to Anthropic message format (only user/assistant roles, skip initial greeting)
     const apiMessages = newMessages
       .filter((m, i) => !(i === 0 && m.role === 'assistant' && m.content === WELCOME))
       .map(m => ({ role: m.role, content: m.content }));
@@ -104,13 +127,11 @@ export default function App() {
       const responseText = await callClaude(apiMessages, systemPrompt);
       setMessages(prev => [...prev, { role: 'assistant', content: responseText }]);
 
-      // Auto-save to chat history
       if (activeChatId) {
         setChatHistory(prev => prev.map(c =>
           c.id === activeChatId ? { ...c, title: userMessage.slice(0, 40) } : c
         ));
       } else {
-        // Create a chat entry automatically on first message
         const newChat = { id: Date.now(), title: userMessage.slice(0, 40) };
         setChatHistory(prev => [newChat, ...prev]);
         setActiveChatId(newChat.id);
@@ -132,7 +153,6 @@ export default function App() {
     e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
   };
 
-  // ── Share ──
   const handleShare = () => {
     const text = messages
       .filter(m => !(m.role === 'assistant' && m.content === WELCOME))
@@ -143,13 +163,11 @@ export default function App() {
     setTimeout(() => setShowShareToast(false), 3000);
   };
 
-  // ── New chat ──
   const handleNewChat = () => {
     setMessages([{ role: 'assistant', content: WELCOME }]);
     setActiveChatId(null);
   };
 
-  // ── Projects ──
   const createProject = () => {
     if (!newProjectName.trim()) { setIsCreatingProject(false); return; }
     const proj = { id: Date.now(), name: newProjectName.trim() };
@@ -159,7 +177,6 @@ export default function App() {
     setActiveProjectId(proj.id);
   };
 
-  // ── Delete ──
   const handleDeleteConfirm = () => {
     if (!itemToDelete) return;
     const { type, data } = itemToDelete;
@@ -178,7 +195,6 @@ export default function App() {
     setItemToDelete(null);
   };
 
-  // ── Drag & drop ──
   const onDragStart = (e, id) => {
     setDraggedItemId(id);
     e.dataTransfer.effectAllowed = 'move';
@@ -196,7 +212,6 @@ export default function App() {
   };
   const onDragEnd = (e) => { e.currentTarget.style.opacity = '1'; setDraggedItemId(null); };
 
-  // ── Theme ──
   const theme = {
     bgAside: darkMode ? 'bg-[#0a0a0a]' : 'bg-white',
     bgMain: darkMode ? 'bg-[#111111]' : 'bg-[#fdfdfd]',
@@ -221,7 +236,6 @@ export default function App() {
     ? chatHistory.filter(c => c.title?.toLowerCase().includes(searchQuery.toLowerCase()))
     : chatHistory;
 
-  // ── ProjectItem ──
   const ProjectItem = ({ project, isActive }) => (
     <div
       draggable
@@ -245,7 +259,6 @@ export default function App() {
     </div>
   );
 
-  // ─────────────────────────────────────────────────────────────────────────────
   return (
     <div className={`flex h-screen ${darkMode ? 'bg-[#050505] text-white' : 'bg-[#fafafa] text-[#1a1a1a]'} font-sans antialiased overflow-hidden transition-colors duration-500`}>
 
@@ -275,7 +288,6 @@ export default function App() {
         </div>
       )}
 
-      {/* Botão de expandir sidebar — aparece fora da aside quando colapsada */}
       {sidebarCollapsed && (
         <button
           onClick={() => setSidebarCollapsed(false)}
@@ -291,7 +303,6 @@ export default function App() {
       {/* ── Sidebar ── */}
       <aside className={`hidden lg:flex flex-col border-r ${theme.border} ${theme.bgAside} relative transition-all duration-500 overflow-y-auto custom-scrollbar ${sidebarCollapsed ? 'w-0 border-r-0 overflow-hidden' : 'w-80'}`}>
 
-        {/* Toggle button — fica colado na borda direita da sidebar */}
         <button
           onClick={() => setSidebarCollapsed(c => !c)}
           className={`absolute top-8 -right-4 z-30 w-7 h-7 rounded-full border ${theme.border} ${theme.bgAside} flex items-center justify-center shadow-sm transition-all duration-500 ${theme.textSecondary} hover:text-current`}
@@ -315,8 +326,11 @@ export default function App() {
           </button>
 
           <div className="flex items-center gap-3 w-full">
-            <Search size={18} strokeWidth={1.2} className={`${theme.textPrimary} transition-colors duration-500`} />
+            <button onClick={focusSearch}>
+              <Search size={18} strokeWidth={1.2} className={`${theme.textPrimary} transition-colors duration-500 hover:scale-110`} />
+            </button>
             <input
+              ref={searchInputRef}
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
@@ -327,39 +341,23 @@ export default function App() {
         </div>
 
         <div className="px-8 flex flex-col transition-colors duration-500">
-          {/* Solar system animation — todos os 8 planetas, modelo compacto 160×160 */}
           <div className="relative flex items-center justify-center opacity-80 hover:opacity-100 transition-opacity duration-700 mb-10 shrink-0" style={{ width: '160px', height: '160px', margin: '0 auto 40px', overflow: 'visible' }}>
-            {/* Sol */}
             <div className={`absolute w-[14px] h-[14px] ${darkMode ? 'bg-[#ffd700]' : 'bg-[#ffcc00]'} rounded-full z-10 shadow-[0_0_16px_rgba(255,204,0,0.5)] transition-colors duration-500`} style={{ top: '50%', left: '50%', transform: 'translate(-50%,-50%)' }} />
 
-            {/* Órbita Mercúrio r=18 */}
             <div className={`absolute border ${theme.orbit} rounded-full transition-colors duration-500`} style={{ width: 36, height: 36, top: '50%', left: '50%', transform: 'translate(-50%,-50%)' }} />
-            {/* Órbita Vênus r=26 */}
             <div className={`absolute border ${theme.orbit} rounded-full transition-colors duration-500`} style={{ width: 52, height: 52, top: '50%', left: '50%', transform: 'translate(-50%,-50%)' }} />
-            {/* Órbita Terra r=36 */}
             <div className={`absolute border ${theme.orbit} rounded-full transition-colors duration-500`} style={{ width: 72, height: 72, top: '50%', left: '50%', transform: 'translate(-50%,-50%)' }} />
-            {/* Órbita Marte r=46 */}
             <div className={`absolute border ${theme.orbit} rounded-full transition-colors duration-500`} style={{ width: 92, height: 92, top: '50%', left: '50%', transform: 'translate(-50%,-50%)' }} />
-            {/* Órbita Júpiter r=58 */}
             <div className={`absolute border ${theme.orbit} rounded-full transition-colors duration-500`} style={{ width: 116, height: 116, top: '50%', left: '50%', transform: 'translate(-50%,-50%)' }} />
-            {/* Órbita Saturno r=70 */}
             <div className={`absolute border ${theme.orbit} rounded-full transition-colors duration-500`} style={{ width: 140, height: 140, top: '50%', left: '50%', transform: 'translate(-50%,-50%)' }} />
-            {/* Órbita Urano r=78 */}
             <div className={`absolute border ${theme.orbit} rounded-full transition-colors duration-500`} style={{ width: 156, height: 156, top: '50%', left: '50%', transform: 'translate(-50%,-50%)' }} />
-            {/* Órbita Netuno r=80 — fora do container, mas o container tem overflow visible */}
             <div className={`absolute border ${theme.orbit} rounded-full transition-colors duration-500`} style={{ width: 160, height: 160, top: '50%', left: '50%', transform: 'translate(-50%,-50%)' }} />
 
-            {/* Mercúrio — cinza, 1px, 3s */}
             <PlanetDot size="w-[36px] h-[36px]" duration="3s" color={darkMode ? 'bg-[#b0aeaa]' : 'bg-[#9c9a95]'} dotSize="w-[5px] h-[5px]" />
-            {/* Vênus — creme-amarelo, 1.5px, 7s */}
             <PlanetDot size="w-[52px] h-[52px]" duration="7s" color="bg-[#e3c98a]" dotSize="w-[6px] h-[6px]" />
-            {/* Terra — azul, 1.5px, 12s */}
             <PlanetDot size="w-[72px] h-[72px]" duration="12s" color="bg-[#2b7fc4]" glow={darkMode ? '0 0 6px #4af' : '0 0 5px rgba(43,127,196,0.7)'} dotSize="w-[6px] h-[6px]" />
-            {/* Marte — laranja-ferrugem, 1px, 19s */}
             <PlanetDot size="w-[92px] h-[92px]" duration="19s" color="bg-[#c1440e]" dotSize="w-[5px] h-[5px]" />
-            {/* Júpiter — bege-laranja, 3px, 32s */}
             <PlanetDot size="w-[116px] h-[116px]" duration="32s" color="bg-[#c8874a]" glow={darkMode ? '0 0 5px rgba(200,135,74,0.4)' : undefined} dotSize="w-[9px] h-[9px]" />
-            {/* Saturno — dourado + anel SVG, 48s */}
             <div className="absolute w-[140px] h-[140px]" style={{ top: '50%', left: '50%', transform: 'translate(-50%,-50%)' }}>
               <div className="absolute inset-0 orbit-rotate" style={{ animationDuration: '48s' }}>
                 <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2" style={{ width: 14, height: 14 }}>
@@ -370,13 +368,10 @@ export default function App() {
                 </div>
               </div>
             </div>
-            {/* Urano — azul-ciano pálido, 64s */}
             <PlanetDot size="w-[156px] h-[156px]" duration="64s" color="bg-[#7de8e8]" glow={darkMode ? '0 0 5px rgba(125,232,232,0.4)' : undefined} dotSize="w-[7px] h-[7px]" />
-            {/* Netuno — azul-violeta, 90s */}
             <PlanetDot size="w-[160px] h-[160px]" duration="90s" color="bg-[#3f54ba]" glow={darkMode ? '0 0 5px rgba(63,84,186,0.5)' : undefined} dotSize="w-[6px] h-[6px]" />
           </div>
 
-          {/* Projects */}
           <div className="flex flex-col gap-4 mb-8 shrink-0">
             <h2 className={`text-[10px] font-light tracking-[0.4em] uppercase ${theme.textSecondary} transition-colors duration-500`}>PROJETOS</h2>
             {isCreatingProject ? (
@@ -426,7 +421,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* Chat history */}
           <div className="flex flex-col gap-4 mb-10 shrink-0">
             <h2 className={`text-[10px] font-light tracking-[0.4em] uppercase ${theme.textSecondary} transition-colors duration-500`}>SEUS CHATS</h2>
             <div className="flex flex-col gap-1">
@@ -458,7 +452,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* Mode toggle + footer */}
           <div className="mt-auto pt-4 shrink-0 transition-colors duration-500">
             <div className="mb-8 flex flex-col gap-3">
               <span className={`text-[9px] font-medium uppercase tracking-[0.3em] ${theme.textMuted} ml-1`}>Operação</span>
@@ -495,8 +488,8 @@ export default function App() {
               {darkMode ? <Sun size={18} strokeWidth={1.5} /> : <Moon size={18} strokeWidth={1.5} />}
             </button>
             <div className={`flex gap-4 ${theme.textMuted}`}>
-              <Minus size={16} className="cursor-pointer hover:text-current transition-colors duration-300" />
-              <Maximize2 size={14} className="cursor-pointer hover:text-current transition-colors duration-300" />
+              <Minus size={16} onClick={handleClearChat} className="cursor-pointer hover:text-current transition-colors duration-300 hover:scale-125" title="Limpar conversa" />
+              <Maximize2 size={14} onClick={handleToggleFullscreen} className="cursor-pointer hover:text-current transition-colors duration-300 hover:scale-125" title="Tela cheia" />
             </div>
           </div>
         </header>
@@ -547,15 +540,15 @@ export default function App() {
                 onChange={handleInput}
                 onKeyDown={handleKeyDown}
                 rows={1}
-                placeholder={workMode ? 'Descreva a tarefa...' : 'O que deseja perguntar?'}
-                className={`flex-1 bg-transparent border-none text-lg ${darkMode ? 'text-white placeholder-white/20' : 'text-black placeholder-black/20'} resize-none focus:outline-none py-2 font-light transition-colors duration-500`}
+                placeholder={workMode ? "Descreva a tarefa técnica..." : "Pergunte qualquer coisa ao Solaris..."}
+                className={`flex-1 bg-transparent border-none text-sm md:text-base font-light focus:outline-none resize-none px-0 custom-scrollbar transition-colors duration-500 ${darkMode ? 'text-white placeholder:text-white/20' : 'text-black placeholder:text-black/30'}`}
               />
               <button
                 onClick={handleSend}
                 disabled={isLoading}
-                className={`p-2 transition-all duration-300 ${isLoading ? theme.textMuted : (darkMode ? 'text-white hover:scale-110' : 'text-black hover:scale-110')}`}
+                className={`ml-4 mb-1 p-2 rounded-full transition-all duration-300 ${isLoading ? theme.textMuted : (darkMode ? 'text-white hover:scale-110' : 'text-black hover:scale-110')}`}
               >
-                {isLoading ? <Loader2 size={20} className="animate-spin" /> : input.trim() ? <Send size={20} strokeWidth={1.5} /> : <Mic size={20} strokeWidth={1.5} />}
+                {isLoading ? <Loader2 size={20} className="animate-spin" /> : input.trim() ? <Send size={20} strokeWidth={1.5} /> : <Mic size={20} onClick={handleMicClick} strokeWidth={1.5} className="cursor-pointer hover:text-blue-500" />}
               </button>
             </div>
             <div className={`mt-4 flex justify-between items-center text-[9px] ${theme.textMuted} font-bold tracking-[0.2em] uppercase`}>
@@ -578,7 +571,8 @@ export default function App() {
         .custom-scrollbar::-webkit-scrollbar { width: 3px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: ${theme.scrollbar}; border-radius: 10px; }
-      `}} />
+        `
+      }} />
     </div>
   );
 }
