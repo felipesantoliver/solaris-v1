@@ -17,29 +17,6 @@ export function openDb() {
   return db;
 }
 
-// Wrapper para manter compatibilidade com a sintaxe async/await usada no geminiService
-const dbWrapper = {
-  get: (sql, ...params) => {
-    const flat = params.flat();
-    return Promise.resolve(openDb().prepare(sql).get(...flat) ?? null);
-  },
-  all: (sql, ...params) => {
-    const flat = params.flat();
-    return Promise.resolve(openDb().prepare(sql).all(...flat));
-  },
-  run: (sql, ...params) => {
-    const flat = params.flat();
-    return Promise.resolve(openDb().prepare(sql).run(...flat));
-  },
-};
-
-export async function openDbAsync() {
-  return dbWrapper;
-}
-
-// Substitui o openDb original no geminiService (que espera um objeto com .get/.all/.run async)
-export { dbWrapper as openDbCompat };
-
 export async function initDb() {
   const database = openDb();
 
