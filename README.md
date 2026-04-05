@@ -40,7 +40,7 @@ Solaris-v1/
 
 │   ├── database.js         # Banco de dados SQLite (Persistência)
 
-│   ├── geminiService.js    # Lógica da IA e processamento de memória
+│   ├── aiService.js    # Lógica da IA e processamento de memória
 
 │   └── routes/             # Endpoints de Mensagens, Projetos e Arquivos
 

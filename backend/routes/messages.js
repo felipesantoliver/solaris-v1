@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { allAsync, runAsync } from '../database.js';
-import { sendMessage } from '../geminiService.js';
+import { sendMessage } from '../aiService.js';
 
 const router = Router();
 
