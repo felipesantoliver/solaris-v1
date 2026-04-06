@@ -28,24 +28,7 @@ Solaris-v1/
 │   │   ├── App.jsx         # Gerenciamento de estado global
 │   │   └── SolarisAgent.jsx # Componente de interface do agente
 │   └── public/             # Ativos estáticos
-⚙️ Como configurar (Deploy)
-Para colocar o Solaris online utilizando a infraestrutura gratuita:
 
-1. Backend (Render)
-Conecte este repositório ao Render.com.
-
-Configure as Variáveis de Ambiente:
-
-GEMINI_API_KEY: Sua chave do Google AI Studio.
-
-DEEPSEEK_API_KEY: Sua chave da DeepSeek API.
-
-Cron-job: Utilize o cron-job.org para pingar o endpoint /api/health a cada 10 minutos e evitar que o servidor hiberne.
-
-2. Frontend (Vercel)
-Importe a pasta frontend para a Vercel.
-
-Certifique-se de que a API_BASE no código aponte para a URL gerada pelo Render.
 
 🛠️ Tecnologias Utilizadas
 Frontend: React, Tailwind CSS, Lucide Icons, Vite.
