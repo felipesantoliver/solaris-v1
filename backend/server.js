@@ -1,5 +1,5 @@
 // ============================================================
-//  server.js — Solaris Backend (consolidado)
+//  server.js — Solaris Backend
 //
 //  Rotas:
 //    GET  /api/health
@@ -8,17 +8,16 @@
 //    POST /api/projects
 //    PATCH /api/projects/:id
 //    DELETE /api/projects/:id
-//    POST /api/projects/:id/chats
+//    POST /api/projects/:id/chats      (id pode ser "none" = sem projeto)
 //    DELETE /api/projects/:id/chats/:chatId
 //    GET  /api/messages/chat/:chatId
 //    POST /api/messages
+//    POST /api/messages/edit
 //    GET  /api/files/:projectId
 //    POST /api/files/:projectId
 //    DELETE /api/files/:projectId/:fileId
+//    POST /api/migrate
 //    GET  /api/share/:chatId
-//
-//  Variáveis de ambiente:
-//    GROQ_API_KEY, DATABASE_URL, FRONTEND_URL, PORT
 // ============================================================
 
 import express from 'express';
@@ -35,7 +34,6 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 // ─── Groq ─────────────────────────────────────────────────────────────────────
-
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 if (!GROQ_API_KEY) throw new Error('❌ GROQ_API_KEY não definida');
 
@@ -66,10 +64,7 @@ async function groqChat(messages, systemPrompt) {
     const res = await withRetry(() =>
       fetch(GROQ_URL, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${GROQ_API_KEY}`,
-        },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GROQ_API_KEY}` },
         body: JSON.stringify({
           model: GROQ_MODEL,
           max_tokens: 2048,
@@ -91,7 +86,6 @@ async function groqChat(messages, systemPrompt) {
 }
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
-
 app.use(cors({
   origin: process.env.FRONTEND_URL || '*',
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
@@ -102,7 +96,6 @@ app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // ─── Upload ───────────────────────────────────────────────────────────────────
-
 const uploadsDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
@@ -119,7 +112,6 @@ const upload = multer({
 });
 
 // ─── IA: system prompt ────────────────────────────────────────────────────────
-
 const STYLE_GUIDE = {
   direto: 'Seja direto, objetivo e conciso. Sem rodeios.',
   técnico: 'Use terminologia técnica precisa. Inclua detalhes de implementação.',
@@ -134,6 +126,11 @@ const MEMORY_KEYWORDS = [
 ];
 
 async function buildSystemPrompt(projectId, memoryMode) {
+  // Sem projeto: prompt genérico
+  if (!projectId || projectId === 'none') {
+    return `Você é o Solaris, um assistente de IA pessoal. Seja útil, preciso e direto. Nunca invente informações.`;
+  }
+
   const project = await getAsync('SELECT * FROM projects WHERE id = $1', [projectId]);
   if (!project) return 'Você é um assistente de IA útil e preciso.';
 
@@ -169,6 +166,7 @@ async function buildSystemPrompt(projectId, memoryMode) {
 }
 
 async function extractMemories(projectId, response) {
+  if (!projectId || projectId === 'none') return;
   const candidates = response
     .split(/[.!?]+\s+/)
     .filter(s => s.length > 50 && MEMORY_KEYWORDS.some(k => s.toLowerCase().includes(k)))
@@ -176,6 +174,12 @@ async function extractMemories(projectId, response) {
   for (const content of candidates) {
     await runAsync('INSERT INTO memories (project_id, content, source) VALUES ($1, $2, $3)', [projectId, content.trim(), 'auto']);
   }
+  // Limitar a 20 memórias por projeto
+  await runAsync(`
+    DELETE FROM memories WHERE project_id = $1 AND id NOT IN (
+      SELECT id FROM memories WHERE project_id = $1 ORDER BY created_at DESC LIMIT 20
+    )
+  `, [projectId]).catch(() => {});
 }
 
 async function autoTitle(chatId, firstMessage) {
@@ -260,20 +264,32 @@ app.delete('/api/projects/:id', async (req, res) => {
 
 // ── Chats ─────────────────────────────────────────────────────────────────────
 
+// Suporta projectId = "none" para chats sem projeto
 app.post('/api/projects/:id/chats', async (req, res) => {
   const userId = req.headers['x-user-id'];
+  const projectId = req.params.id === 'none' ? null : req.params.id;
   try {
-    const project = await getAsync('SELECT id FROM projects WHERE id = $1 AND user_id = $2', [req.params.id, userId]);
-    if (!project) return res.status(404).json({ error: 'Projeto não encontrado' });
+    if (projectId) {
+      const project = await getAsync('SELECT id FROM projects WHERE id = $1 AND user_id = $2', [projectId, userId]);
+      if (!project) return res.status(404).json({ error: 'Projeto não encontrado' });
+    }
     const chatId = randomUUID();
-    await runAsync('INSERT INTO chats (id, project_id, title) VALUES ($1,$2,$3)', [chatId, req.params.id, 'Nova conversa']);
+    await runAsync(
+      'INSERT INTO chats (id, project_id, title) VALUES ($1,$2,$3)',
+      [chatId, projectId, 'Nova conversa']
+    );
     res.status(201).json(await getAsync('SELECT * FROM chats WHERE id = $1', [chatId]));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.delete('/api/projects/:id/chats/:chatId', async (req, res) => {
   try {
-    await runAsync('DELETE FROM chats WHERE id = $1 AND project_id = $2', [req.params.chatId, req.params.id]);
+    const projectId = req.params.id === 'none' ? null : req.params.id;
+    if (projectId) {
+      await runAsync('DELETE FROM chats WHERE id = $1 AND project_id = $2', [req.params.chatId, projectId]);
+    } else {
+      await runAsync('DELETE FROM chats WHERE id = $1', [req.params.chatId]);
+    }
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -283,7 +299,7 @@ app.delete('/api/projects/:id/chats/:chatId', async (req, res) => {
 app.get('/api/messages/chat/:chatId', async (req, res) => {
   try {
     const rows = await allAsync(
-      'SELECT role, content, created_at FROM messages WHERE chat_id = $1 ORDER BY created_at ASC',
+      'SELECT id, role, content, edited, edit_history, created_at FROM messages WHERE chat_id = $1 ORDER BY created_at ASC',
       [req.params.chatId]
     );
     res.json(rows);
@@ -292,8 +308,10 @@ app.get('/api/messages/chat/:chatId', async (req, res) => {
 
 app.post('/api/messages', async (req, res) => {
   const { project_id, chat_id, message } = req.body;
-  if (!project_id || !chat_id || !message)
-    return res.status(400).json({ error: 'project_id, chat_id e message são obrigatórios' });
+  if (!chat_id || !message)
+    return res.status(400).json({ error: 'chat_id e message são obrigatórios' });
+
+  const projectId = project_id && project_id !== 'none' ? project_id : null;
 
   try {
     await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'user', message]);
@@ -304,8 +322,8 @@ app.post('/api/messages', async (req, res) => {
     );
     const isFirst = history.length === 1;
 
-    const project = await getAsync('SELECT memory_mode FROM projects WHERE id = $1', [project_id]);
-    const sysPrompt = await buildSystemPrompt(project_id, project?.memory_mode);
+    const project = projectId ? await getAsync('SELECT memory_mode FROM projects WHERE id = $1', [projectId]) : null;
+    const sysPrompt = await buildSystemPrompt(projectId, project?.memory_mode);
     const apiHistory = history.slice(-20).map(m => ({ role: m.role, content: m.content }));
 
     const responseText = await groqChat(apiHistory, sysPrompt);
@@ -314,11 +332,77 @@ app.post('/api/messages', async (req, res) => {
     await runAsync('UPDATE chats SET updated_at = NOW() WHERE id = $1', [chat_id]);
 
     if (isFirst) autoTitle(chat_id, message).catch(console.error);
-    extractMemories(project_id, responseText).catch(console.error);
+    if (projectId) extractMemories(projectId, responseText).catch(console.error);
 
     res.json({ response: responseText });
   } catch (err) {
     console.error('Erro ao enviar mensagem:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Edição de mensagem ────────────────────────────────────────────────────────
+app.post('/api/messages/edit', async (req, res) => {
+  const { chat_id, project_id, message_index, new_content, original_content } = req.body;
+  if (!chat_id || !new_content || message_index === undefined)
+    return res.status(400).json({ error: 'chat_id, new_content e message_index são obrigatórios' });
+
+  const projectId = project_id && project_id !== 'none' ? project_id : null;
+
+  try {
+    // Buscar todas as mensagens do chat em ordem
+    const allMessages = await allAsync(
+      'SELECT id, role, content, edit_history FROM messages WHERE chat_id = $1 ORDER BY created_at ASC',
+      [chat_id]
+    );
+
+    if (message_index >= allMessages.length)
+      return res.status(400).json({ error: 'Índice de mensagem inválido' });
+
+    const targetMsg = allMessages[message_index];
+    if (targetMsg.role !== 'user')
+      return res.status(400).json({ error: 'Só é possível editar mensagens do usuário' });
+
+    // Guardar histórico de edições
+    const editHistory = Array.isArray(targetMsg.edit_history) ? targetMsg.edit_history : [];
+    editHistory.push({ content: original_content || targetMsg.content, edited_at: new Date().toISOString() });
+
+    // Atualizar mensagem editada
+    await runAsync(
+      'UPDATE messages SET content = $1, edited = TRUE, edit_history = $2, updated_at = NOW() WHERE id = $3',
+      [new_content, JSON.stringify(editHistory), targetMsg.id]
+    );
+
+    // Remover mensagens posteriores (a partir do próximo índice)
+    const idsToDelete = allMessages.slice(message_index + 1).map(m => m.id);
+    if (idsToDelete.length > 0) {
+      await runAsync(
+        `DELETE FROM messages WHERE id = ANY($1::int[])`,
+        [idsToDelete]
+      );
+    }
+
+    // Remontar histórico limpo para a IA (até a mensagem editada)
+    const cleanHistory = allMessages
+      .slice(0, message_index + 1)
+      .map(m => ({
+        role: m.role,
+        content: m.id === targetMsg.id ? new_content : m.content
+      }));
+
+    const project = projectId ? await getAsync('SELECT memory_mode FROM projects WHERE id = $1', [projectId]) : null;
+    const sysPrompt = await buildSystemPrompt(projectId, project?.memory_mode);
+    const responseText = await groqChat(cleanHistory.slice(-20), sysPrompt);
+
+    // Salvar nova resposta da IA
+    await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'assistant', responseText]);
+    await runAsync('UPDATE chats SET updated_at = NOW() WHERE id = $1', [chat_id]);
+
+    if (projectId) extractMemories(projectId, responseText).catch(console.error);
+
+    res.json({ response: responseText });
+  } catch (err) {
+    console.error('Erro ao editar mensagem:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -372,9 +456,6 @@ app.delete('/api/files/:projectId/:fileId', async (req, res) => {
 });
 
 // ── Migração visitante → conta ────────────────────────────────────────────────
-// Chamada uma vez quando o visitante cria conta ou faz login pela primeira vez.
-// Reatribui todos os projetos do guest_id para o user_id real.
-
 app.post('/api/migrate', async (req, res) => {
   const { guest_id, user_id } = req.body;
   if (!guest_id || !user_id || guest_id === user_id)
@@ -386,13 +467,10 @@ app.post('/api/migrate', async (req, res) => {
     );
     console.log(`✅ Migração: ${result.changes} projeto(s) transferido(s) de ${guest_id} → ${user_id}`);
     res.json({ ok: true, migrated: result.changes });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ── Compartilhamento ──────────────────────────────────────────────────────────
-
 app.get('/api/share/:chatId', async (req, res) => {
   try {
     const chat = await getAsync('SELECT * FROM chats WHERE id = $1', [req.params.chatId]);
@@ -406,16 +484,14 @@ app.get('/api/share/:chatId', async (req, res) => {
 });
 
 // ─── Error handler global ─────────────────────────────────────────────────────
-
 process.on('unhandledRejection', (reason) => console.error('Unhandled rejection:', reason));
 
-app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
+app.use((err, req, res, next) => {
   console.error('Erro não tratado:', err);
   res.status(err.status || 500).json({ error: err.message || 'Erro interno do servidor' });
 });
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
-
 (async () => {
   try {
     await initDb();
