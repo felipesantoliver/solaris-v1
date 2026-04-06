@@ -1,5 +1,5 @@
 // ============================================================
-//  server.js — Solaris Backend (DeepSeek R1 Distill 70B no modo pensar)
+//  server.js — Solaris Backend (GPT-OSS 120B no modo pensar)
 // ============================================================
 
 // Forçar DNS IPv4 — Render free tier não suporta IPv6
@@ -25,7 +25,7 @@ if (!GROQ_API_KEY) throw new Error('❌ GROQ_API_KEY não definida');
 
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const GROQ_MODEL = 'llama-3.3-70b-versatile';              // Modo normal
-const DEEPSEEK_MODEL = 'deepseek-r1-distill-llama-70b';    // Modo pensar (DeepSeek R1)
+const GPT_OSS_MODEL = 'openai/gpt-oss-120b';               // Modo pensar (GPT-OSS)
 
 // Avalia se uma resposta merece o modo pensar
 function evaluateComplexity(userMessage, responseText) {
@@ -436,7 +436,7 @@ app.post('/api/messages/edit', async (req, res) => {
   }
 });
 
-// ── Modo Pensar (DeepSeek R1 Distill 70B) ────────────────────────────────────
+// ── Modo Pensar (GPT-OSS 120B) ────────────────────────────────────────────────
 app.post('/api/messages/think', async (req, res) => {
   const userId = req.headers['x-user-id'];
   const { chat_id, project_id, original_message, previous_response } = req.body;
@@ -468,7 +468,7 @@ app.post('/api/messages/think', async (req, res) => {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GROQ_API_KEY}` },
           body: JSON.stringify({
-            model: DEEPSEEK_MODEL,
+            model: GPT_OSS_MODEL,
             max_tokens: 4096,
             temperature: 0.6,
             messages: [
@@ -482,13 +482,13 @@ app.post('/api/messages/think', async (req, res) => {
 
       if (!deepRes.ok) {
         const err = await deepRes.json().catch(() => ({}));
-        throw new Error(`DeepSeek ${deepRes.status}: ${err.error?.message || deepRes.statusText}`);
+        throw new Error(`GPT-OSS ${deepRes.status}: ${err.error?.message || deepRes.statusText}`);
       }
 
       const data = await deepRes.json();
       const rawContent = data.choices[0].message.content || '';
 
-      // DeepSeek R1 pode retornar conteúdo com tags <think> ou apenas resposta direta
+      // O GPT-OSS pode retornar conteúdo com tags <think> ou apenas resposta direta
       const thinkMatch = rawContent.match(/<think>([\s\S]*?)<\/think>/i);
       if (thinkMatch) {
         thinkingContent = thinkMatch[1].trim();
@@ -524,7 +524,7 @@ app.post('/api/messages/think', async (req, res) => {
     res.json({
       response: finalResponse,
       thinking: thinkingContent,
-      model: DEEPSEEK_MODEL,
+      model: GPT_OSS_MODEL,
     });
   } catch (err) {
     console.error('Erro no modo pensar:', err);
