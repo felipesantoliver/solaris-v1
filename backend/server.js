@@ -371,6 +371,26 @@ app.delete('/api/files/:projectId/:fileId', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ── Migração visitante → conta ────────────────────────────────────────────────
+// Chamada uma vez quando o visitante cria conta ou faz login pela primeira vez.
+// Reatribui todos os projetos do guest_id para o user_id real.
+
+app.post('/api/migrate', async (req, res) => {
+  const { guest_id, user_id } = req.body;
+  if (!guest_id || !user_id || guest_id === user_id)
+    return res.json({ ok: true, migrated: 0 });
+  try {
+    const result = await runAsync(
+      'UPDATE projects SET user_id = $1 WHERE user_id = $2',
+      [user_id, guest_id]
+    );
+    console.log(`✅ Migração: ${result.changes} projeto(s) transferido(s) de ${guest_id} → ${user_id}`);
+    res.json({ ok: true, migrated: result.changes });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Compartilhamento ──────────────────────────────────────────────────────────
 
 app.get('/api/share/:chatId', async (req, res) => {
