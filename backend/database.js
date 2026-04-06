@@ -2,12 +2,12 @@ import pg from 'pg';
 
 const { Pool } = pg;
 
-if (!process.env.DATABASE_URL) {
+if (!import.meta.env.DATABASE_URL) {
   throw new Error('❌ DATABASE_URL não definida nas variáveis de ambiente');
 }
 
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
+  connectionString: import.meta.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false }, // obrigatório no Supabase/Render
   max: 10,
   idleTimeoutMillis: 30000,

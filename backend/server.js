@@ -32,11 +32,11 @@ import { initDb, runAsync, getAsync, allAsync } from './database.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT = import.meta.env.PORT || 3001;
 
 // ─── Groq ─────────────────────────────────────────────────────────────────────
 
-const GROQ_API_KEY = process.env.GROQ_API_KEY;
+const GROQ_API_KEY = import.meta.env.GROQ_API_KEY;
 if (!GROQ_API_KEY) throw new Error('❌ GROQ_API_KEY não definida');
 
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
@@ -93,7 +93,7 @@ async function groqChat(messages, systemPrompt) {
 // ─── Middleware ───────────────────────────────────────────────────────────────
 
 app.use(cors({
-  origin: process.env.FRONTEND_URL || '*',
+  origin: import.meta.env.FRONTEND_URL || '*',
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'x-user-id', 'Authorization'],
 }));
