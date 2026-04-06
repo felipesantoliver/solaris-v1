@@ -8,11 +8,11 @@ import { createClient } from '@supabase/supabase-js';
 
 // ─── Supabase ─────────────────────────────────────────────────────────────────
 const supabase = createClient(
-  import.meta.env.VITE_SUPABASE_URL,
-  import.meta.env.VITE_SUPABASE_ANON_KEY
+  process.env.VITE_SUPABASE_URL,
+  process.env.VITE_SUPABASE_ANON_KEY
 );
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'https://solaris-backend-s7vm.onrender.com/api';
+const API_BASE = process.env.VITE_API_BASE || 'https://solaris-backend-s7vm.onrender.com/api';
 
 // ─── ID do usuário (visitante ou autenticado) ─────────────────────────────────
 function getGuestId() {
