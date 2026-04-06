@@ -1,23 +1,5 @@
 // ============================================================
 //  server.js — Solaris Backend
-//
-//  Rotas:
-//    GET  /api/health
-//    GET  /api/projects
-//    GET  /api/projects/:id
-//    POST /api/projects
-//    PATCH /api/projects/:id
-//    DELETE /api/projects/:id
-//    POST /api/projects/:id/chats      (id pode ser "none" = sem projeto)
-//    DELETE /api/projects/:id/chats/:chatId
-//    GET  /api/messages/chat/:chatId
-//    POST /api/messages
-//    POST /api/messages/edit
-//    GET  /api/files/:projectId
-//    POST /api/files/:projectId
-//    DELETE /api/files/:projectId/:fileId
-//    POST /api/migrate
-//    GET  /api/share/:chatId
 // ============================================================
 
 import express from 'express';
@@ -42,9 +24,8 @@ const GROQ_MODEL = 'llama-3.3-70b-versatile';
 
 async function withRetry(fn, maxRetries = 3, baseDelay = 3000) {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      return await fn();
-    } catch (err) {
+    try { return await fn(); }
+    catch (err) {
       const is429 = err.message?.includes('429') || err.status === 429;
       if (is429 && attempt < maxRetries) {
         const wait = baseDelay * Math.pow(2, attempt);
@@ -80,9 +61,7 @@ async function groqChat(messages, systemPrompt) {
     }
     const data = await res.json();
     return data.choices[0].message.content;
-  } finally {
-    clearTimeout(timeout);
-  }
+  } finally { clearTimeout(timeout); }
 }
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
@@ -111,12 +90,15 @@ const upload = multer({
   },
 });
 
-// ─── IA: system prompt ────────────────────────────────────────────────────────
-const STYLE_GUIDE = {
-  direto: 'Seja direto, objetivo e conciso. Sem rodeios.',
-  técnico: 'Use terminologia técnica precisa. Inclua detalhes de implementação.',
-  analítico: 'Analise profundamente, apresente prós e contras.',
-  estratégico: 'Foque em planejamento, impacto de longo prazo e visão macro.',
+// ─── System prompt ────────────────────────────────────────────────────────────
+const PERSONALITY_GUIDE = {
+  direto:      'Seja direto, objetivo e conciso. Sem rodeios.',
+  tecnico:     'Use terminologia técnica precisa. Inclua detalhes de implementação quando relevante.',
+  analitico:   'Analise profundamente. Apresente prós e contras. Questione premissas.',
+  estrategico: 'Foque em planejamento, impacto de longo prazo e visão macro.',
+  sarcastico:  'Seja levemente sarcástico e irônico, mas sempre útil. Use humor ácido com moderação.',
+  bem_humorado:'Seja descontraído, bem-humorado e use analogias divertidas. Mantenha a precisão.',
+  empatico:    'Seja caloroso, empático e encorajador. Valide sentimentos antes de resolver problemas.',
 };
 
 const MEMORY_KEYWORDS = [
@@ -125,40 +107,58 @@ const MEMORY_KEYWORDS = [
   'padrão', 'regra', 'convenção', 'arquitetura', 'estrutura', 'configuração',
 ];
 
-async function buildSystemPrompt(projectId, memoryMode) {
-  // Sem projeto: prompt genérico
-  if (!projectId || projectId === 'none') {
-    return `Você é o Solaris, um assistente de IA pessoal. Seja útil, preciso e direto. Nunca invente informações.`;
+async function buildSystemPrompt(projectId, memoryMode, userId) {
+  // Carregar personalidade do usuário se houver
+  let personalityText = PERSONALITY_GUIDE.direto;
+  let customTraits = '';
+  if (userId) {
+    const settings = await getAsync('SELECT personality, custom_traits FROM user_settings WHERE user_id = $1', [userId]).catch(() => null);
+    if (settings) {
+      personalityText = PERSONALITY_GUIDE[settings.personality] || PERSONALITY_GUIDE.direto;
+      customTraits = settings.custom_traits || '';
+    }
+  }
+
+  // Sem projeto: prompt genérico com personalidade
+  if (!projectId) {
+    let prompt = `Você é o Solaris, um assistente de IA pessoal.\n\n`;
+    prompt += `=== ESTILO ===\n${personalityText}\n`;
+    if (customTraits) prompt += `Traços adicionais: ${customTraits}\n`;
+    prompt += `\nNunca invente informações. Seja útil e preciso.`;
+    return prompt;
   }
 
   const project = await getAsync('SELECT * FROM projects WHERE id = $1', [projectId]);
-  if (!project) return 'Você é um assistente de IA útil e preciso.';
+  if (!project) {
+    let prompt = `Você é o Solaris, um assistente de IA pessoal.\n${personalityText}`;
+    if (customTraits) prompt += `\nTraços: ${customTraits}`;
+    return prompt;
+  }
 
-  let prompt = `Você é o Solaris, um assistente de IA especializado operando dentro de um projeto específico.\n\n`;
-  prompt += `=== CONTEXTO DO PROJETO ===\n`;
-  prompt += `Nome: ${project.name}\n`;
-  prompt += `Objetivo: ${project.objective || 'Ajudar o usuário em suas tarefas'}\n`;
-  prompt += `Estilo: ${STYLE_GUIDE[project.response_style] || STYLE_GUIDE.direto}\n\n`;
-  prompt += `Diretrizes: evite respostas genéricas, priorize utilidade prática. Nunca invente informações.\n\n`;
+  let prompt = `Você é o Solaris, um assistente de IA pessoal operando dentro de um projeto específico.\n\n`;
+  prompt += `=== PROJETO ===\nNome: ${project.name}\n`;
+  if (project.objective) prompt += `Objetivo: ${project.objective}\n`;
+  prompt += `\n=== ESTILO ===\n${personalityText}\n`;
+  if (customTraits) prompt += `Traços adicionais: ${customTraits}\n`;
+  prompt += `\nEvite respostas genéricas. Nunca invente informações.\n\n`;
 
   const memories = memoryMode === 'global'
-    ? await allAsync('SELECT content FROM memories ORDER BY created_at DESC LIMIT $1', [8])
-    : await allAsync('SELECT content FROM memories WHERE project_id = $1 ORDER BY created_at DESC LIMIT $2', [projectId, 5]);
+    ? await allAsync('SELECT content FROM memories ORDER BY created_at DESC LIMIT 8').catch(() => [])
+    : await allAsync('SELECT content FROM memories WHERE project_id = $1 ORDER BY created_at DESC LIMIT 5', [projectId]).catch(() => []);
 
   if (memories.length > 0) {
-    prompt += `=== MEMÓRIAS RECENTES ===\n`;
+    prompt += `=== MEMÓRIAS ===\n`;
     memories.forEach((m, i) => { prompt += `[${i + 1}] ${m.content}\n`; });
     prompt += '\n';
   }
 
-  const files = await allAsync('SELECT original_name, extracted_text FROM files WHERE project_id = $1', [projectId]);
+  const files = await allAsync('SELECT original_name, extracted_text FROM files WHERE project_id = $1', [projectId]).catch(() => []);
   if (files.length > 0) {
-    const MAX = 12000;
     prompt += `=== ARQUIVOS DE REFERÊNCIA ===\n`;
     for (const file of files) {
-      const snippet = (file.extracted_text || 'Sem texto extraído').substring(0, 2000);
-      const block = `\n[${file.original_name}]\n${snippet}${file.extracted_text?.length > 2000 ? '...[truncado]' : ''}\n`;
-      if (prompt.length + block.length > MAX) break;
+      const snippet = (file.extracted_text || '').substring(0, 2000);
+      const block = `\n[${file.original_name}]\n${snippet}${(file.extracted_text?.length || 0) > 2000 ? '...[truncado]' : ''}\n`;
+      if (prompt.length + block.length > 12000) break;
       prompt += block;
     }
   }
@@ -166,20 +166,18 @@ async function buildSystemPrompt(projectId, memoryMode) {
 }
 
 async function extractMemories(projectId, response) {
-  if (!projectId || projectId === 'none') return;
+  if (!projectId) return;
   const candidates = response
     .split(/[.!?]+\s+/)
     .filter(s => s.length > 50 && MEMORY_KEYWORDS.some(k => s.toLowerCase().includes(k)))
     .slice(0, 2);
   for (const content of candidates) {
-    await runAsync('INSERT INTO memories (project_id, content, source) VALUES ($1, $2, $3)', [projectId, content.trim(), 'auto']);
+    await runAsync('INSERT INTO memories (project_id, content, source) VALUES ($1, $2, $3)', [projectId, content.trim(), 'auto']).catch(() => {});
   }
-  // Limitar a 20 memórias por projeto
-  await runAsync(`
-    DELETE FROM memories WHERE project_id = $1 AND id NOT IN (
-      SELECT id FROM memories WHERE project_id = $1 ORDER BY created_at DESC LIMIT 20
-    )
-  `, [projectId]).catch(() => {});
+  await runAsync(
+    `DELETE FROM memories WHERE project_id = $1 AND id NOT IN (SELECT id FROM memories WHERE project_id = $1 ORDER BY created_at DESC LIMIT 20)`,
+    [projectId]
+  ).catch(() => {});
 }
 
 async function autoTitle(chatId, firstMessage) {
@@ -189,13 +187,37 @@ async function autoTitle(chatId, firstMessage) {
       'Você gera títulos curtos e precisos.'
     );
     await runAsync('UPDATE chats SET title = $1 WHERE id = $2', [title.trim().substring(0, 50), chatId]);
-  } catch { /* silencioso */ }
+  } catch { }
 }
 
 // ─── ROTAS ────────────────────────────────────────────────────────────────────
 
-// Health check
 app.get('/api/health', (_, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
+
+// ── Configurações do usuário ──────────────────────────────────────────────────
+
+app.get('/api/settings', async (req, res) => {
+  const userId = req.headers['x-user-id'];
+  if (!userId) return res.status(400).json({ error: 'x-user-id obrigatório' });
+  try {
+    const settings = await getAsync('SELECT * FROM user_settings WHERE user_id = $1', [userId]);
+    res.json(settings || { user_id: userId, personality: 'direto', custom_traits: '' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/settings', async (req, res) => {
+  const userId = req.headers['x-user-id'];
+  if (!userId) return res.status(400).json({ error: 'x-user-id obrigatório' });
+  const { personality = 'direto', custom_traits = '' } = req.body;
+  try {
+    await runAsync(`
+      INSERT INTO user_settings (user_id, personality, custom_traits, updated_at)
+      VALUES ($1, $2, $3, NOW())
+      ON CONFLICT (user_id) DO UPDATE SET personality = $2, custom_traits = $3, updated_at = NOW()
+    `, [userId, personality, custom_traits]);
+    res.json({ ok: true, personality, custom_traits });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
 
 // ── Projetos ──────────────────────────────────────────────────────────────────
 
@@ -240,13 +262,9 @@ app.patch('/api/projects/:id', async (req, res) => {
     const project = await getAsync('SELECT id FROM projects WHERE id = $1 AND user_id = $2', [req.params.id, userId]);
     if (!project) return res.status(404).json({ error: 'Projeto não encontrado' });
     await runAsync(`
-      UPDATE projects SET
-        name           = COALESCE($1, name),
-        objective      = COALESCE($2, objective),
-        response_style = COALESCE($3, response_style),
-        memory_mode    = COALESCE($4, memory_mode),
-        updated_at     = NOW()
-      WHERE id = $5
+      UPDATE projects SET name=COALESCE($1,name), objective=COALESCE($2,objective),
+        response_style=COALESCE($3,response_style), memory_mode=COALESCE($4,memory_mode), updated_at=NOW()
+      WHERE id=$5
     `, [name ?? null, objective ?? null, response_style ?? null, memory_mode ?? null, req.params.id]);
     res.json(await getAsync('SELECT * FROM projects WHERE id = $1', [req.params.id]));
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -264,7 +282,7 @@ app.delete('/api/projects/:id', async (req, res) => {
 
 // ── Chats ─────────────────────────────────────────────────────────────────────
 
-// Suporta projectId = "none" para chats sem projeto
+// projectId pode ser "none" = chat sem projeto
 app.post('/api/projects/:id/chats', async (req, res) => {
   const userId = req.headers['x-user-id'];
   const projectId = req.params.id === 'none' ? null : req.params.id;
@@ -274,22 +292,14 @@ app.post('/api/projects/:id/chats', async (req, res) => {
       if (!project) return res.status(404).json({ error: 'Projeto não encontrado' });
     }
     const chatId = randomUUID();
-    await runAsync(
-      'INSERT INTO chats (id, project_id, title) VALUES ($1,$2,$3)',
-      [chatId, projectId, 'Nova conversa']
-    );
+    await runAsync('INSERT INTO chats (id, project_id, title) VALUES ($1,$2,$3)', [chatId, projectId, 'Nova conversa']);
     res.status(201).json(await getAsync('SELECT * FROM chats WHERE id = $1', [chatId]));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.delete('/api/projects/:id/chats/:chatId', async (req, res) => {
   try {
-    const projectId = req.params.id === 'none' ? null : req.params.id;
-    if (projectId) {
-      await runAsync('DELETE FROM chats WHERE id = $1 AND project_id = $2', [req.params.chatId, projectId]);
-    } else {
-      await runAsync('DELETE FROM chats WHERE id = $1', [req.params.chatId]);
-    }
+    await runAsync('DELETE FROM chats WHERE id = $1', [req.params.chatId]);
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -307,23 +317,20 @@ app.get('/api/messages/chat/:chatId', async (req, res) => {
 });
 
 app.post('/api/messages', async (req, res) => {
+  const userId = req.headers['x-user-id'];
   const { project_id, chat_id, message } = req.body;
-  if (!chat_id || !message)
-    return res.status(400).json({ error: 'chat_id e message são obrigatórios' });
+  if (!chat_id || !message) return res.status(400).json({ error: 'chat_id e message são obrigatórios' });
 
-  const projectId = project_id && project_id !== 'none' ? project_id : null;
+  const projectId = (project_id && project_id !== 'none') ? project_id : null;
 
   try {
     await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'user', message]);
 
-    const history = await allAsync(
-      'SELECT role, content FROM messages WHERE chat_id = $1 ORDER BY created_at ASC',
-      [chat_id]
-    );
+    const history = await allAsync('SELECT role, content FROM messages WHERE chat_id = $1 ORDER BY created_at ASC', [chat_id]);
     const isFirst = history.length === 1;
 
-    const project = projectId ? await getAsync('SELECT memory_mode FROM projects WHERE id = $1', [projectId]) : null;
-    const sysPrompt = await buildSystemPrompt(projectId, project?.memory_mode);
+    const project = projectId ? await getAsync('SELECT memory_mode FROM projects WHERE id = $1', [projectId]).catch(() => null) : null;
+    const sysPrompt = await buildSystemPrompt(projectId, project?.memory_mode, userId);
     const apiHistory = history.slice(-20).map(m => ({ role: m.role, content: m.content }));
 
     const responseText = await groqChat(apiHistory, sysPrompt);
@@ -343,61 +350,47 @@ app.post('/api/messages', async (req, res) => {
 
 // ── Edição de mensagem ────────────────────────────────────────────────────────
 app.post('/api/messages/edit', async (req, res) => {
+  const userId = req.headers['x-user-id'];
   const { chat_id, project_id, message_index, new_content, original_content } = req.body;
   if (!chat_id || !new_content || message_index === undefined)
     return res.status(400).json({ error: 'chat_id, new_content e message_index são obrigatórios' });
 
-  const projectId = project_id && project_id !== 'none' ? project_id : null;
+  const projectId = (project_id && project_id !== 'none') ? project_id : null;
 
   try {
-    // Buscar todas as mensagens do chat em ordem
     const allMessages = await allAsync(
       'SELECT id, role, content, edit_history FROM messages WHERE chat_id = $1 ORDER BY created_at ASC',
       [chat_id]
     );
-
-    if (message_index >= allMessages.length)
-      return res.status(400).json({ error: 'Índice de mensagem inválido' });
+    if (message_index >= allMessages.length) return res.status(400).json({ error: 'Índice inválido' });
 
     const targetMsg = allMessages[message_index];
-    if (targetMsg.role !== 'user')
-      return res.status(400).json({ error: 'Só é possível editar mensagens do usuário' });
+    if (targetMsg.role !== 'user') return res.status(400).json({ error: 'Só é possível editar mensagens do usuário' });
 
-    // Guardar histórico de edições
     const editHistory = Array.isArray(targetMsg.edit_history) ? targetMsg.edit_history : [];
     editHistory.push({ content: original_content || targetMsg.content, edited_at: new Date().toISOString() });
 
-    // Atualizar mensagem editada
     await runAsync(
-      'UPDATE messages SET content = $1, edited = TRUE, edit_history = $2, updated_at = NOW() WHERE id = $3',
+      'UPDATE messages SET content=$1, edited=TRUE, edit_history=$2, updated_at=NOW() WHERE id=$3',
       [new_content, JSON.stringify(editHistory), targetMsg.id]
     );
 
-    // Remover mensagens posteriores (a partir do próximo índice)
     const idsToDelete = allMessages.slice(message_index + 1).map(m => m.id);
     if (idsToDelete.length > 0) {
-      await runAsync(
-        `DELETE FROM messages WHERE id = ANY($1::int[])`,
-        [idsToDelete]
-      );
+      await runAsync(`DELETE FROM messages WHERE id = ANY($1::int[])`, [idsToDelete]);
     }
 
-    // Remontar histórico limpo para a IA (até a mensagem editada)
-    const cleanHistory = allMessages
-      .slice(0, message_index + 1)
-      .map(m => ({
-        role: m.role,
-        content: m.id === targetMsg.id ? new_content : m.content
-      }));
+    const cleanHistory = allMessages.slice(0, message_index + 1).map(m => ({
+      role: m.role,
+      content: m.id === targetMsg.id ? new_content : m.content,
+    }));
 
-    const project = projectId ? await getAsync('SELECT memory_mode FROM projects WHERE id = $1', [projectId]) : null;
-    const sysPrompt = await buildSystemPrompt(projectId, project?.memory_mode);
+    const project = projectId ? await getAsync('SELECT memory_mode FROM projects WHERE id = $1', [projectId]).catch(() => null) : null;
+    const sysPrompt = await buildSystemPrompt(projectId, project?.memory_mode, userId);
     const responseText = await groqChat(cleanHistory.slice(-20), sysPrompt);
 
-    // Salvar nova resposta da IA
     await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'assistant', responseText]);
     await runAsync('UPDATE chats SET updated_at = NOW() WHERE id = $1', [chat_id]);
-
     if (projectId) extractMemories(projectId, responseText).catch(console.error);
 
     res.json({ response: responseText });
@@ -411,10 +404,7 @@ app.post('/api/messages/edit', async (req, res) => {
 
 app.get('/api/files/:projectId', async (req, res) => {
   try {
-    const rows = await allAsync(
-      'SELECT id, original_name, mime_type, size, created_at FROM files WHERE project_id = $1 ORDER BY created_at DESC',
-      [req.params.projectId]
-    );
+    const rows = await allAsync('SELECT id, original_name, mime_type, size, created_at FROM files WHERE project_id = $1 ORDER BY created_at DESC', [req.params.projectId]);
     res.json(rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -425,7 +415,6 @@ app.post('/api/files/:projectId', upload.single('file'), async (req, res) => {
     const ext = path.extname(req.file.originalname).toLowerCase();
     const textExts = ['.txt', '.md', '.json', '.js', '.ts', '.py', '.css', '.html', '.csv'];
     let extractedText = '';
-
     if (textExts.includes(ext)) {
       extractedText = fs.readFileSync(req.file.path, 'utf-8').substring(0, 50000);
     } else if (ext === '.pdf') {
@@ -435,7 +424,6 @@ app.post('/api/files/:projectId', upload.single('file'), async (req, res) => {
         extractedText = data.text.substring(0, 50000);
       } catch { extractedText = '[PDF: não foi possível extrair texto]'; }
     }
-
     const fileId = randomUUID();
     await runAsync(
       'INSERT INTO files (id, project_id, original_name, mime_type, size, extracted_text, path) VALUES ($1,$2,$3,$4,$5,$6,$7)',
@@ -455,17 +443,12 @@ app.delete('/api/files/:projectId/:fileId', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── Migração visitante → conta ────────────────────────────────────────────────
+// ── Migração ──────────────────────────────────────────────────────────────────
 app.post('/api/migrate', async (req, res) => {
   const { guest_id, user_id } = req.body;
-  if (!guest_id || !user_id || guest_id === user_id)
-    return res.json({ ok: true, migrated: 0 });
+  if (!guest_id || !user_id || guest_id === user_id) return res.json({ ok: true, migrated: 0 });
   try {
-    const result = await runAsync(
-      'UPDATE projects SET user_id = $1 WHERE user_id = $2',
-      [user_id, guest_id]
-    );
-    console.log(`✅ Migração: ${result.changes} projeto(s) transferido(s) de ${guest_id} → ${user_id}`);
+    const result = await runAsync('UPDATE projects SET user_id = $1 WHERE user_id = $2', [user_id, guest_id]);
     res.json({ ok: true, migrated: result.changes });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -475,29 +458,23 @@ app.get('/api/share/:chatId', async (req, res) => {
   try {
     const chat = await getAsync('SELECT * FROM chats WHERE id = $1', [req.params.chatId]);
     if (!chat) return res.status(404).json({ error: 'Chat não encontrado' });
-    const messages = await allAsync(
-      'SELECT role, content, created_at FROM messages WHERE chat_id = $1 ORDER BY created_at ASC',
-      [req.params.chatId]
-    );
+    const messages = await allAsync('SELECT role, content, created_at FROM messages WHERE chat_id = $1 ORDER BY created_at ASC', [req.params.chatId]);
     res.json({ chat, messages });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ─── Error handler global ─────────────────────────────────────────────────────
+// ─── Error handler ────────────────────────────────────────────────────────────
 process.on('unhandledRejection', (reason) => console.error('Unhandled rejection:', reason));
-
 app.use((err, req, res, next) => {
   console.error('Erro não tratado:', err);
-  res.status(err.status || 500).json({ error: err.message || 'Erro interno do servidor' });
+  res.status(err.status || 500).json({ error: err.message || 'Erro interno' });
 });
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 (async () => {
   try {
     await initDb();
-    app.listen(PORT, '0.0.0.0', () => {
-      console.log(`✅ Solaris backend rodando na porta ${PORT}`);
-    });
+    app.listen(PORT, '0.0.0.0', () => console.log(`✅ Solaris backend rodando na porta ${PORT}`));
   } catch (err) {
     console.error('❌ Falha ao iniciar:', err);
     process.exit(1);

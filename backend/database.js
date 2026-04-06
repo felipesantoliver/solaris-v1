@@ -1,8 +1,5 @@
 import pg from 'pg';
-import dns from 'dns';
-
-// Forçar resolução IPv4 — Render free tier não suporta IPv6
-dns.setDefaultResultOrder('ipv4first');
+import dns from 'dns/promises';
 
 const { Pool } = pg;
 
@@ -10,22 +7,45 @@ if (!process.env.DATABASE_URL) {
   throw new Error('❌ DATABASE_URL não definida nas variáveis de ambiente');
 }
 
-// Extrair host da connection string e garantir IPv4
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false },
-  max: 10,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 10000,
-  family: 4, // Forçar IPv4
-});
+// Resolve o host para IPv4 antes de conectar — Render free tier não suporta IPv6
+async function resolveIPv4(connectionString) {
+  try {
+    const url = new URL(connectionString);
+    const hostname = url.hostname;
+    // Já é IPv4 literal
+    if (/^\d+\.\d+\.\d+\.\d+$/.test(hostname)) return connectionString;
+    const result = await dns.resolve4(hostname);
+    if (!result || result.length === 0) return connectionString;
+    const ipv4 = result[0];
+    url.hostname = ipv4;
+    // Manter o hostname original como parâmetro SNI para o SSL
+    return url.toString();
+  } catch {
+    return connectionString;
+  }
+}
 
-pool.on('error', (err) => {
-  console.error('❌ Erro no pool PostgreSQL:', err.message);
-});
+let pool;
+
+export async function getPool() {
+  if (pool) return pool;
+  const resolvedUrl = await resolveIPv4(process.env.DATABASE_URL);
+  pool = new Pool({
+    connectionString: resolvedUrl,
+    ssl: { rejectUnauthorized: false },
+    max: 10,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 10000,
+  });
+  pool.on('error', (err) => {
+    console.error('❌ Erro no pool PostgreSQL:', err.message);
+  });
+  return pool;
+}
 
 export async function runAsync(sql, params = []) {
-  const client = await pool.connect();
+  const p = await getPool();
+  const client = await p.connect();
   try {
     const result = await client.query(sql, params);
     return { lastID: result.oid ?? null, changes: result.rowCount };
@@ -35,7 +55,8 @@ export async function runAsync(sql, params = []) {
 }
 
 export async function getAsync(sql, params = []) {
-  const client = await pool.connect();
+  const p = await getPool();
+  const client = await p.connect();
   try {
     const result = await client.query(sql, params);
     return result.rows[0] ?? undefined;
@@ -45,7 +66,8 @@ export async function getAsync(sql, params = []) {
 }
 
 export async function allAsync(sql, params = []) {
-  const client = await pool.connect();
+  const p = await getPool();
+  const client = await p.connect();
   try {
     const result = await client.query(sql, params);
     return result.rows;
@@ -55,7 +77,8 @@ export async function allAsync(sql, params = []) {
 }
 
 export async function initDb() {
-  const client = await pool.connect();
+  const p = await getPool();
+  const client = await p.connect();
   try {
     await client.query(`
       CREATE TABLE IF NOT EXISTS projects (
@@ -78,14 +101,14 @@ export async function initDb() {
       );
 
       CREATE TABLE IF NOT EXISTS messages (
-        id              SERIAL PRIMARY KEY,
-        chat_id         TEXT        NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
-        role            TEXT        NOT NULL,
-        content         TEXT        NOT NULL,
-        edited          BOOLEAN     DEFAULT FALSE,
-        edit_history    JSONB       DEFAULT '[]',
-        created_at      TIMESTAMPTZ DEFAULT NOW(),
-        updated_at      TIMESTAMPTZ DEFAULT NOW()
+        id           SERIAL PRIMARY KEY,
+        chat_id      TEXT        NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+        role         TEXT        NOT NULL,
+        content      TEXT        NOT NULL,
+        edited       BOOLEAN     DEFAULT FALSE,
+        edit_history JSONB       DEFAULT '[]',
+        created_at   TIMESTAMPTZ DEFAULT NOW(),
+        updated_at   TIMESTAMPTZ DEFAULT NOW()
       );
 
       CREATE TABLE IF NOT EXISTS memories (
@@ -106,18 +129,31 @@ export async function initDb() {
         path           TEXT,
         created_at     TIMESTAMPTZ DEFAULT NOW()
       );
+
+      CREATE TABLE IF NOT EXISTS user_settings (
+        user_id        TEXT PRIMARY KEY,
+        personality    TEXT        DEFAULT 'direto',
+        custom_traits  TEXT        DEFAULT '',
+        updated_at     TIMESTAMPTZ DEFAULT NOW()
+      );
     `);
 
-    // Migrations para tabelas já existentes
-    await client.query(`
-      ALTER TABLE chats ALTER COLUMN project_id DROP NOT NULL;
-    `).catch(() => {});
-
-    await client.query(`
-      ALTER TABLE messages ADD COLUMN IF NOT EXISTS edited BOOLEAN DEFAULT FALSE;
-      ALTER TABLE messages ADD COLUMN IF NOT EXISTS edit_history JSONB DEFAULT '[]';
-      ALTER TABLE messages ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
-    `).catch(() => {});
+    // Migrations seguras para tabelas já existentes
+    const migrations = [
+      `ALTER TABLE chats ALTER COLUMN project_id DROP NOT NULL`,
+      `ALTER TABLE messages ADD COLUMN IF NOT EXISTS edited BOOLEAN DEFAULT FALSE`,
+      `ALTER TABLE messages ADD COLUMN IF NOT EXISTS edit_history JSONB DEFAULT '[]'`,
+      `ALTER TABLE messages ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`,
+      `CREATE TABLE IF NOT EXISTS user_settings (
+        user_id TEXT PRIMARY KEY,
+        personality TEXT DEFAULT 'direto',
+        custom_traits TEXT DEFAULT '',
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )`,
+    ];
+    for (const sql of migrations) {
+      await client.query(sql).catch(() => {});
+    }
 
     console.log('✅ Tabelas verificadas/criadas');
   } finally {
