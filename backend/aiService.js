@@ -1,15 +1,7 @@
 // ============================================================
-//  aiService.js — Camada de IA do Solaris (MVP)
+//  aiService.js — Camada de IA do Solaris
 //
-//  TEXTO (geração de respostas):
-//    Groq  →  llama-3.3-70b-versatile  (rápido, gratuito)
-//
-//  EMBEDDING (memória semântica):
-//    Desativado no MVP — memória usa as mais recentes por ora.
-//    TODO: adicionar Cohere ou outro provedor de embedding gratuito.
-//
-//  IMAGENS:
-//    TODO: implementar quando necessário.
+//  PROVEDOR: Groq  →  llama-3.3-70b-versatile
 //
 //  Variáveis de ambiente necessárias:
 //    GROQ_API_KEY  →  https://console.groq.com
@@ -24,7 +16,7 @@ if (!GROQ_API_KEY) {
 }
 
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
-const GROQ_MODEL = 'llama-3.3-70b-versatile'; // troque por 'llama3-8b-8192' para respostas mais rápidas
+const GROQ_MODEL = 'llama-3.3-70b-versatile';
 
 // ─── Retry com backoff exponencial ───────────────────────────────────────────
 
@@ -35,7 +27,6 @@ async function withRetry(fn, maxRetries = 3, baseDelay = 3000) {
     } catch (err) {
       const is429 = err.message?.includes('429') || err.status === 429;
       const isLast = attempt === maxRetries;
-
       if (is429 && !isLast) {
         const waitMs = baseDelay * Math.pow(2, attempt);
         console.warn(`⚠️ Rate limit (429). Aguardando ${waitMs / 1000}s...`);
@@ -47,13 +38,23 @@ async function withRetry(fn, maxRetries = 3, baseDelay = 3000) {
   }
 }
 
-// ─── PROVEDOR DE TEXTO: Groq ──────────────────────────────────────────────────
+// ─── Geração de texto via Groq ────────────────────────────────────────────────
 
-export async function generateText(prompt) {
+export async function generateText(messages, systemPrompt) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30000);
 
   try {
+    const body = {
+      model: GROQ_MODEL,
+      max_tokens: 2048,
+      temperature: 0.7,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        ...messages,
+      ],
+    };
+
     const response = await withRetry(() =>
       fetch(GROQ_API_URL, {
         method: 'POST',
@@ -61,12 +62,7 @@ export async function generateText(prompt) {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${GROQ_API_KEY}`,
         },
-        body: JSON.stringify({
-          model: GROQ_MODEL,
-          messages: [{ role: 'user', content: prompt }],
-          max_tokens: 2048,
-          temperature: 0.7,
-        }),
+        body: JSON.stringify(body),
         signal: controller.signal,
       })
     );
@@ -79,37 +75,31 @@ export async function generateText(prompt) {
     const data = await response.json();
     const text = data.choices[0].message.content;
     console.log('✅ Groq respondeu');
-    return { text, provider: 'groq' };
+    return text;
   } finally {
     clearTimeout(timeout);
   }
 }
 
-// ─── EMBEDDING: desativado no MVP ────────────────────────────────────────────
-//  Groq não possui modelo de embedding próprio.
-//  Retorna null — o sistema usa memórias recentes como fallback.
+// ─── Busca memórias recentes (sem embedding) ──────────────────────────────────
 
-export async function generateEmbedding(_text) {
-  return null;
-}
-
-// ─── Busca memórias (sem embedding: retorna as mais recentes) ─────────────────
-
-export async function findSimilarMemories(projectId, _queryEmbedding, limit = 5, global = false) {
-  let sql = 'SELECT id, content, project_id FROM memories';
-  const params = [];
-  if (!global) {
-    sql += ' WHERE project_id = ?';
-    params.push(projectId);
+async function findMemories(projectId, limit = 5, global = false) {
+  if (global) {
+    return await allAsync(
+      `SELECT id, content, project_id FROM memories ORDER BY created_at DESC LIMIT $1`,
+      [limit]
+    );
   }
-  sql += ` ORDER BY created_at DESC LIMIT ${limit}`;
-  return await allAsync(sql, params);
+  return await allAsync(
+    `SELECT id, content, project_id FROM memories WHERE project_id = $1 ORDER BY created_at DESC LIMIT $2`,
+    [projectId, limit]
+  );
 }
 
-// ─── System prompt ────────────────────────────────────────────────────────────
+// ─── Monta system prompt ──────────────────────────────────────────────────────
 
-export async function buildSystemPrompt(projectId, userMessage, memoryMode) {
-  const project = await getAsync('SELECT * FROM projects WHERE id = ?', [projectId]);
+async function buildSystemPrompt(projectId, memoryMode) {
+  const project = await getAsync('SELECT * FROM projects WHERE id = $1', [projectId]);
   if (!project) return 'Você é um assistente de IA útil e preciso.';
 
   const styleGuide = {
@@ -124,15 +114,9 @@ export async function buildSystemPrompt(projectId, userMessage, memoryMode) {
   prompt += `Nome: ${project.name}\n`;
   prompt += `Objetivo: ${project.objective || 'Ajudar o usuário em suas tarefas'}\n`;
   prompt += `Estilo: ${styleGuide[project.response_style] || styleGuide.direto}\n\n`;
-  prompt += `Diretrizes gerais: evite respostas genéricas, priorize utilidade prática. Nunca invente informações.\n\n`;
+  prompt += `Diretrizes: evite respostas genéricas, priorize utilidade prática. Nunca invente informações.\n\n`;
 
-  let memories = [];
-  if (memoryMode === 'isolado') {
-    memories = await findSimilarMemories(projectId, null, 5, false);
-  } else if (memoryMode === 'global') {
-    memories = await findSimilarMemories(projectId, null, 8, true);
-  }
-
+  const memories = await findMemories(projectId, memoryMode === 'global' ? 8 : 5, memoryMode === 'global');
   if (memories.length > 0) {
     prompt += `=== MEMÓRIAS RECENTES ===\n`;
     memories.forEach((m, i) => { prompt += `[${i + 1}] ${m.content}\n`; });
@@ -140,15 +124,20 @@ export async function buildSystemPrompt(projectId, userMessage, memoryMode) {
   }
 
   const files = await allAsync(
-    'SELECT original_name, extracted_text FROM files WHERE project_id = ?',
+    'SELECT original_name, extracted_text FROM files WHERE project_id = $1',
     [projectId]
   );
   if (files.length > 0) {
+    const MAX_CHARS = 12000;
+    let used = prompt.length;
     prompt += `=== ARQUIVOS DE REFERÊNCIA ===\n`;
     for (const file of files) {
       const snippet = file.extracted_text?.substring(0, 2000) || 'Sem texto extraído';
       const truncated = file.extracted_text?.length > 2000 ? '... [truncado]' : '';
-      prompt += `\n[ARQUIVO: ${file.original_name}]\n${snippet}${truncated}\n`;
+      const block = `\n[ARQUIVO: ${file.original_name}]\n${snippet}${truncated}\n`;
+      if (used + block.length > MAX_CHARS) break;
+      prompt += block;
+      used += block.length;
     }
     prompt += '\n';
   }
@@ -158,8 +147,8 @@ export async function buildSystemPrompt(projectId, userMessage, memoryMode) {
 
 // ─── Extrai e salva memórias importantes ─────────────────────────────────────
 
-async function extractAndSaveMemories(projectId, userMessage, assistantResponse) {
-  const importantKeywords = [
+async function extractAndSaveMemories(projectId, assistantResponse) {
+  const keywords = [
     'importante', 'lembre-se', 'concluímos', 'aprendemos', 'descobrimos',
     'fato', 'sabemos que', 'definimos', 'decidimos', 'sempre', 'nunca',
     'padrão', 'regra', 'convenção', 'arquitetura', 'estrutura', 'configuração',
@@ -167,15 +156,15 @@ async function extractAndSaveMemories(projectId, userMessage, assistantResponse)
 
   const candidates = assistantResponse
     .split(/[.!?]+\s+/)
-    .filter(s => s.trim().length > 50 && importantKeywords.some(kw => s.toLowerCase().includes(kw)))
+    .filter(s => s.trim().length > 50 && keywords.some(kw => s.toLowerCase().includes(kw)))
     .slice(0, 2);
 
-  for (const trimmed of candidates) {
+  for (const content of candidates) {
     await runAsync(
-      'INSERT INTO memories (project_id, content, embedding, source) VALUES (?, ?, ?, ?)',
-      [projectId, trimmed, null, 'auto']
+      'INSERT INTO memories (project_id, content, source) VALUES ($1, $2, $3)',
+      [projectId, content.trim(), 'auto']
     );
-    console.log('💾 Memória salva:', trimmed.substring(0, 60) + '...');
+    console.log('💾 Memória salva:', content.substring(0, 60) + '...');
   }
 }
 
@@ -183,11 +172,14 @@ async function extractAndSaveMemories(projectId, userMessage, assistantResponse)
 
 async function updateChatTitle(chatId, userMessage) {
   try {
-    const prompt = `Gere um título curto (máximo 5 palavras) para uma conversa que começa com: "${userMessage.substring(0, 100)}". Responda apenas com o título, sem aspas ou pontuação final.`;
-    const { text } = await generateText(prompt);
-    const title = text.trim().substring(0, 50);
-    await runAsync('UPDATE chats SET title = ? WHERE id = ?', [title, chatId]);
-    return title;
+    const titlePrompt = `Gere um título curto (máximo 5 palavras) para uma conversa que começa com: "${userMessage.substring(0, 100)}". Responda apenas com o título, sem aspas ou pontuação final.`;
+    const title = await generateText(
+      [{ role: 'user', content: titlePrompt }],
+      'Você gera títulos curtos e precisos.'
+    );
+    const clean = title.trim().substring(0, 50);
+    await runAsync('UPDATE chats SET title = $1 WHERE id = $2', [clean, chatId]);
+    return clean;
   } catch {
     return null;
   }
@@ -197,40 +189,40 @@ async function updateChatTitle(chatId, userMessage) {
 
 export async function sendMessage(projectId, chatId, userMessage) {
   await runAsync(
-    'INSERT INTO messages (chat_id, role, content) VALUES (?, ?, ?)',
+    'INSERT INTO messages (chat_id, role, content) VALUES ($1, $2, $3)',
     [chatId, 'user', userMessage]
   );
 
   const history = await allAsync(
-    'SELECT role, content FROM messages WHERE chat_id = ? ORDER BY created_at ASC',
+    'SELECT role, content FROM messages WHERE chat_id = $1 ORDER BY created_at ASC',
     [chatId]
   );
   const isFirstMessage = history.length === 1;
 
   const project = await getAsync(
-    'SELECT memory_mode, response_style, objective FROM projects WHERE id = ?',
+    'SELECT memory_mode FROM projects WHERE id = $1',
     [projectId]
   );
   if (!project) throw new Error('Projeto não encontrado');
 
-  const systemPrompt = await buildSystemPrompt(projectId, userMessage, project.memory_mode);
+  const systemPrompt = await buildSystemPrompt(projectId, project.memory_mode);
 
-  let fullPrompt = systemPrompt + `=== HISTÓRICO DA CONVERSA ===\n`;
-  for (const msg of history.slice(0, -1).slice(-20)) {
-    fullPrompt += `${msg.role === 'user' ? 'Usuário' : 'Assistente'}: ${msg.content}\n`;
-  }
-  fullPrompt += `\nUsuário: ${userMessage}\nAssistente:`;
+  // Últimas 20 mensagens como histórico para o modelo
+  const apiMessages = history.slice(-20).map(m => ({
+    role: m.role,
+    content: m.content,
+  }));
 
-  const { text: responseText } = await generateText(fullPrompt);
+  const responseText = await generateText(apiMessages, systemPrompt);
 
   await runAsync(
-    'INSERT INTO messages (chat_id, role, content) VALUES (?, ?, ?)',
+    'INSERT INTO messages (chat_id, role, content) VALUES ($1, $2, $3)',
     [chatId, 'assistant', responseText]
   );
-  await runAsync('UPDATE chats SET updated_at = CURRENT_TIMESTAMP WHERE id = ?', [chatId]);
+  await runAsync('UPDATE chats SET updated_at = NOW() WHERE id = $1', [chatId]);
 
   if (isFirstMessage) updateChatTitle(chatId, userMessage).catch(console.error);
-  extractAndSaveMemories(projectId, userMessage, responseText).catch(console.error);
+  extractAndSaveMemories(projectId, responseText).catch(console.error);
 
   return responseText;
 }

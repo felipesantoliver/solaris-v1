@@ -1,162 +1,110 @@
-import initSqlJs from 'sql.js';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import pg from 'pg';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DB_PATH = path.join(__dirname, 'database.sqlite');
+const { Pool } = pg;
 
-let db = null;
-let SQL = null;
-
-// Inicializa sql.js
-async function initSQL() {
-  if (!SQL) {
-    SQL = await initSqlJs();
-  }
-  return SQL;
+if (!process.env.DATABASE_URL) {
+  throw new Error('❌ DATABASE_URL não definida nas variáveis de ambiente');
 }
 
-// Abre ou cria o banco de dados
-async function openDb() {
-  if (!db) {
-    await initSQL();
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }, // necessário para Neon/Render
+  max: 10,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 5000,
+});
 
-    if (fs.existsSync(DB_PATH)) {
-      const fileBuffer = fs.readFileSync(DB_PATH);
-      db = new SQL.Database(fileBuffer);
-    } else {
-      db = new SQL.Database();
-    }
-  }
-  return db;
-}
+pool.on('error', (err) => {
+  console.error('❌ Erro inesperado no pool do PostgreSQL:', err.message);
+});
 
-// Salva o banco de dados em disco
-function saveDb() {
-  if (db) {
-    const data = db.export();
-    const buffer = Buffer.from(data);
-    fs.writeFileSync(DB_PATH, buffer);
-  }
-}
+// ─── Wrappers compatíveis com a API anterior (sql.js) ────────────────────────
 
-// Promise wrapper para executar SQL
-async function runAsync(sql, params = []) {
-  const database = await openDb();
+export async function runAsync(sql, params = []) {
+  const client = await pool.connect();
   try {
-    database.run(sql, params);
-    saveDb();
-    return { lastID: null, changes: database.getRowsModified() };
-  } catch (err) {
-    throw new Error(`SQL Error: ${err.message}`);
+    const result = await client.query(sql, params);
+    return { lastID: result.oid ?? null, changes: result.rowCount };
+  } finally {
+    client.release();
   }
 }
 
-// Promise wrapper para GET
-async function getAsync(sql, params = []) {
-  const database = await openDb();
+export async function getAsync(sql, params = []) {
+  const client = await pool.connect();
   try {
-    const stmt = database.prepare(sql);
-    stmt.bind(params);
-    if (stmt.step()) {
-      const row = stmt.getAsObject();
-      stmt.free();
-      return row;
-    }
-    stmt.free();
-    return undefined;
-  } catch (err) {
-    throw new Error(`SQL Error: ${err.message}`);
+    const result = await client.query(sql, params);
+    return result.rows[0] ?? undefined;
+  } finally {
+    client.release();
   }
 }
 
-// Promise wrapper para ALL
-async function allAsync(sql, params = []) {
-  const database = await openDb();
+export async function allAsync(sql, params = []) {
+  const client = await pool.connect();
   try {
-    const stmt = database.prepare(sql);
-    stmt.bind(params);
-    const rows = [];
-    while (stmt.step()) {
-      rows.push(stmt.getAsObject());
-    }
-    stmt.free();
-    return rows;
-  } catch (err) {
-    throw new Error(`SQL Error: ${err.message}`);
+    const result = await client.query(sql, params);
+    return result.rows;
+  } finally {
+    client.release();
   }
 }
+
+// ─── Inicializa tabelas ───────────────────────────────────────────────────────
 
 export async function initDb() {
-  const database = await openDb();
+  const client = await pool.connect();
+  try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS projects (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        objective TEXT,
+        response_style TEXT DEFAULT 'direto',
+        memory_mode TEXT DEFAULT 'isolado',
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
 
-  // Cria todas as tabelas
-  const createTableSQL = `
-    CREATE TABLE IF NOT EXISTS projects (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      name TEXT NOT NULL,
-      objective TEXT,
-      response_style TEXT DEFAULT 'direto',
-      memory_mode TEXT DEFAULT 'isolado',
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
+      CREATE TABLE IF NOT EXISTS chats (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        title TEXT DEFAULT 'Nova conversa',
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
 
-    CREATE TABLE IF NOT EXISTS chats (
-      id TEXT PRIMARY KEY,
-      project_id TEXT NOT NULL,
-      title TEXT DEFAULT 'Nova conversa',
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
-    );
+      CREATE TABLE IF NOT EXISTS messages (
+        id SERIAL PRIMARY KEY,
+        chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
 
-    CREATE TABLE IF NOT EXISTS messages (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      chat_id TEXT NOT NULL,
-      role TEXT NOT NULL,
-      content TEXT NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE
-    );
+      CREATE TABLE IF NOT EXISTS memories (
+        id SERIAL PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        content TEXT NOT NULL,
+        embedding TEXT,
+        source TEXT DEFAULT 'auto',
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
 
-    CREATE TABLE IF NOT EXISTS memories (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      project_id TEXT NOT NULL,
-      content TEXT NOT NULL,
-      embedding TEXT,
-      source TEXT DEFAULT 'auto',
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS files (
-      id TEXT PRIMARY KEY,
-      project_id TEXT NOT NULL,
-      original_name TEXT NOT NULL,
-      mime_type TEXT,
-      size INTEGER,
-      extracted_text TEXT,
-      path TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
-    );
-  `;
-
-  // Executa cada CREATE TABLE separadamente
-  const statements = createTableSQL.split(';').filter(s => s.trim());
-  for (const stmt of statements) {
-    try {
-      database.run(stmt);
-    } catch {
-      // Tabela já existe, ignora
-    }
+      CREATE TABLE IF NOT EXISTS files (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        original_name TEXT NOT NULL,
+        mime_type TEXT,
+        size INTEGER,
+        extracted_text TEXT,
+        path TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+    console.log('✅ Tabelas verificadas/criadas no PostgreSQL');
+  } finally {
+    client.release();
   }
-
-  saveDb();
-  console.log('✅ Tabelas verificadas/criadas');
 }
-
-export { runAsync, getAsync, allAsync };

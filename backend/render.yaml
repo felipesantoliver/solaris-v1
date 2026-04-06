@@ -6,7 +6,9 @@ services:
     buildCommand: npm install
     startCommand: node server.js
     envVars:
-      - key: GEMINI_API_KEY
+      - key: GROQ_API_KEY
+        sync: false
+      - key: DATABASE_URL
         sync: false
       - key: FRONTEND_URL
         sync: false
