@@ -1,5 +1,5 @@
 // ============================================================
-//  server.js — Solaris Backend
+//  server.js — Solaris Backend (com gpt-oss-120b no modo pensar)
 // ============================================================
 
 // Forçar DNS IPv4 — Render free tier não suporta IPv6
@@ -24,11 +24,10 @@ const GROQ_API_KEY = process.env.GROQ_API_KEY;
 if (!GROQ_API_KEY) throw new Error('❌ GROQ_API_KEY não definida');
 
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
-const GROQ_MODEL = 'llama-3.3-70b-versatile';
-const DEEPSEEK_MODEL = 'deepseek-r1-distill-llama-70b';
+const GROQ_MODEL = 'llama-3.3-70b-versatile';        // Modo normal
+const GPT_OSS_MODEL = 'gpt-oss-120b';                // Modo pensar (substitui DeepSeek)
 
 // Avalia se uma resposta merece o modo pensar
-// Retorna { shouldThink: bool, reason: string }
 function evaluateComplexity(userMessage, responseText) {
   const msg = userMessage.toLowerCase();
   const resp = responseText.toLowerCase();
@@ -437,7 +436,7 @@ app.post('/api/messages/edit', async (req, res) => {
   }
 });
 
-// ── Modo Pensar (DeepSeek-R1) ─────────────────────────────────────────────────
+// ── Modo Pensar (gpt-oss-120b) ────────────────────────────────────────────────
 app.post('/api/messages/think', async (req, res) => {
   const userId = req.headers['x-user-id'];
   const { chat_id, project_id, original_message, previous_response } = req.body;
@@ -460,7 +459,7 @@ app.post('/api/messages/think', async (req, res) => {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 60000);
 
-    let thinkingContent = '';
+    let thinkingContent = null;
     let finalResponse = '';
 
     try {
@@ -469,7 +468,7 @@ app.post('/api/messages/think', async (req, res) => {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GROQ_API_KEY}` },
           body: JSON.stringify({
-            model: DEEPSEEK_MODEL,
+            model: GPT_OSS_MODEL,                 // ← modelo gpt-oss-120b
             max_tokens: 4096,
             temperature: 0.6,
             messages: [
@@ -483,12 +482,13 @@ app.post('/api/messages/think', async (req, res) => {
 
       if (!deepRes.ok) {
         const err = await deepRes.json().catch(() => ({}));
-        throw new Error(`DeepSeek ${deepRes.status}: ${err.error?.message || deepRes.statusText}`);
+        throw new Error(`GPT-OSS ${deepRes.status}: ${err.error?.message || deepRes.statusText}`);
       }
 
       const data = await deepRes.json();
       const rawContent = data.choices[0].message.content || '';
 
+      // Opcional: se o modelo retornar tags <think> (improvável), extraímos. Caso contrário, usa todo o conteúdo.
       const thinkMatch = rawContent.match(/<think>([\s\S]*?)<\/think>/i);
       if (thinkMatch) {
         thinkingContent = thinkMatch[1].trim();
@@ -523,8 +523,8 @@ app.post('/api/messages/think', async (req, res) => {
 
     res.json({
       response: finalResponse,
-      thinking: thinkingContent || null,
-      model: DEEPSEEK_MODEL,
+      thinking: thinkingContent,   // pode ser null
+      model: GPT_OSS_MODEL,
     });
   } catch (err) {
     console.error('Erro no modo pensar:', err);
