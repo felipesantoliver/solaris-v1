@@ -40,4 +40,7 @@ IA & LLMs: DeepSeek API, Google Generative AI SDK (Gemini).
 Infra: Render (Backend), Vercel (Frontend), Cron-job.org (Keep-alive).
 
 📄 Licença
-Este projeto está sob a licença MIT. Por estar em fase inicial, sinta-se à vontade para contribuir com sugestões e melhorias.
+Este projeto está sob: License: Custom (Non-Commercial)
+
+Uso comercial deste projeto requer licença paga.
+Entre em contato para mais informações.
