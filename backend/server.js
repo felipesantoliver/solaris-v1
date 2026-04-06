@@ -2,6 +2,10 @@
 //  server.js — Solaris Backend
 // ============================================================
 
+// Forçar DNS IPv4 — Render free tier não suporta IPv6
+import { setDefaultResultOrder } from 'dns';
+setDefaultResultOrder('ipv4first');
+
 import express from 'express';
 import cors from 'cors';
 import multer from 'multer';
@@ -29,7 +33,6 @@ function evaluateComplexity(userMessage, responseText) {
   const msg = userMessage.toLowerCase();
   const resp = responseText.toLowerCase();
 
-  // Indicadores de complexidade na pergunta
   const complexTriggers = [
     /por que|porquê|explain|explique|como funciona|how does|analise|analisa|compare|diferença entre|trade.?off/i,
     /arquitetura|estratégia|decisão|deveria|should i|melhor forma|best way|otimiz/i,
@@ -37,12 +40,9 @@ function evaluateComplexity(userMessage, responseText) {
     /código|code|implementa|implement|crie|create|desenvolva/i,
   ];
 
-  // Indicadores de resposta rasa
   const shallowResponseIndicators = responseText.length < 300;
   const hasUncertainty = /não tenho certeza|pode ser|talvez|provavelmente|not sure|might be|unclear/i.test(resp);
   const isComplex = complexTriggers.some(r => r.test(msg));
-
-  // Resposta com números/listas costuma ser completa; sem estrutura pode estar rasa
   const lacksStructure = !/\n/.test(responseText) && responseText.length > 100;
 
   let score = 0;
@@ -145,7 +145,6 @@ const MEMORY_KEYWORDS = [
 ];
 
 async function buildSystemPrompt(projectId, memoryMode, userId) {
-  // Carregar personalidade do usuário se houver
   let personalityText = PERSONALITY_GUIDE.direto;
   let customTraits = '';
   if (userId) {
@@ -156,7 +155,6 @@ async function buildSystemPrompt(projectId, memoryMode, userId) {
     }
   }
 
-  // Sem projeto: prompt genérico com personalidade
   if (!projectId) {
     let prompt = `Você é o Solaris, um assistente de IA pessoal.\n\n`;
     prompt += `=== ESTILO ===\n${personalityText}\n`;
@@ -319,7 +317,6 @@ app.delete('/api/projects/:id', async (req, res) => {
 
 // ── Chats ─────────────────────────────────────────────────────────────────────
 
-// projectId pode ser "none" = chat sem projeto
 app.post('/api/projects/:id/chats', async (req, res) => {
   const userId = req.headers['x-user-id'];
   const projectId = req.params.id === 'none' ? null : req.params.id;
@@ -429,6 +426,7 @@ app.post('/api/messages/edit', async (req, res) => {
 
     await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'assistant', responseText]);
     await runAsync('UPDATE chats SET updated_at = NOW() WHERE id = $1', [chat_id]);
+
     if (projectId) extractMemories(projectId, responseText).catch(console.error);
 
     const complexity = evaluateComplexity(new_content, responseText);
@@ -460,7 +458,7 @@ app.post('/api/messages/think', async (req, res) => {
       : original_message;
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 60000); // DeepSeek precisa de mais tempo
+    const timeout = setTimeout(() => controller.abort(), 60000);
 
     let thinkingContent = '';
     let finalResponse = '';
@@ -491,7 +489,6 @@ app.post('/api/messages/think', async (req, res) => {
       const data = await deepRes.json();
       const rawContent = data.choices[0].message.content || '';
 
-      // Separar o bloco <think>...</think> do conteúdo final
       const thinkMatch = rawContent.match(/<think>([\s\S]*?)<\/think>/i);
       if (thinkMatch) {
         thinkingContent = thinkMatch[1].trim();
@@ -503,7 +500,6 @@ app.post('/api/messages/think', async (req, res) => {
       clearTimeout(timeout);
     }
 
-    // Salvar a resposta aprofundada no histórico substituindo a anterior se existir
     const lastMessages = await allAsync(
       'SELECT id, role FROM messages WHERE chat_id = $1 ORDER BY created_at DESC LIMIT 2',
       [chat_id]
