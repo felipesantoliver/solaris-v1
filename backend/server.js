@@ -21,6 +21,43 @@ if (!GROQ_API_KEY) throw new Error('❌ GROQ_API_KEY não definida');
 
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const GROQ_MODEL = 'llama-3.3-70b-versatile';
+const DEEPSEEK_MODEL = 'deepseek-r1-distill-llama-70b';
+
+// Avalia se uma resposta merece o modo pensar
+// Retorna { shouldThink: bool, reason: string }
+function evaluateComplexity(userMessage, responseText) {
+  const msg = userMessage.toLowerCase();
+  const resp = responseText.toLowerCase();
+
+  // Indicadores de complexidade na pergunta
+  const complexTriggers = [
+    /por que|porquê|explain|explique|como funciona|how does|analise|analisa|compare|diferença entre|trade.?off/i,
+    /arquitetura|estratégia|decisão|deveria|should i|melhor forma|best way|otimiz/i,
+    /debug|erro|bug|problema|não funciona|not working|fix|corrij/i,
+    /código|code|implementa|implement|crie|create|desenvolva/i,
+  ];
+
+  // Indicadores de resposta rasa
+  const shallowResponseIndicators = responseText.length < 300;
+  const hasUncertainty = /não tenho certeza|pode ser|talvez|provavelmente|not sure|might be|unclear/i.test(resp);
+  const isComplex = complexTriggers.some(r => r.test(msg));
+
+  // Resposta com números/listas costuma ser completa; sem estrutura pode estar rasa
+  const lacksStructure = !/\n/.test(responseText) && responseText.length > 100;
+
+  let score = 0;
+  if (isComplex) score += 2;
+  if (shallowResponseIndicators) score += 2;
+  if (hasUncertainty) score += 2;
+  if (lacksStructure) score += 1;
+
+  const shouldThink = score >= 3;
+  const reason = shouldThink
+    ? (hasUncertainty ? 'Identifiquei incerteza na resposta.' : isComplex ? 'Pergunta complexa detectada.' : 'Resposta pode ser aprofundada.')
+    : null;
+
+  return { shouldThink, reason };
+}
 
 async function withRetry(fn, maxRetries = 3, baseDelay = 3000) {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -341,7 +378,8 @@ app.post('/api/messages', async (req, res) => {
     if (isFirst) autoTitle(chat_id, message).catch(console.error);
     if (projectId) extractMemories(projectId, responseText).catch(console.error);
 
-    res.json({ response: responseText });
+    const complexity = evaluateComplexity(message, responseText);
+    res.json({ response: responseText, shouldThink: complexity.shouldThink, thinkReason: complexity.reason });
   } catch (err) {
     console.error('Erro ao enviar mensagem:', err);
     res.status(500).json({ error: err.message });
@@ -393,9 +431,107 @@ app.post('/api/messages/edit', async (req, res) => {
     await runAsync('UPDATE chats SET updated_at = NOW() WHERE id = $1', [chat_id]);
     if (projectId) extractMemories(projectId, responseText).catch(console.error);
 
-    res.json({ response: responseText });
+    const complexity = evaluateComplexity(new_content, responseText);
+    res.json({ response: responseText, shouldThink: complexity.shouldThink, thinkReason: complexity.reason });
   } catch (err) {
     console.error('Erro ao editar mensagem:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Modo Pensar (DeepSeek-R1) ─────────────────────────────────────────────────
+app.post('/api/messages/think', async (req, res) => {
+  const userId = req.headers['x-user-id'];
+  const { chat_id, project_id, original_message, previous_response } = req.body;
+  if (!chat_id || !original_message) {
+    return res.status(400).json({ error: 'chat_id e original_message são obrigatórios' });
+  }
+
+  const projectId = (project_id && project_id !== 'none') ? project_id : null;
+
+  try {
+    const project = projectId
+      ? await getAsync('SELECT memory_mode FROM projects WHERE id = $1', [projectId]).catch(() => null)
+      : null;
+    const sysPrompt = await buildSystemPrompt(projectId, project?.memory_mode, userId);
+
+    const thinkPrompt = previous_response
+      ? `O usuário perguntou:\n${original_message}\n\nVocê respondeu anteriormente:\n${previous_response}\n\nAgora aprofunde, corrija e melhore essa resposta. Se houver erros, corrija-os. Se estiver superficial, adicione detalhes relevantes. Se possível, estruture melhor a resposta. Seja mais preciso, mais completo e com raciocínio mais rigoroso.`
+      : original_message;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 60000); // DeepSeek precisa de mais tempo
+
+    let thinkingContent = '';
+    let finalResponse = '';
+
+    try {
+      const deepRes = await withRetry(() =>
+        fetch(GROQ_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GROQ_API_KEY}` },
+          body: JSON.stringify({
+            model: DEEPSEEK_MODEL,
+            max_tokens: 4096,
+            temperature: 0.6,
+            messages: [
+              { role: 'system', content: sysPrompt },
+              { role: 'user', content: thinkPrompt },
+            ],
+          }),
+          signal: controller.signal,
+        })
+      );
+
+      if (!deepRes.ok) {
+        const err = await deepRes.json().catch(() => ({}));
+        throw new Error(`DeepSeek ${deepRes.status}: ${err.error?.message || deepRes.statusText}`);
+      }
+
+      const data = await deepRes.json();
+      const rawContent = data.choices[0].message.content || '';
+
+      // Separar o bloco <think>...</think> do conteúdo final
+      const thinkMatch = rawContent.match(/<think>([\s\S]*?)<\/think>/i);
+      if (thinkMatch) {
+        thinkingContent = thinkMatch[1].trim();
+        finalResponse = rawContent.replace(/<think>[\s\S]*?<\/think>/i, '').trim();
+      } else {
+        finalResponse = rawContent;
+      }
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    // Salvar a resposta aprofundada no histórico substituindo a anterior se existir
+    const lastMessages = await allAsync(
+      'SELECT id, role FROM messages WHERE chat_id = $1 ORDER BY created_at DESC LIMIT 2',
+      [chat_id]
+    ).catch(() => []);
+
+    const lastAssistant = lastMessages.find(m => m.role === 'assistant');
+    if (lastAssistant) {
+      await runAsync(
+        'UPDATE messages SET content = $1, updated_at = NOW() WHERE id = $2',
+        [`[Modo Pensar]\n${finalResponse}`, lastAssistant.id]
+      );
+    } else {
+      await runAsync(
+        'INSERT INTO messages (chat_id, role, content) VALUES ($1, $2, $3)',
+        [chat_id, 'assistant', `[Modo Pensar]\n${finalResponse}`]
+      );
+    }
+
+    await runAsync('UPDATE chats SET updated_at = NOW() WHERE id = $1', [chat_id]);
+    if (projectId) extractMemories(projectId, finalResponse).catch(console.error);
+
+    res.json({
+      response: finalResponse,
+      thinking: thinkingContent || null,
+      model: DEEPSEEK_MODEL,
+    });
+  } catch (err) {
+    console.error('Erro no modo pensar:', err);
     res.status(500).json({ error: err.message });
   }
 });

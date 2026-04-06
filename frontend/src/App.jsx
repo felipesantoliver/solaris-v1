@@ -3,7 +3,7 @@ import {
   Send, Loader2, Plus, Moon, Sun, Mic, FolderPlus, Folder, Check, X,
   Trash2, AlertTriangle, History, GripVertical, PencilLine, Search,
   Share2, PanelLeft, LogIn, LogOut, User, ChevronDown, Pencil,
-  RotateCcw, Settings, Save
+  RotateCcw, Settings, Save, Brain, ChevronRight
 } from 'lucide-react';
 import { createClient } from '@supabase/supabase-js';
 
@@ -285,6 +285,15 @@ function MessageBubble({ msg, index, darkMode, theme, onEdit, isEditing, editVal
             <div className={`text-base leading-relaxed transition-colors duration-500 whitespace-pre-wrap ${msg.role === 'user' ? (darkMode ? 'text-white font-medium' : 'text-black font-medium') : (darkMode ? 'text-white/60 font-light' : 'text-gray-600 font-light')}`}>
               {msg.content}
             </div>
+            {msg.role === 'assistant' && msg.isDeepSeek && (
+              <div className={`flex items-center gap-1.5 mt-2`}>
+                <Brain size={10} className={darkMode ? 'text-purple-400' : 'text-purple-500'} />
+                <span className={`text-[9px] uppercase tracking-[0.2em] font-bold ${darkMode ? 'text-purple-400/70' : 'text-purple-500/70'}`}>deepseek r1</span>
+              </div>
+            )}
+            {msg.role === 'assistant' && msg.thinking && (
+              <ThinkBubble thinking={msg.thinking} darkMode={darkMode} theme={theme} />
+            )}
             {msg.role === 'user' && !isLoading && (
               <div className="flex items-center gap-2 mt-1.5 justify-end opacity-0 group-hover/msg:opacity-100 transition-opacity duration-200">
                 {hasHistory && (
@@ -314,6 +323,29 @@ function MessageBubble({ msg, index, darkMode, theme, onEdit, isEditing, editVal
   );
 }
 
+// ─── ThinkBubble ──────────────────────────────────────────────────────────────
+function ThinkBubble({ thinking, darkMode, theme }) {
+  const [expanded, setExpanded] = useState(false);
+  if (!thinking) return null;
+  return (
+    <div className={`mt-3 rounded-xl border ${darkMode ? 'border-purple-500/20 bg-purple-500/5' : 'border-purple-400/20 bg-purple-50/60'} overflow-hidden transition-all duration-300`}>
+      <button
+        onClick={() => setExpanded(e => !e)}
+        className={`w-full flex items-center gap-2 px-4 py-2.5 text-left transition-colors ${darkMode ? 'hover:bg-purple-500/10' : 'hover:bg-purple-100/60'}`}
+      >
+        <Brain size={12} className={darkMode ? 'text-purple-400' : 'text-purple-500'} />
+        <span className={`text-[10px] uppercase tracking-[0.2em] font-bold ${darkMode ? 'text-purple-400' : 'text-purple-500'}`}>Raciocínio interno</span>
+        <ChevronRight size={10} className={`ml-auto transition-transform duration-200 ${expanded ? 'rotate-90' : ''} ${darkMode ? 'text-purple-400/50' : 'text-purple-400'}`} />
+      </button>
+      {expanded && (
+        <div className={`px-4 pb-4 text-xs font-light leading-relaxed whitespace-pre-wrap border-t ${darkMode ? 'border-purple-500/10 text-purple-200/60' : 'border-purple-200 text-purple-800/60'}`}>
+          <div className="pt-3">{thinking}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── App ──────────────────────────────────────────────────────────────────────
 export default function App() {
   const [messages, setMessages] = useState([]);
@@ -338,6 +370,10 @@ export default function App() {
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [authReady, setAuthReady] = useState(false);
+  const [thinkMode, setThinkMode] = useState(false);
+  const [isThinking, setIsThinking] = useState(false);
+  const [thinkSuggestion, setThinkSuggestion] = useState(null); // { reason: string }
+  const [lastThinkData, setLastThinkData] = useState(null); // { originalMessage, previousResponse, thinking }
 
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
@@ -421,11 +457,12 @@ export default function App() {
   const handleSend = async () => {
     if (!input.trim() || isLoading) return;
     setEditingMsgIndex(null);
+    setThinkSuggestion(null);
+    setLastThinkData(null);
 
     let chatId = activeChatId;
-    const projectId = activeProjectId; // pode ser null = sem projeto
+    const projectId = activeProjectId;
 
-    // Se não há chat ativo, criar um novo (com ou sem projeto)
     if (!chatId) {
       try {
         const endpoint = projectId
@@ -448,8 +485,34 @@ export default function App() {
     setInput('');
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
     setMessages(prev => [...prev, { role: 'user', content: userMessage }]);
-    setIsLoading(true);
 
+    // Se thinkMode está ativo, vai direto ao DeepSeek
+    if (thinkMode) {
+      setIsThinking(true);
+      setIsLoading(true);
+      try {
+        const r = await fetch(`${API_BASE}/messages/think`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-user-id': effectiveUserId },
+          body: JSON.stringify({
+            chat_id: chatId,
+            project_id: projectId || null,
+            original_message: userMessage,
+            previous_response: null,
+          }),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || 'Erro no servidor');
+        setMessages(prev => [...prev, { role: 'assistant', content: d.response, thinking: d.thinking, isDeepSeek: true }]);
+        setLastThinkData({ originalMessage: userMessage, previousResponse: d.response, thinking: d.thinking });
+      } catch (err) {
+        setMessages(prev => [...prev, { role: 'assistant', content: `Erro: ${err.message}` }]);
+      } finally { setIsThinking(false); setIsLoading(false); }
+      return;
+    }
+
+    // Fluxo normal — LLaMA rápido
+    setIsLoading(true);
     try {
       const r = await fetch(`${API_BASE}/messages`, {
         method: 'POST',
@@ -459,6 +522,12 @@ export default function App() {
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || 'Erro no servidor');
       setMessages(prev => [...prev, { role: 'assistant', content: d.response }]);
+      setLastThinkData({ originalMessage: userMessage, previousResponse: d.response, thinking: null });
+
+      // Sugestão automática do modo pensar
+      if (d.shouldThink && d.thinkReason) {
+        setThinkSuggestion({ reason: d.thinkReason });
+      }
     } catch (err) {
       setMessages(prev => [...prev, { role: 'assistant', content: `Erro: ${err.message}` }]);
     } finally { setIsLoading(false); }
@@ -477,7 +546,9 @@ export default function App() {
     const newMessages = messages.slice(0, editingMsgIndex + 1).map((m, i) =>
       i === editingMsgIndex ? { ...m, content: newContent, edited: true, edit_history: [...(m.edit_history || []), { content: m.content, edited_at: new Date().toISOString() }] } : m
     );
-    setMessages(newMessages); setEditingMsgIndex(null); setEditValue(''); setIsLoading(true);
+    setMessages(newMessages); setEditingMsgIndex(null); setEditValue('');
+    setThinkSuggestion(null); setLastThinkData(null);
+    setIsLoading(true);
     try {
       const r = await fetch(`${API_BASE}/messages/edit`, {
         method: 'POST',
@@ -486,8 +557,46 @@ export default function App() {
       });
       const d = await r.json();
       setMessages(prev => [...prev, { role: 'assistant', content: d.response }]);
+      setLastThinkData({ originalMessage: newContent, previousResponse: d.response, thinking: null });
+      if (d.shouldThink && d.thinkReason) setThinkSuggestion({ reason: d.thinkReason });
     } catch { setMessages(prev => [...prev, { role: 'assistant', content: 'Erro ao regerar.' }]); }
     finally { setIsLoading(false); }
+  };
+
+  // ── Modo Pensar — upgrade da última resposta ──────────────────────────────────
+  const handleThinkUpgrade = async () => {
+    if (isLoading || isThinking || !lastThinkData || !activeChatId) return;
+    setThinkSuggestion(null);
+    setIsThinking(true);
+    setIsLoading(true);
+    try {
+      const r = await fetch(`${API_BASE}/messages/think`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-user-id': effectiveUserId },
+        body: JSON.stringify({
+          chat_id: activeChatId,
+          project_id: activeProjectId || null,
+          original_message: lastThinkData.originalMessage,
+          previous_response: lastThinkData.previousResponse,
+        }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Erro no servidor');
+      // Substituir a última resposta do assistant pela versão aprofundada
+      setMessages(prev => {
+        const updated = [...prev];
+        for (let i = updated.length - 1; i >= 0; i--) {
+          if (updated[i].role === 'assistant') {
+            updated[i] = { ...updated[i], content: d.response, thinking: d.thinking, isDeepSeek: true };
+            break;
+          }
+        }
+        return updated;
+      });
+      setLastThinkData(t => ({ ...t, previousResponse: d.response, thinking: d.thinking }));
+    } catch (err) {
+      setMessages(prev => [...prev, { role: 'assistant', content: `Erro no modo pensar: ${err.message}` }]);
+    } finally { setIsThinking(false); setIsLoading(false); }
   };
 
   // ── Compartilhar ─────────────────────────────────────────────────────────────
@@ -843,6 +952,38 @@ export default function App() {
         {/* Input */}
         <footer className="p-10 pt-4">
           <div className="max-w-3xl mx-auto">
+
+            {/* Sugestão automática do modo pensar */}
+            {thinkSuggestion && !isLoading && !thinkMode && (
+              <div className={`flex items-center gap-3 mb-4 px-4 py-3 rounded-xl border ${darkMode ? 'border-purple-500/20 bg-purple-500/5' : 'border-purple-400/20 bg-purple-50'} animate-in fade-in slide-in-from-bottom-2 duration-500`}>
+                <Brain size={14} className={darkMode ? 'text-purple-400' : 'text-purple-500'} />
+                <span className={`text-xs font-light flex-1 ${darkMode ? 'text-purple-200/70' : 'text-purple-700'}`}>
+                  {thinkSuggestion.reason} Quer que eu aprofunde?
+                </span>
+                <button
+                  onClick={handleThinkUpgrade}
+                  disabled={isThinking}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${darkMode ? 'bg-purple-500/20 text-purple-300 hover:bg-purple-500/30' : 'bg-purple-100 text-purple-700 hover:bg-purple-200'}`}
+                >
+                  {isThinking ? <Loader2 size={12} className="animate-spin" /> : <Brain size={12} />}
+                  Pensar
+                </button>
+                <button onClick={() => setThinkSuggestion(null)} className={`${darkMode ? 'text-white/20 hover:text-white/50' : 'text-black/20 hover:text-black/40'} transition-colors`}>
+                  <X size={12} />
+                </button>
+              </div>
+            )}
+
+            {/* Loading do DeepSeek */}
+            {isThinking && (
+              <div className={`flex items-center gap-3 mb-4 px-4 py-3 rounded-xl border ${darkMode ? 'border-purple-500/20 bg-purple-500/5' : 'border-purple-400/20 bg-purple-50'}`}>
+                <Loader2 size={14} className={`animate-spin ${darkMode ? 'text-purple-400' : 'text-purple-500'}`} />
+                <span className={`text-xs font-light ${darkMode ? 'text-purple-200/70' : 'text-purple-700'}`}>
+                  DeepSeek R1 analisando em profundidade…
+                </span>
+              </div>
+            )}
+
             <div className={`relative flex items-end border-b ${theme.inputBorder} pb-8 ${theme.inputFocus} transition-all duration-500`}>
               <textarea
                 ref={textareaRef} value={input} onChange={handleInput} onKeyDown={handleKeyDown} rows={1}
@@ -855,9 +996,31 @@ export default function App() {
             </div>
             <div className={`mt-5 flex justify-between items-center text-[9px] ${theme.textMuted} font-bold tracking-[0.2em] uppercase`}>
               <span>enter para enviar · shift+enter nova linha</span>
-              <span onClick={() => fileInputRef.current?.click()} className={`flex items-center gap-3 cursor-pointer ${darkMode ? 'hover:text-white' : 'hover:text-black'} transition-colors mb-2`}>
-                <Plus size={10} /> Anexo
-              </span>
+              <div className="flex items-center gap-4">
+                {/* Botão Pensar */}
+                <button
+                  onClick={() => { setThinkMode(m => !m); setThinkSuggestion(null); }}
+                  title={thinkMode ? 'Desativar modo pensar' : 'Ativar modo pensar (DeepSeek R1)'}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border transition-all duration-200 ${
+                    thinkMode
+                      ? darkMode
+                        ? 'border-purple-500/50 bg-purple-500/15 text-purple-300'
+                        : 'border-purple-400/50 bg-purple-100 text-purple-600'
+                      : darkMode
+                        ? 'border-white/10 text-white/30 hover:text-white/60 hover:border-white/20'
+                        : 'border-black/10 text-black/30 hover:text-black/50 hover:border-black/20'
+                  }`}
+                >
+                  <Brain size={10} />
+                  <span>Pensar</span>
+                  {thinkMode && (
+                    <span className={`w-1.5 h-1.5 rounded-full animate-pulse ${darkMode ? 'bg-purple-400' : 'bg-purple-500'}`} />
+                  )}
+                </button>
+                <span onClick={() => fileInputRef.current?.click()} className={`flex items-center gap-3 cursor-pointer ${darkMode ? 'hover:text-white' : 'hover:text-black'} transition-colors mb-2`}>
+                  <Plus size={10} /> Anexo
+                </span>
+              </div>
             </div>
           </div>
         </footer>
