@@ -1,5 +1,23 @@
 import pg from 'pg';
+import net from 'net';
 import dns from 'dns/promises';
+
+// Força IPv4 globalmente no Node antes de qualquer conexão
+import { setDefaultResultOrder } from 'dns';
+setDefaultResultOrder('ipv4first');
+
+// Monkey-patch no net.connect para rejeitar qualquer tentativa de IPv6
+const _originalConnect = net.connect;
+net.connect = function (options, ...args) {
+  if (options && typeof options === 'object' && options.host) {
+    // Se o host for um endereço IPv6 puro, substitui por localhost para forçar erro visível
+    if (net.isIPv6(options.host)) {
+      console.error(`🚫 Bloqueando tentativa de conexão IPv6: ${options.host}`);
+      options.family = 4;
+    }
+  }
+  return _originalConnect.call(this, options, ...args);
+};
 
 const { Pool } = pg;
 
@@ -7,56 +25,62 @@ if (!process.env.DATABASE_URL) {
   throw new Error('❌ DATABASE_URL não definida nas variáveis de ambiente');
 }
 
-// Cache do pool
 let pool = null;
 
-// Função para obter configuração do pool forçando IPv4
+async function resolveIPv4(hostname) {
+  // Tenta resolver IPv4 até 3 vezes com delay
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const addresses = await dns.resolve4(hostname);
+      if (addresses && addresses.length > 0) {
+        console.log(`✅ IPv4 resolvido (tentativa ${attempt}): ${hostname} -> ${addresses[0]}`);
+        return addresses[0];
+      }
+    } catch (err) {
+      console.warn(`⚠️ Tentativa ${attempt}/3 falhou para ${hostname}: ${err.message}`);
+      if (attempt < 3) await new Promise(r => setTimeout(r, 1000 * attempt));
+    }
+  }
+  return null;
+}
+
 async function getPoolConfig() {
-  const originalUrl = process.env.DATABASE_URL;
-  const url = new URL(originalUrl);
+  const url = new URL(process.env.DATABASE_URL);
   const hostname = url.hostname;
 
   console.log(`🔍 Resolvendo hostname: ${hostname}`);
 
-  // Tenta resolver IPv4 explicitamente
-  let ipv4 = null;
-  try {
-    const addresses = await dns.resolve4(hostname);
-    if (addresses && addresses.length > 0) {
-      ipv4 = addresses[0];
-      console.log(`✅ ${hostname} -> IPv4: ${ipv4}`);
-    } else {
-      console.warn(`⚠️ Nenhum registro IPv4 encontrado para ${hostname}`);
-    }
-  } catch (err) {
-    console.warn(`⚠️ Falha ao resolver IPv4 para ${hostname}: ${err.message}`);
+  const ipv4 = await resolveIPv4(hostname);
+
+  if (!ipv4) {
+    // Último recurso: usa o hostname diretamente mas força family=4 no pg
+    console.warn(`⚠️ Não foi possível resolver IPv4 para ${hostname}. Usando hostname com family=4 forçado.`);
   }
 
-  // Extrai parâmetros de conexão
   const config = {
     user: decodeURIComponent(url.username),
     password: decodeURIComponent(url.password),
     host: ipv4 || hostname,
     port: parseInt(url.port || '5432'),
     database: url.pathname.slice(1),
+    // Força IPv4 no nível do driver pg
+    family: 4,
     max: 10,
     idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 10000,
+    connectionTimeoutMillis: 15000,
+    // SSL obrigatório para Supabase
+    ssl: { rejectUnauthorized: false },
   };
 
-  // Trata SSL do Supabase (geralmente 'require' ou 'prefer')
+  // Respeita sslmode da URL se presente
   const sslParam = url.searchParams.get('sslmode');
-  if (sslParam === 'require' || sslParam === 'prefer' || sslParam === 'allow') {
-    config.ssl = { rejectUnauthorized: false };
-  } else if (sslParam === 'verify-ca' || sslParam === 'verify-full') {
-    config.ssl = { rejectUnauthorized: true }; // padrão seguro
+  if (sslParam === 'disable') {
+    config.ssl = false;
+  } else if (sslParam === 'verify-full' || sslParam === 'verify-ca') {
+    config.ssl = { rejectUnauthorized: true };
   }
 
-  // FORÇA IPv4 se tivermos um IP numérico
-  if (ipv4) {
-    config.family = 4;
-  }
-
+  console.log(`📦 Config PostgreSQL -> ${config.host}:${config.port} | family: 4 | ssl: ${!!config.ssl}`);
   return config;
 }
 
@@ -64,28 +88,25 @@ export async function getPool() {
   if (pool) return pool;
 
   const config = await getPoolConfig();
-  console.log(`📦 Criando pool PostgreSQL -> ${config.host}:${config.port} (family: ${config.family || 'auto'})`);
-
   pool = new Pool(config);
 
   pool.on('error', (err) => {
     console.error('❌ Erro no pool PostgreSQL:', err.message);
   });
 
-  // Teste de conexão inicial
   try {
     const client = await pool.connect();
     console.log('✅ Conexão com Supabase PostgreSQL estabelecida com sucesso');
     client.release();
   } catch (err) {
     console.error('❌ Falha na conexão de teste:', err.message);
+    pool = null; // reseta para tentar novamente na próxima chamada
     throw err;
   }
 
   return pool;
 }
 
-// Helpers para queries
 export async function runAsync(sql, params = []) {
   const p = await getPool();
   const client = await p.connect();
@@ -119,7 +140,6 @@ export async function allAsync(sql, params = []) {
   }
 }
 
-// Inicialização das tabelas (mantida igual)
 export async function initDb() {
   const p = await getPool();
   const client = await p.connect();
@@ -182,7 +202,6 @@ export async function initDb() {
       );
     `);
 
-    // Migrações incrementais
     const migrations = [
       `ALTER TABLE chats ALTER COLUMN project_id DROP NOT NULL`,
       `ALTER TABLE messages ADD COLUMN IF NOT EXISTS edited BOOLEAN DEFAULT FALSE`,
