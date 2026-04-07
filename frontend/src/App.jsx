@@ -65,7 +65,6 @@ function PlanetDot({ size, duration, color, glow, dotSize = 'w-1.5 h-1.5', hasRi
 function ModelToggle({ model, onChange, authUser, darkMode }) {
   const isPro = model === 'pro';
 
-  // Guest vê o botão desabilitado com tooltip
   if (!authUser) {
     return (
       <div className="relative group mb-3" title="Faça login para usar o modo Pro">
@@ -83,10 +82,9 @@ function ModelToggle({ model, onChange, authUser, darkMode }) {
 
   return (
     <div className="mb-3 flex items-center gap-1">
-      {/* Flash */}
       <button
         onClick={() => onChange('flash')}
-        title="Gemini Flash-Lite — rápido, 1.000 req/dia"
+        title="Gemini Flash — rápido, 1.000 req/dia"
         className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[10px] font-medium uppercase tracking-widest transition-all
           ${!isPro
             ? (darkMode ? 'border-white/60 text-white bg-white/10' : 'border-black/60 text-black bg-black/8')
@@ -96,8 +94,6 @@ function ModelToggle({ model, onChange, authUser, darkMode }) {
         <Zap size={10} />
         Flash
       </button>
-
-      {/* Pro */}
       <button
         onClick={() => onChange('pro')}
         title="Gemini Pro — mais inteligente, 100 req/dia"
@@ -390,7 +386,7 @@ export default function App() {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [darkMode, setDarkMode] = useState(() => localStorage.getItem('solaris_dark') !== 'false');
-  const [model, setModel] = useState('flash'); // 'flash' | 'pro'
+  const [model, setModel] = useState('flash');
   const [searchQuery, setSearchQuery] = useState('');
   const [showShareToast, setShowShareToast] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
@@ -419,12 +415,11 @@ export default function App() {
   const displayName = authUser?.user_metadata?.display_name || authUser?.user_metadata?.full_name || authUser?.email?.split('@')[0] || null;
   const hasUserStartedChat = messages.some(m => m.role === 'user');
 
-  // Garante que se o user deslogar, volta para flash
   useEffect(() => {
     if (!authUser && model === 'pro') setModel('flash');
   }, [authUser]);
 
-  // ── Auth ────────────────────────────────────────────────────────────────────
+  // Auth
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => { setAuthUser(session?.user ?? null); setAuthReady(true); });
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, session) => setAuthUser(session?.user ?? null));
@@ -449,7 +444,7 @@ export default function App() {
     setAuthUser(null); setProjects([]); setChatHistory([]); setActiveChatId(null); setActiveProjectId(null); setMessages([]);
   }
 
-  // ── Efeitos ─────────────────────────────────────────────────────────────────
+  // Efeitos
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, isLoading]);
   useEffect(() => { localStorage.setItem('solaris_dark', darkMode); }, [darkMode]);
   useEffect(() => {
@@ -458,12 +453,16 @@ export default function App() {
   }, []);
   useEffect(() => { if (authReady) fetchProjects(); }, [authReady, effectiveUserId]);
 
-  // ── Projetos ─────────────────────────────────────────────────────────────────
+  // Projetos
   async function fetchProjects() {
     try {
       const r = await fetch(`${API_BASE}/projects`, { headers: { 'x-user-id': effectiveUserId } });
-      const d = await r.json(); setProjects(d || []);
-    } catch { setProjects([]); }
+      const d = await r.json();
+      setProjects(d || []);
+    } catch (err) {
+      console.error('Erro ao buscar projetos:', err);
+      setProjects([]);
+    }
   }
 
   useEffect(() => {
@@ -475,7 +474,10 @@ export default function App() {
         const d = await r.json();
         setChatHistory(d.chats || []);
         if (d.chats?.length > 0) setActiveChatId(d.chats[0].id);
-      } catch { setChatHistory([]); }
+      } catch (err) {
+        console.error('Erro ao carregar projeto:', err);
+        setChatHistory([]);
+      }
     })();
   }, [activeProjectId]);
 
@@ -486,29 +488,32 @@ export default function App() {
         const r = await fetch(`${API_BASE}/messages/chat/${activeChatId}`, { headers: { 'x-user-id': effectiveUserId } });
         const msgs = await r.json();
         setMessages(Array.isArray(msgs) ? msgs : []);
-      } catch { }
+      } catch (err) {
+        console.error('Erro ao carregar mensagens:', err);
+      }
     })();
   }, [activeChatId]);
 
-  // ── Enviar mensagem ───────────────────────────────────────────────────────────
-  // Monta headers com x-model para o backend decidir qual modelo usar
+  // Headers
   function buildHeaders(extra = {}) {
     return {
       'Content-Type': 'application/json',
       'x-user-id': effectiveUserId,
-      // Pro só enviado quando authUser existe (backend valida também)
       'x-model': authUser ? model : 'flash',
       ...extra,
     };
   }
 
+  // Enviar mensagem (corrigido com tratamento de erro e limpeza condicional)
   const handleSend = async () => {
     if (!input.trim() || isLoading) return;
     setEditingMsgIndex(null);
 
     let chatId = activeChatId;
     const projectId = activeProjectId;
+    const userMessage = input.trim();
 
+    // Se não houver chat, tenta criar um novo
     if (!chatId) {
       try {
         const endpoint = projectId
@@ -519,20 +524,27 @@ export default function App() {
           headers: buildHeaders(),
           body: JSON.stringify({ title: 'Nova conversa' }),
         });
-        if (!r.ok) throw new Error('Falha ao criar chat');
+        if (!r.ok) {
+          const errorData = await r.json().catch(() => ({}));
+          throw new Error(errorData.error || `Erro ${r.status} ao criar chat`);
+        }
         const nc = await r.json();
         setChatHistory(prev => [nc, ...prev]);
         setActiveChatId(nc.id);
         chatId = nc.id;
-      } catch (err) { console.error(err); return; }
+      } catch (err) {
+        console.error('Falha ao criar chat:', err);
+        alert(`Não foi possível iniciar a conversa: ${err.message}`);
+        return;
+      }
     }
 
-    const userMessage = input.trim();
+    // Limpa o input e adiciona a mensagem do usuário na UI
     setInput('');
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
     setMessages(prev => [...prev, { role: 'user', content: userMessage }]);
-
     setIsLoading(true);
+
     try {
       const r = await fetch(`${API_BASE}/messages`, {
         method: 'POST',
@@ -541,17 +553,21 @@ export default function App() {
       });
       const d = await safeJson(r);
       if (!r.ok) throw new Error(d.error || 'Erro no servidor');
-      // Salva o modelo usado na mensagem para exibir badge "pro" se aplicável
       setMessages(prev => [...prev, { role: 'assistant', content: d.response, model: d.model }]);
     } catch (err) {
-      setMessages(prev => [...prev, { role: 'assistant', content: `Erro: ${err.message}` }]);
-    } finally { setIsLoading(false); }
+      console.error('Erro ao enviar mensagem:', err);
+      alert(`Erro ao enviar: ${err.message}`);
+      // Remove a mensagem do usuário que foi adicionada, pois não obteve resposta
+      setMessages(prev => prev.slice(0, -1));
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleKeyDown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } };
   const handleInput = (e) => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`; };
 
-  // ── Edição ───────────────────────────────────────────────────────────────────
+  // Edição
   const handleEdit = (index, content) => { setEditingMsgIndex(index); setEditValue(content); };
   const handleEditCancel = () => { setEditingMsgIndex(null); setEditValue(''); };
   const handleEditSave = async () => {
@@ -571,24 +587,44 @@ export default function App() {
       });
       const d = await safeJson(r);
       setMessages(prev => [...prev, { role: 'assistant', content: d.response, model: d.model }]);
-    } catch { setMessages(prev => [...prev, { role: 'assistant', content: 'Erro ao regerar.' }]); }
-    finally { setIsLoading(false); }
+    } catch (err) {
+      console.error('Erro ao editar:', err);
+      alert(`Erro ao regerar: ${err.message}`);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  // ── Compartilhar ─────────────────────────────────────────────────────────────
+  // Compartilhar
   const handleShare = () => {
     const text = messages.map(m => `${m.role === 'user' ? 'VOCÊ' : 'SOLARIS'}: ${m.content}`).join('\n\n');
     navigator.clipboard.writeText(text).catch(() => { });
     setShowShareToast(true); setTimeout(() => setShowShareToast(false), 3000);
   };
 
-  // ── CRUD projetos ─────────────────────────────────────────────────────────────
+  // CRUD projetos
   const createProject = async () => {
     if (!newProjectName.trim()) { setIsCreatingProject(false); return; }
     try {
-      const r = await fetch(`${API_BASE}/projects`, { method: 'POST', headers: buildHeaders(), body: JSON.stringify({ name: newProjectName.trim(), objective: '', response_style: 'direto', memory_mode: 'isolado' }) });
-      const p = await r.json(); setProjects([p, ...projects]); setNewProjectName(''); setIsCreatingProject(false); setActiveProjectId(p.id);
-    } catch (err) { console.error(err); }
+      const r = await fetch(`${API_BASE}/projects`, {
+        method: 'POST',
+        headers: buildHeaders(),
+        body: JSON.stringify({ name: newProjectName.trim(), objective: '', response_style: 'direto', memory_mode: 'isolado' })
+      });
+      if (!r.ok) {
+        const errData = await r.json().catch(() => ({}));
+        throw new Error(errData.error || `Erro ${r.status}`);
+      }
+      const p = await r.json();
+      setProjects([p, ...projects]);
+      setNewProjectName('');
+      setIsCreatingProject(false);
+      setActiveProjectId(p.id);
+    } catch (err) {
+      console.error('Erro ao criar projeto:', err);
+      alert(`Falha ao criar projeto: ${err.message}`);
+      setIsCreatingProject(false);
+    }
   };
 
   const handleDeleteConfirm = async () => {
@@ -597,11 +633,13 @@ export default function App() {
     try {
       if (type === 'project') {
         await fetch(`${API_BASE}/projects/${data.id}`, { method: 'DELETE', headers: { 'x-user-id': effectiveUserId } });
-        const updated = projects.filter(p => p.id !== data.id); setProjects(updated);
+        const updated = projects.filter(p => p.id !== data.id);
+        setProjects(updated);
         if (activeProjectId === data.id) { setActiveProjectId(null); setChatHistory([]); setActiveChatId(null); }
       } else {
         await fetch(`${API_BASE}/projects/${activeProjectId || 'none'}/chats/${data.id}`, { method: 'DELETE', headers: { 'x-user-id': effectiveUserId } });
-        const updated = chatHistory.filter(c => c.id !== data.id); setChatHistory(updated);
+        const updated = chatHistory.filter(c => c.id !== data.id);
+        setChatHistory(updated);
         if (activeChatId === data.id) setActiveChatId(updated.length > 0 ? updated[0].id : null);
       }
     } catch (err) { console.error(err); }
@@ -612,14 +650,21 @@ export default function App() {
     if (activeProjectId) {
       try {
         const r = await fetch(`${API_BASE}/projects/${activeProjectId}/chats`, { method: 'POST', headers: buildHeaders(), body: JSON.stringify({ title: 'Nova conversa' }) });
-        const nc = await r.json(); setChatHistory(prev => [nc, ...prev]); setActiveChatId(nc.id); setMessages([]);
-      } catch (err) { console.error(err); }
+        const nc = await r.json();
+        setChatHistory(prev => [nc, ...prev]);
+        setActiveChatId(nc.id);
+        setMessages([]);
+      } catch (err) {
+        console.error('Erro ao criar novo chat:', err);
+        alert(`Não foi possível criar um novo chat: ${err.message}`);
+      }
     } else {
-      setActiveChatId(null); setMessages([]);
+      setActiveChatId(null);
+      setMessages([]);
     }
   };
 
-  // ── Drag ─────────────────────────────────────────────────────────────────────
+  // Drag
   const onDragStart = (e, id) => { setDraggedItemId(id); e.dataTransfer.effectAllowed = 'move'; setTimeout(() => { e.currentTarget.style.opacity = '0.4'; }, 0); };
   const onDragOver = (e, id) => {
     e.preventDefault(); if (!draggedItemId || draggedItemId === id) return;
@@ -636,7 +681,7 @@ export default function App() {
     await fetch(`${API_BASE}/files/${activeProjectId}`, { method: 'POST', headers: { 'x-user-id': effectiveUserId }, body: fd }).catch(console.error);
   };
 
-  // ── Tema ──────────────────────────────────────────────────────────────────────
+  // Tema
   const theme = {
     bgAside: darkMode ? 'bg-[#0a0a0a]' : 'bg-white',
     bgMain: darkMode ? 'bg-[#111111]' : 'bg-[#fdfdfd]',
@@ -688,18 +733,17 @@ export default function App() {
 
   return (
     <div className={`flex h-screen ${darkMode ? 'bg-[#050505] text-white' : 'bg-[#fafafa] text-[#1a1a1a]'} font-sans antialiased overflow-hidden transition-colors duration-500`}>
-
       {showAuthModal && <AuthModal darkMode={darkMode} onClose={() => setShowAuthModal(false)} onAuthSuccess={handleAuthSuccess} />}
       {showSettingsModal && authUser && (
         <SettingsModal darkMode={darkMode} onClose={() => setShowSettingsModal(false)} userId={authUser.id} effectiveUserId={effectiveUserId} />
       )}
 
-      {/* Share Toast */}
+      {/* Toast de compartilhamento */}
       <div className={`fixed top-24 left-1/2 -translate-x-1/2 z-[110] px-6 py-3 rounded-full bg-emerald-500 text-white text-xs font-bold tracking-widest uppercase shadow-2xl transition-all duration-500 ${showShareToast ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-4 pointer-events-none'}`}>
         Copiado para a área de transferência
       </div>
 
-      {/* Delete Modal */}
+      {/* Modal de exclusão */}
       {itemToDelete && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
           <div className={`${theme.modalBg} border ${theme.border} w-full max-w-sm rounded-2xl p-8 shadow-2xl`}>
@@ -716,7 +760,7 @@ export default function App() {
         </div>
       )}
 
-      {/* ── Sidebar ── */}
+      {/* Sidebar */}
       <aside className={`hidden lg:flex flex-col border-r ${theme.border} ${theme.bgAside} relative transition-all duration-500 ease-in-out shrink-0 ${isSidebarOpen ? 'w-72' : 'w-20'}`}>
         <div className={`flex flex-col h-full overflow-hidden transition-all duration-500 ${isSidebarOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
           <div className="px-8 pt-12 pb-6 flex flex-col gap-5 shrink-0">
@@ -731,7 +775,6 @@ export default function App() {
           </div>
 
           <div className="px-8 flex flex-col flex-1 overflow-y-auto custom-scrollbar">
-            {/* Sistema Solar */}
             <div className="relative w-full aspect-square flex items-center justify-center opacity-80 hover:opacity-100 transition-opacity duration-700 mb-10 shrink-0">
               <div className={`w-6 h-6 ${darkMode ? 'bg-[#ffd700]' : 'bg-[#ffcc00] border border-amber-600/10'} rounded-full z-10`} style={{ boxShadow: '0 0 25px rgba(255,204,0,0.35)' }} />
               <OrbitLine size="w-10 h-10" themeColor={theme.orbit} />
@@ -752,7 +795,6 @@ export default function App() {
               <PlanetDot size="w-56 h-56" duration="45s" color="bg-[#4b70dd]" dotSize="w-1.5 h-1.5" darkMode={darkMode} />
             </div>
 
-            {/* Projetos */}
             <div className="flex flex-col gap-4 mb-8 shrink-0">
               <h2 className={`text-[10px] font-light tracking-[0.4em] uppercase ${theme.textSecondary}`}>PROJETOS</h2>
               {isCreatingProject ? (
@@ -785,7 +827,6 @@ export default function App() {
               )}
             </div>
 
-            {/* Conversas */}
             <div className="flex flex-col gap-4 mb-10 shrink-0">
               <h2 className={`text-[10px] font-light tracking-[0.4em] uppercase ${theme.textSecondary}`}>CONVERSAS</h2>
               {filteredChats.length === 0 && (
@@ -807,7 +848,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* Footer sidebar */}
           <div className={`px-8 shrink-0 border-t ${theme.border}`}>
             {displayName && (
               <div className={`pt-4 pb-2 flex items-center gap-2 ${theme.textSecondary}`}>
@@ -822,7 +862,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* Rail mode */}
         {!isSidebarOpen && (
           <div className="flex-1 flex flex-col items-center pt-12 gap-8 animate-in fade-in duration-700">
             <div className={`w-8 h-8 rounded-full border ${theme.orbit} flex items-center justify-center animate-pulse`}>
@@ -843,7 +882,7 @@ export default function App() {
         )}
       </aside>
 
-      {/* ── Main ── */}
+      {/* Main */}
       <main className={`flex-1 flex flex-col ${theme.bgMain} relative transition-colors duration-500`}>
         <header className={`h-20 flex items-center justify-between px-6 md:px-10 border-b ${theme.border} transition-colors duration-500`}>
           <div className="flex items-center gap-4">
@@ -883,7 +922,6 @@ export default function App() {
           </div>
         </header>
 
-        {/* Mensagens */}
         <div className="flex-1 relative overflow-y-auto px-6 md:px-20 py-10 custom-scrollbar transition-colors duration-500">
           {hasUserStartedChat && (
             <div className="sticky top-0 z-30 flex justify-end pointer-events-none mb-[-40px]">
@@ -919,17 +957,9 @@ export default function App() {
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Input */}
         <footer className="p-10 pt-4">
           <div className="max-w-3xl mx-auto">
-
-            {/* ── Model Toggle — acima do input ── */}
-            <ModelToggle
-              model={model}
-              onChange={setModel}
-              authUser={authUser}
-              darkMode={darkMode}
-            />
+            <ModelToggle model={model} onChange={setModel} authUser={authUser} darkMode={darkMode} />
 
             <div className={`relative flex items-end border-b ${theme.inputBorder} pb-8 ${theme.inputFocus} transition-all duration-500`}>
               <textarea
