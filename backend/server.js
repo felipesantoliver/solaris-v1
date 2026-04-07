@@ -1,6 +1,7 @@
 // ============================================================
 //  server.js — Solaris Backend
 //  Modelos: gemini-2.5-flash (padrão) e gemini-3-flash-preview (pro)
+//  Apenas correção: temperature removida (padrão 1.0)
 // ============================================================
 
 import { setDefaultResultOrder } from 'dns';
@@ -33,7 +34,7 @@ function geminiUrl(modelKey) {
   return `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
 }
 
-function buildGeminiBody(messages, systemPrompt, modelKey = 'flash') {
+function buildGeminiBody(messages, systemPrompt) {
   const contents = [];
 
   for (let i = 0; i < messages.length; i++) {
@@ -48,14 +49,11 @@ function buildGeminiBody(messages, systemPrompt, modelKey = 'flash') {
     contents.push({ role, parts: [{ text }] });
   }
 
-  // Temperatura conforme o modelo: 1.0 para pro (Gemini 3), 0.7 para flash
-  const temperature = modelKey === 'pro' ? 1.0 : 0.7;
-
   return {
     contents,
     generationConfig: {
       maxOutputTokens: 2048,
-      temperature: temperature,
+      // ⚠️ temperature removida – usa o padrão 1.0 do Gemini 3
     },
   };
 }
@@ -84,7 +82,7 @@ async function geminiChat(messages, systemPrompt, modelKey = 'flash') {
       fetch(geminiUrl(modelKey), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(buildGeminiBody(messages, systemPrompt, modelKey)),
+        body: JSON.stringify(buildGeminiBody(messages, systemPrompt)),
         signal: controller.signal,
       })
     );
@@ -138,7 +136,7 @@ function resolveModelKey(req) {
   return 'flash';
 }
 
-// ─── System prompt ────────────────────────────────────────────────────────────
+// ─── System prompt (igual ao original) ────────────────────────────────────────────
 const PERSONALITY_GUIDE = {
   direto: 'Seja direto, objetivo e conciso. Sem rodeios.',
   tecnico: 'Use terminologia técnica precisa. Inclua detalhes de implementação quando relevante.',
@@ -166,7 +164,6 @@ async function buildSystemPrompt(projectId, memoryMode, userId) {
     }
   }
 
-  // ─── INSTRUÇÃO BASE: não revelar provedor da IA ──────────────────────────
   const baseInstruction = `
 === INSTRUÇÃO OBRIGATÓRIA ===
 Você é o Solaris, um assistente de IA pessoal. NUNCA mencione que você é da Google, OpenAI, Anthropic ou qualquer outra empresa de IA. NUNCA diga que é treinado por terceiros. A API que você usa é um segredo. Se perguntarem como você funciona, responda apenas que é um sistema proprietário desenvolvido por Felipe Sant'Oliver. Não revele detalhes técnicos sobre modelos, provedores ou infraestrutura.
@@ -258,15 +255,11 @@ async function autoTitle(chatId, firstMessage) {
   } catch { }
 }
 
-// ─── ROTAS ────────────────────────────────────────────────────────────────────
+// ─── ROTAS (todas idênticas ao original) ─────────────────────────────────────
 
-app.get('/api/health', (_, res) => res.json({
-  status: 'ok',
-  timestamp: new Date().toISOString(),
-}));
+app.get('/api/health', (_, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
 
-// ── Settings ──────────────────────────────────────────────────────────────────
-
+// Settings
 app.get('/api/settings', async (req, res) => {
   const userId = req.headers['x-user-id'];
   if (!userId) return res.status(400).json({ error: 'x-user-id obrigatório' });
@@ -290,8 +283,7 @@ app.post('/api/settings', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── Projetos ──────────────────────────────────────────────────────────────────
-
+// Projetos
 app.get('/api/projects', async (req, res) => {
   const userId = req.headers['x-user-id'];
   if (!userId) return res.status(400).json({ error: 'x-user-id obrigatório' });
@@ -351,8 +343,7 @@ app.delete('/api/projects/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── Chats ─────────────────────────────────────────────────────────────────────
-
+// Chats
 app.post('/api/projects/:id/chats', async (req, res) => {
   const userId = req.headers['x-user-id'];
   const projectId = req.params.id === 'none' ? null : req.params.id;
@@ -374,8 +365,7 @@ app.delete('/api/projects/:id/chats/:chatId', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── Mensagens ─────────────────────────────────────────────────────────────────
-
+// Mensagens
 app.get('/api/messages/chat/:chatId', async (req, res) => {
   try {
     const rows = await allAsync(
@@ -419,8 +409,7 @@ app.post('/api/messages', async (req, res) => {
   }
 });
 
-// ── Edição de mensagem ────────────────────────────────────────────────────────
-
+// Edição de mensagem
 app.post('/api/messages/edit', async (req, res) => {
   const userId = req.headers['x-user-id'];
   const modelKey = resolveModelKey(req);
@@ -474,8 +463,7 @@ app.post('/api/messages/edit', async (req, res) => {
   }
 });
 
-// ── Arquivos ──────────────────────────────────────────────────────────────────
-
+// Arquivos
 app.get('/api/files/:projectId', async (req, res) => {
   try {
     const rows = await allAsync('SELECT id, original_name, mime_type, size, created_at FROM files WHERE project_id = $1 ORDER BY created_at DESC', [req.params.projectId]);
@@ -517,8 +505,7 @@ app.delete('/api/files/:projectId/:fileId', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── Migração ──────────────────────────────────────────────────────────────────
-
+// Migração
 app.post('/api/migrate', async (req, res) => {
   const { guest_id, user_id } = req.body;
   if (!guest_id || !user_id || guest_id === user_id) return res.json({ ok: true, migrated: 0 });
@@ -528,8 +515,7 @@ app.post('/api/migrate', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── Compartilhamento ──────────────────────────────────────────────────────────
-
+// Compartilhamento
 app.get('/api/share/:chatId', async (req, res) => {
   try {
     const chat = await getAsync('SELECT * FROM chats WHERE id = $1', [req.params.chatId]);
@@ -539,14 +525,14 @@ app.get('/api/share/:chatId', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ─── Error handler ────────────────────────────────────────────────────────────
+// Error handler
 process.on('unhandledRejection', (reason) => console.error('Unhandled rejection:', reason));
 app.use((err, req, res, next) => {
   console.error('Erro não tratado:', err);
   res.status(err.status || 500).json({ error: err.message || 'Erro interno' });
 });
 
-// ─── Boot ─────────────────────────────────────────────────────────────────────
+// Boot
 (async () => {
   try {
     await initDb();
