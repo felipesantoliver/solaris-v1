@@ -1,6 +1,7 @@
 // ============================================================
 //  server.js — Solaris Backend
-//  Modelos: Gemini 2.5 Flash-Lite (padrão) e Gemini 2.5 Pro (logados)
+//  Modelos: Gemini 2.5 Flash (padrão) e Gemini 2.5 Pro (logados)
+//  Endpoint nativo da Gemini (generateContent)
 // ============================================================
 
 import { setDefaultResultOrder } from 'dns';
@@ -23,12 +24,10 @@ const PORT = process.env.PORT || 3001;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 if (!GEMINI_API_KEY) throw new Error('❌ GEMINI_API_KEY não definida');
 
-// Compatível com OpenAI — mesma interface, só muda base URL e modelo
-const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/openai';
-
+// Modelos estáveis atuais (junho/2025)
 const MODELS = {
-  flash: 'gemini-2.5-flash-lite-preview-06-17',  // padrão — 1.000 req/dia free
-  pro: 'gemini-2.5-pro-preview-06-05',          // premium — 100 req/dia free
+  flash: 'gemini-2.5-flash',   // padrão — rápido e gratuito
+  pro: 'gemini-2.5-pro',       // premium — maior capacidade
 };
 
 // Retry simples para rate limit (429)
@@ -51,32 +50,51 @@ async function withRetry(fn, maxRetries = 3, baseDelay = 3000) {
 // modelKey: 'flash' | 'pro'
 async function geminiChat(messages, systemPrompt, modelKey = 'flash') {
   const model = MODELS[modelKey] || MODELS.flash;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
+
+  // Converte mensagens do formato {role, content} para o formato Gemini
+  const contents = messages.map(msg => ({
+    role: msg.role === 'assistant' ? 'model' : 'user',
+    parts: [{ text: msg.content }]
+  }));
+
+  const body = {
+    system_instruction: {
+      parts: [{ text: systemPrompt }]
+    },
+    contents,
+    generationConfig: {
+      temperature: 0.7,
+      maxOutputTokens: 2048,
+      topP: 0.95,
+    }
+  };
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30000);
+
   try {
     const res = await withRetry(() =>
-      fetch(`${GEMINI_BASE}/chat/completions`, {
+      fetch(url, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${GEMINI_API_KEY}`,
-        },
-        body: JSON.stringify({
-          model,
-          max_tokens: 2048,
-          temperature: 0.7,
-          messages: [{ role: 'system', content: systemPrompt }, ...messages],
-        }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
         signal: controller.signal,
       })
     );
+
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(`Gemini ${res.status}: ${err.error?.message || res.statusText}`);
     }
+
     const data = await res.json();
-    return data.choices[0].message.content;
-  } finally { clearTimeout(timeout); }
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!text) throw new Error('Resposta da Gemini sem texto');
+    return text;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
@@ -106,16 +124,9 @@ const upload = multer({
 });
 
 // ─── Helpers de modelo ────────────────────────────────────────────────────────
-
-// Valida se o usuário pode usar o modelo Pro.
-// Pro é restrito a usuários autenticados (x-user-id não é UUID de guest).
-// A distinção simples: guest IDs ficam no localStorage sem registro no DB.
-// O frontend envia x-model: 'pro' apenas quando authUser existe.
 function resolveModelKey(req) {
   const requested = req.headers['x-model'];
   const userId = req.headers['x-user-id'];
-
-  // Só aceita 'pro' se vier com x-model: pro E o userId não for nulo
   if (requested === 'pro' && userId) return 'pro';
   return 'flash';
 }
@@ -208,19 +219,18 @@ async function extractMemories(projectId, response) {
   ).catch(() => { });
 }
 
-// autoTitle usa sempre flash-lite (tarefa simples, economiza cota do Pro)
 async function autoTitle(chatId, firstMessage) {
   try {
     const title = await geminiChat(
       [{ role: 'user', content: `Gere um título curto (máx 5 palavras) para: "${firstMessage.substring(0, 100)}". Só o título, sem aspas.` }],
       'Você gera títulos curtos e precisos.',
-      'flash' // sempre flash para autoTitle
+      'flash'
     );
     await runAsync('UPDATE chats SET title = $1 WHERE id = $2', [title.trim().substring(0, 50), chatId]);
   } catch { }
 }
 
-// ─── ROTAS ────────────────────────────────────────────────────────────────────
+// ─── ROTAS (não alteradas, apenas o uso da geminiChat foi corrigido) ─────────
 
 app.get('/api/health', (_, res) => res.json({
   status: 'ok',
@@ -229,7 +239,6 @@ app.get('/api/health', (_, res) => res.json({
 }));
 
 // ── Configurações do usuário ──────────────────────────────────────────────────
-
 app.get('/api/settings', async (req, res) => {
   const userId = req.headers['x-user-id'];
   if (!userId) return res.status(400).json({ error: 'x-user-id obrigatório' });
@@ -254,7 +263,6 @@ app.post('/api/settings', async (req, res) => {
 });
 
 // ── Projetos ──────────────────────────────────────────────────────────────────
-
 app.get('/api/projects', async (req, res) => {
   const userId = req.headers['x-user-id'];
   if (!userId) return res.status(400).json({ error: 'x-user-id obrigatório' });
@@ -315,7 +323,6 @@ app.delete('/api/projects/:id', async (req, res) => {
 });
 
 // ── Chats ─────────────────────────────────────────────────────────────────────
-
 app.post('/api/projects/:id/chats', async (req, res) => {
   const userId = req.headers['x-user-id'];
   const projectId = req.params.id === 'none' ? null : req.params.id;
@@ -338,7 +345,6 @@ app.delete('/api/projects/:id/chats/:chatId', async (req, res) => {
 });
 
 // ── Mensagens ─────────────────────────────────────────────────────────────────
-
 app.get('/api/messages/chat/:chatId', async (req, res) => {
   try {
     const rows = await allAsync(
@@ -351,7 +357,7 @@ app.get('/api/messages/chat/:chatId', async (req, res) => {
 
 app.post('/api/messages', async (req, res) => {
   const userId = req.headers['x-user-id'];
-  const modelKey = resolveModelKey(req); // 'flash' ou 'pro'
+  const modelKey = resolveModelKey(req);
   const { project_id, chat_id, message } = req.body;
   if (!chat_id || !message) return res.status(400).json({ error: 'chat_id e message são obrigatórios' });
 
@@ -375,7 +381,6 @@ app.post('/api/messages', async (req, res) => {
     if (isFirst) autoTitle(chat_id, message).catch(console.error);
     if (projectId) extractMemories(projectId, responseText).catch(console.error);
 
-    // Devolve o modelo usado para o frontend exibir se quiser
     res.json({ response: responseText, model: modelKey });
   } catch (err) {
     console.error('Erro ao enviar mensagem:', err);
@@ -438,7 +443,6 @@ app.post('/api/messages/edit', async (req, res) => {
 });
 
 // ── Arquivos ──────────────────────────────────────────────────────────────────
-
 app.get('/api/files/:projectId', async (req, res) => {
   try {
     const rows = await allAsync('SELECT id, original_name, mime_type, size, created_at FROM files WHERE project_id = $1 ORDER BY created_at DESC', [req.params.projectId]);
