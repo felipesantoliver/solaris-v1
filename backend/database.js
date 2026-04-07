@@ -7,42 +7,85 @@ if (!process.env.DATABASE_URL) {
   throw new Error('❌ DATABASE_URL não definida nas variáveis de ambiente');
 }
 
-// Resolve o host para IPv4 antes de conectar — Render free tier não suporta IPv6
-async function resolveIPv4(connectionString) {
+// Cache do pool
+let pool = null;
+
+// Função para obter configuração do pool forçando IPv4
+async function getPoolConfig() {
+  const originalUrl = process.env.DATABASE_URL;
+  const url = new URL(originalUrl);
+  const hostname = url.hostname;
+
+  console.log(`🔍 Resolvendo hostname: ${hostname}`);
+
+  // Tenta resolver IPv4 explicitamente
+  let ipv4 = null;
   try {
-    const url = new URL(connectionString);
-    const hostname = url.hostname;
-    // Já é IPv4 literal
-    if (/^\d+\.\d+\.\d+\.\d+$/.test(hostname)) return connectionString;
-    const result = await dns.resolve4(hostname);
-    if (!result || result.length === 0) return connectionString;
-    const ipv4 = result[0];
-    url.hostname = ipv4;
-    // Manter o hostname original como parâmetro SNI para o SSL
-    return url.toString();
-  } catch {
-    return connectionString;
+    const addresses = await dns.resolve4(hostname);
+    if (addresses && addresses.length > 0) {
+      ipv4 = addresses[0];
+      console.log(`✅ ${hostname} -> IPv4: ${ipv4}`);
+    } else {
+      console.warn(`⚠️ Nenhum registro IPv4 encontrado para ${hostname}`);
+    }
+  } catch (err) {
+    console.warn(`⚠️ Falha ao resolver IPv4 para ${hostname}: ${err.message}`);
   }
-}
 
-let pool;
-
-export async function getPool() {
-  if (pool) return pool;
-  const resolvedUrl = await resolveIPv4(process.env.DATABASE_URL);
-  pool = new Pool({
-    connectionString: resolvedUrl,
-    ssl: { rejectUnauthorized: false },
+  // Extrai parâmetros de conexão
+  const config = {
+    user: decodeURIComponent(url.username),
+    password: decodeURIComponent(url.password),
+    host: ipv4 || hostname,
+    port: parseInt(url.port || '5432'),
+    database: url.pathname.slice(1),
     max: 10,
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 10000,
-  });
+  };
+
+  // Trata SSL do Supabase (geralmente 'require' ou 'prefer')
+  const sslParam = url.searchParams.get('sslmode');
+  if (sslParam === 'require' || sslParam === 'prefer' || sslParam === 'allow') {
+    config.ssl = { rejectUnauthorized: false };
+  } else if (sslParam === 'verify-ca' || sslParam === 'verify-full') {
+    config.ssl = { rejectUnauthorized: true }; // padrão seguro
+  }
+
+  // FORÇA IPv4 se tivermos um IP numérico
+  if (ipv4) {
+    config.family = 4;
+  }
+
+  return config;
+}
+
+export async function getPool() {
+  if (pool) return pool;
+
+  const config = await getPoolConfig();
+  console.log(`📦 Criando pool PostgreSQL -> ${config.host}:${config.port} (family: ${config.family || 'auto'})`);
+
+  pool = new Pool(config);
+
   pool.on('error', (err) => {
     console.error('❌ Erro no pool PostgreSQL:', err.message);
   });
+
+  // Teste de conexão inicial
+  try {
+    const client = await pool.connect();
+    console.log('✅ Conexão com Supabase PostgreSQL estabelecida com sucesso');
+    client.release();
+  } catch (err) {
+    console.error('❌ Falha na conexão de teste:', err.message);
+    throw err;
+  }
+
   return pool;
 }
 
+// Helpers para queries
 export async function runAsync(sql, params = []) {
   const p = await getPool();
   const client = await p.connect();
@@ -59,7 +102,7 @@ export async function getAsync(sql, params = []) {
   const client = await p.connect();
   try {
     const result = await client.query(sql, params);
-    return result.rows[0] ?? undefined;
+    return result.rows[0];
   } finally {
     client.release();
   }
@@ -76,6 +119,7 @@ export async function allAsync(sql, params = []) {
   }
 }
 
+// Inicialização das tabelas (mantida igual)
 export async function initDb() {
   const p = await getPool();
   const client = await p.connect();
@@ -138,24 +182,18 @@ export async function initDb() {
       );
     `);
 
-    // Migrations seguras para tabelas já existentes
+    // Migrações incrementais
     const migrations = [
       `ALTER TABLE chats ALTER COLUMN project_id DROP NOT NULL`,
       `ALTER TABLE messages ADD COLUMN IF NOT EXISTS edited BOOLEAN DEFAULT FALSE`,
       `ALTER TABLE messages ADD COLUMN IF NOT EXISTS edit_history JSONB DEFAULT '[]'`,
       `ALTER TABLE messages ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`,
-      `CREATE TABLE IF NOT EXISTS user_settings (
-        user_id TEXT PRIMARY KEY,
-        personality TEXT DEFAULT 'direto',
-        custom_traits TEXT DEFAULT '',
-        updated_at TIMESTAMPTZ DEFAULT NOW()
-      )`,
     ];
     for (const sql of migrations) {
-      await client.query(sql).catch(() => {});
+      await client.query(sql).catch(() => { });
     }
 
-    console.log('✅ Tabelas verificadas/criadas');
+    console.log('✅ Tabelas verificadas/criadas no Supabase');
   } finally {
     client.release();
   }
