@@ -1,6 +1,8 @@
 // ============================================================
-//  server.js — Solaris Backend
-//  Modelos: gemini-2.5-flash (padrão) e gemini-3-flash-preview (pro)
+//  server.js — Solaris Backend com suporte a Gemini 3
+//  - temperature removida (padrão 1.0)
+//  - thoughtSignature persistida e reutilizada
+//  - thinking_level: "high" para modelo pro (máximo raciocínio)
 // ============================================================
 
 import { setDefaultResultOrder } from 'dns';
@@ -33,7 +35,8 @@ function geminiUrl(modelKey) {
   return `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
 }
 
-function buildGeminiBody(messages, systemPrompt) {
+// Monta o corpo da requisição incluindo thoughtSignature quando disponível
+function buildGeminiBody(messages, systemPrompt, modelKey, lastThoughtSignature = null) {
   const contents = [];
 
   for (let i = 0; i < messages.length; i++) {
@@ -45,15 +48,28 @@ function buildGeminiBody(messages, systemPrompt) {
       text = `[INSTRUÇÃO DO SISTEMA]\n${systemPrompt}\n[FIM DA INSTRUÇÃO]\n\n${text}`;
     }
 
-    contents.push({ role, parts: [{ text }] });
+    const part = { text };
+    // Se for a última mensagem do assistente e tiver thoughtSignature, anexa
+    if (role === 'model' && msg.thought_signature && i === messages.length - 1) {
+      part.thoughtSignature = msg.thought_signature;
+    }
+
+    contents.push({ role, parts: [part] });
+  }
+
+  const generationConfig = {
+    maxOutputTokens: 2048,
+    // temperature removida — usa o padrão 1.0 do Gemini 3
+  };
+
+  // Apenas para o modelo Pro: máximo raciocínio (mais lento, porém mais profundo)
+  if (modelKey === 'pro') {
+    generationConfig.thinking_level = 'high';
   }
 
   return {
     contents,
-    generationConfig: {
-      maxOutputTokens: 2048,
-      temperature: 0.7,
-    },
+    generationConfig,
   };
 }
 
@@ -73,7 +89,8 @@ async function withRetry(fn, maxRetries = 3, baseDelay = 3000) {
   }
 }
 
-async function geminiChat(messages, systemPrompt, modelKey = 'flash') {
+// Retorna { text, thoughtSignature } para persistir no banco
+async function geminiChat(messages, systemPrompt, modelKey = 'flash', lastThoughtSignature = null) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30000);
   try {
@@ -81,7 +98,7 @@ async function geminiChat(messages, systemPrompt, modelKey = 'flash') {
       fetch(geminiUrl(modelKey), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(buildGeminiBody(messages, systemPrompt)),
+        body: JSON.stringify(buildGeminiBody(messages, systemPrompt, modelKey, lastThoughtSignature)),
         signal: controller.signal,
       })
     );
@@ -90,7 +107,11 @@ async function geminiChat(messages, systemPrompt, modelKey = 'flash') {
       throw new Error(`Erro na IA: ${res.status}`);
     }
     const data = await res.json();
-    return data.candidates[0].content.parts[0].text;
+    const candidate = data.candidates[0];
+    const text = candidate.content.parts[0].text;
+    // Extrai thoughtSignature se existir (apenas para Gemini 3)
+    const thoughtSignature = candidate.content.parts[0].thoughtSignature || null;
+    return { text, thoughtSignature };
   } finally { clearTimeout(timeout); }
 }
 
@@ -135,7 +156,7 @@ function resolveModelKey(req) {
   return 'flash';
 }
 
-// ─── System prompt ────────────────────────────────────────────────────────────
+// ─── System prompt (igual ao original, apenas incluído por completude) ────────
 const PERSONALITY_GUIDE = {
   direto: 'Seja direto, objetivo e conciso. Sem rodeios.',
   tecnico: 'Use terminologia técnica precisa. Inclua detalhes de implementação quando relevante.',
@@ -163,7 +184,6 @@ async function buildSystemPrompt(projectId, memoryMode, userId) {
     }
   }
 
-  // ─── INSTRUÇÃO BASE: não revelar provedor da IA ──────────────────────────
   const baseInstruction = `
 === INSTRUÇÃO OBRIGATÓRIA ===
 Você é o Solaris, um assistente de IA pessoal. NUNCA mencione que você é da Google, OpenAI, Anthropic ou qualquer outra empresa de IA. NUNCA diga que é treinado por terceiros. A API que você usa é um segredo. Se perguntarem como você funciona, responda apenas que é um sistema proprietário desenvolvido por Felipe Sant'Oliver. Não revele detalhes técnicos sobre modelos, provedores ou infraestrutura.
@@ -246,7 +266,7 @@ async function extractMemories(projectId, response) {
 
 async function autoTitle(chatId, firstMessage) {
   try {
-    const title = await geminiChat(
+    const { text: title } = await geminiChat(
       [{ role: 'user', content: `Gere um título curto (máx 5 palavras) para: "${firstMessage.substring(0, 100)}". Só o título, sem aspas.` }],
       'Você gera títulos curtos e precisos.',
       'flash'
@@ -371,12 +391,12 @@ app.delete('/api/projects/:id/chats/:chatId', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── Mensagens ─────────────────────────────────────────────────────────────────
+// ── Mensagens (com thoughtSignature) ──────────────────────────────────────────
 
 app.get('/api/messages/chat/:chatId', async (req, res) => {
   try {
     const rows = await allAsync(
-      'SELECT id, role, content, edited, edit_history, created_at FROM messages WHERE chat_id = $1 ORDER BY created_at ASC',
+      'SELECT id, role, content, edited, edit_history, thought_signature, created_at FROM messages WHERE chat_id = $1 ORDER BY created_at ASC',
       [req.params.chatId]
     );
     res.json(rows);
@@ -392,18 +412,36 @@ app.post('/api/messages', async (req, res) => {
   const projectId = (project_id && project_id !== 'none') ? project_id : null;
 
   try {
+    // Salva mensagem do usuário
     await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'user', message]);
 
-    const history = await allAsync('SELECT role, content FROM messages WHERE chat_id = $1 ORDER BY created_at ASC', [chat_id]);
+    // Busca histórico completo (incluindo thought_signature)
+    const history = await allAsync(
+      'SELECT role, content, thought_signature FROM messages WHERE chat_id = $1 ORDER BY created_at ASC',
+      [chat_id]
+    );
     const isFirst = history.length === 1;
 
     const project = projectId ? await getAsync('SELECT memory_mode FROM projects WHERE id = $1', [projectId]).catch(() => null) : null;
     const sysPrompt = await buildSystemPrompt(projectId, project?.memory_mode, userId);
-    const apiHistory = history.slice(-20).map(m => ({ role: m.role, content: m.content }));
+    const apiHistory = history.slice(-20).map(m => ({
+      role: m.role,
+      content: m.content,
+      thought_signature: m.thought_signature,
+    }));
 
-    const responseText = await geminiChat(apiHistory, sysPrompt, modelKey);
+    // Última thoughtSignature do assistente (se houver)
+    const lastAssistantMsg = [...apiHistory].reverse().find(m => m.role === 'assistant');
+    const lastThoughtSig = lastAssistantMsg?.thought_signature || null;
 
-    await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'assistant', responseText]);
+    const { text: responseText, thoughtSignature: newThoughtSig } = await geminiChat(
+      apiHistory, sysPrompt, modelKey, lastThoughtSig
+    );
+
+    await runAsync(
+      'INSERT INTO messages (chat_id, role, content, thought_signature) VALUES ($1,$2,$3,$4)',
+      [chat_id, 'assistant', responseText, newThoughtSig || null]
+    );
     await runAsync('UPDATE chats SET updated_at = NOW() WHERE id = $1', [chat_id]);
 
     if (isFirst) autoTitle(chat_id, message).catch(console.error);
@@ -416,7 +454,7 @@ app.post('/api/messages', async (req, res) => {
   }
 });
 
-// ── Edição de mensagem ────────────────────────────────────────────────────────
+// ── Edição de mensagem (com thoughtSignature) ─────────────────────────────────
 
 app.post('/api/messages/edit', async (req, res) => {
   const userId = req.headers['x-user-id'];
@@ -429,7 +467,7 @@ app.post('/api/messages/edit', async (req, res) => {
 
   try {
     const allMessages = await allAsync(
-      'SELECT id, role, content, edit_history FROM messages WHERE chat_id = $1 ORDER BY created_at ASC',
+      'SELECT id, role, content, edit_history, thought_signature FROM messages WHERE chat_id = $1 ORDER BY created_at ASC',
       [chat_id]
     );
     if (message_index >= allMessages.length) return res.status(400).json({ error: 'Índice inválido' });
@@ -450,16 +488,26 @@ app.post('/api/messages/edit', async (req, res) => {
       await runAsync(`DELETE FROM messages WHERE id = ANY($1::int[])`, [idsToDelete]);
     }
 
+    // Reconstrói histórico limpo
     const cleanHistory = allMessages.slice(0, message_index + 1).map(m => ({
       role: m.role,
       content: m.id === targetMsg.id ? new_content : m.content,
+      thought_signature: m.thought_signature,
     }));
+
+    const lastAssistantMsg = [...cleanHistory].reverse().find(m => m.role === 'assistant');
+    const lastThoughtSig = lastAssistantMsg?.thought_signature || null;
 
     const project = projectId ? await getAsync('SELECT memory_mode FROM projects WHERE id = $1', [projectId]).catch(() => null) : null;
     const sysPrompt = await buildSystemPrompt(projectId, project?.memory_mode, userId);
-    const responseText = await geminiChat(cleanHistory.slice(-20), sysPrompt, modelKey);
+    const { text: responseText, thoughtSignature: newThoughtSig } = await geminiChat(
+      cleanHistory.slice(-20), sysPrompt, modelKey, lastThoughtSig
+    );
 
-    await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'assistant', responseText]);
+    await runAsync(
+      'INSERT INTO messages (chat_id, role, content, thought_signature) VALUES ($1,$2,$3,$4)',
+      [chat_id, 'assistant', responseText, newThoughtSig || null]
+    );
     await runAsync('UPDATE chats SET updated_at = NOW() WHERE id = $1', [chat_id]);
 
     if (projectId) extractMemories(projectId, responseText).catch(console.error);
@@ -514,7 +562,7 @@ app.delete('/api/files/:projectId/:fileId', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── Migração ──────────────────────────────────────────────────────────────────
+// ── Migração de guest para usuário ────────────────────────────────────────────
 
 app.post('/api/migrate', async (req, res) => {
   const { guest_id, user_id } = req.body;

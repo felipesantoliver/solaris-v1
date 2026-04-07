@@ -202,14 +202,20 @@ export async function initDb() {
       );
     `);
 
+    // Migrações pontuais (adiciona colunas que podem não existir em bancos antigos)
     const migrations = [
       `ALTER TABLE chats ALTER COLUMN project_id DROP NOT NULL`,
       `ALTER TABLE messages ADD COLUMN IF NOT EXISTS edited BOOLEAN DEFAULT FALSE`,
       `ALTER TABLE messages ADD COLUMN IF NOT EXISTS edit_history JSONB DEFAULT '[]'`,
       `ALTER TABLE messages ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`,
+      // NOVA MIGRAÇÃO: thought_signature para suporte ao Gemini 3
+      `ALTER TABLE messages ADD COLUMN IF NOT EXISTS thought_signature TEXT`,
     ];
     for (const sql of migrations) {
-      await client.query(sql).catch(() => { });
+      await client.query(sql).catch((err) => {
+        // Apenas loga, não quebra a inicialização
+        console.warn(`⚠️ Migração ignorada (já aplicada ou erro): ${err.message}`);
+      });
     }
 
     console.log('✅ Tabelas verificadas/criadas no Supabase');
