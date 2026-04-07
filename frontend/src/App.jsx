@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   Send, Loader2, Plus, Moon, Sun, Mic, FolderPlus, Folder, Check, X,
   Trash2, AlertTriangle, History, GripVertical, PencilLine, Search,
@@ -41,20 +41,15 @@ function PlanetDot({ size, duration, color, glow, dotSize = 'w-1.5 h-1.5', hasRi
           style={glow ? { boxShadow: glow } : {}}
         />
         {hasRing && (
-          <div
-            style={{
-              position: 'absolute',
-              width: '260%',
-              height: '120%',
-              border: `1px solid ${darkMode ? 'rgba(255,255,255,0.22)' : 'rgba(0,0,0,0.18)'}`,
-              borderRadius: '100%',
-              transform: 'rotate(25deg)',
-              background: darkMode
-                ? 'radial-gradient(ellipse at center, transparent 38%, rgba(255,255,255,0.06) 44%, rgba(255,255,255,0.12) 50%, transparent 58%)'
-                : 'radial-gradient(ellipse at center, transparent 38%, rgba(0,0,0,0.03) 44%, rgba(0,0,0,0.07) 50%, transparent 58%)',
-              boxShadow: darkMode ? '0 0 5px rgba(255,255,255,0.12)' : '0 0 5px rgba(0,0,0,0.06)',
-            }}
-          />
+          <div style={{
+            position: 'absolute', width: '260%', height: '120%',
+            border: `1px solid ${darkMode ? 'rgba(255,255,255,0.22)' : 'rgba(0,0,0,0.18)'}`,
+            borderRadius: '100%', transform: 'rotate(25deg)',
+            background: darkMode
+              ? 'radial-gradient(ellipse at center, transparent 38%, rgba(255,255,255,0.06) 44%, rgba(255,255,255,0.12) 50%, transparent 58%)'
+              : 'radial-gradient(ellipse at center, transparent 38%, rgba(0,0,0,0.03) 44%, rgba(0,0,0,0.07) 50%, transparent 58%)',
+            boxShadow: darkMode ? '0 0 5px rgba(255,255,255,0.12)' : '0 0 5px rgba(0,0,0,0.06)',
+          }} />
         )}
       </div>
     </div>
@@ -67,14 +62,9 @@ function ModelToggle({ model, onChange, authUser, darkMode }) {
 
   if (!authUser) {
     return (
-      <div className="relative group mb-3" title="Faça login para usar o modo Pro">
-        <button
-          disabled
-          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[10px] font-medium uppercase tracking-widest transition-all opacity-30 cursor-not-allowed
-            ${darkMode ? 'border-white/10 text-white/40' : 'border-black/10 text-black/40'}`}
-        >
-          <Zap size={10} />
-          Flash
+      <div className="mb-3" title="Faça login para usar o modo Pro">
+        <button disabled className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[10px] font-medium uppercase tracking-widest opacity-30 cursor-not-allowed ${darkMode ? 'border-white/10 text-white/40' : 'border-black/10 text-black/40'}`}>
+          <Zap size={10} />Flash
         </button>
       </div>
     );
@@ -91,8 +81,7 @@ function ModelToggle({ model, onChange, authUser, darkMode }) {
             : (darkMode ? 'border-white/10 text-white/30 hover:text-white/60' : 'border-black/10 text-black/30 hover:text-black/60')
           }`}
       >
-        <Zap size={10} />
-        Flash
+        <Zap size={10} />Flash
       </button>
       <button
         onClick={() => onChange('pro')}
@@ -103,8 +92,7 @@ function ModelToggle({ model, onChange, authUser, darkMode }) {
             : (darkMode ? 'border-white/10 text-white/30 hover:text-amber-400/60 hover:border-amber-400/30' : 'border-black/10 text-black/30 hover:text-amber-500/60 hover:border-amber-400/30')
           }`}
       >
-        <Star size={10} />
-        Pro
+        <Star size={10} />Pro
       </button>
     </div>
   );
@@ -172,9 +160,7 @@ function AuthModal({ onClose, darkMode, onAuthSuccess }) {
             Continuar com Google
           </button>
           <div className={`flex items-center gap-3 my-1 ${t.muted}`}>
-            <div className="flex-1 h-px bg-current opacity-20" />
-            <span className="text-xs">ou</span>
-            <div className="flex-1 h-px bg-current opacity-20" />
+            <div className="flex-1 h-px bg-current opacity-20" /><span className="text-xs">ou</span><div className="flex-1 h-px bg-current opacity-20" />
           </div>
           {mode === 'register' && (
             <input type="text" value={displayName} onChange={e => setDisplayName(e.target.value)} placeholder="Como quer ser chamado?" className={`w-full px-4 py-3 rounded-xl border text-sm font-light focus:outline-none ${t.input}`} />
@@ -203,7 +189,7 @@ const PERSONALITIES = [
   { id: 'empatico', label: 'Empático', desc: 'Caloroso, acolhedor e encorajador.' },
 ];
 
-function SettingsModal({ onClose, darkMode, userId, effectiveUserId }) {
+function SettingsModal({ onClose, darkMode, effectiveUserId }) {
   const [personality, setPersonality] = useState('direto');
   const [customTraits, setCustomTraits] = useState('');
   const [loading, setLoading] = useState(true);
@@ -237,8 +223,7 @@ function SettingsModal({ onClose, darkMode, userId, effectiveUserId }) {
         headers: { 'Content-Type': 'application/json', 'x-user-id': effectiveUserId },
         body: JSON.stringify({ personality, custom_traits: customTraits }),
       });
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      setSaved(true); setTimeout(() => setSaved(false), 2000);
     } catch { }
     setSaving(false);
   }
@@ -253,7 +238,6 @@ function SettingsModal({ onClose, darkMode, userId, effectiveUserId }) {
           </div>
           <button onClick={onClose} className={`${t.muted} hover:text-current`}><X size={16} /></button>
         </div>
-
         {loading ? (
           <div className="flex justify-center py-8"><Loader2 size={20} className="animate-spin opacity-40" /></div>
         ) : (
@@ -261,31 +245,15 @@ function SettingsModal({ onClose, darkMode, userId, effectiveUserId }) {
             <p className={`text-[10px] uppercase tracking-[0.3em] font-light ${t.muted} mb-4`}>Estilo de resposta</p>
             <div className="grid grid-cols-2 gap-2 mb-6">
               {PERSONALITIES.map(p => (
-                <button
-                  key={p.id}
-                  onClick={() => setPersonality(p.id)}
-                  className={`text-left p-3 rounded-xl border transition-all duration-200 ${personality === p.id ? t.cardActive : t.card}`}
-                >
+                <button key={p.id} onClick={() => setPersonality(p.id)} className={`text-left p-3 rounded-xl border transition-all duration-200 ${personality === p.id ? t.cardActive : t.card}`}>
                   <p className={`text-sm font-medium ${personality === p.id ? (darkMode ? 'text-white' : 'text-black') : t.text}`}>{p.label}</p>
                   <p className={`text-xs font-light mt-0.5 ${t.muted}`}>{p.desc}</p>
                 </button>
               ))}
             </div>
-
             <p className={`text-[10px] uppercase tracking-[0.3em] font-light ${t.muted} mb-3`}>Traços adicionais (opcional)</p>
-            <textarea
-              value={customTraits}
-              onChange={e => setCustomTraits(e.target.value)}
-              placeholder="Ex: use analogias com esportes, sempre pergunte se entendi, responda em inglês técnico..."
-              rows={3}
-              className={`w-full px-4 py-3 rounded-xl border text-sm font-light focus:outline-none resize-none mb-6 ${t.input}`}
-            />
-
-            <button
-              onClick={handleSave}
-              disabled={saving}
-              className={`w-full py-3 rounded-xl text-sm font-medium transition-all flex items-center justify-center gap-2 ${t.btn}`}
-            >
+            <textarea value={customTraits} onChange={e => setCustomTraits(e.target.value)} placeholder="Ex: use analogias com esportes, responda em inglês técnico..." rows={3} className={`w-full px-4 py-3 rounded-xl border text-sm font-light focus:outline-none resize-none mb-6 ${t.input}`} />
+            <button onClick={handleSave} disabled={saving} className={`w-full py-3 rounded-xl text-sm font-medium transition-all flex items-center justify-center gap-2 ${t.btn}`}>
               {saving ? <Loader2 size={16} className="animate-spin" /> : saved ? <Check size={16} /> : <Save size={16} />}
               {saved ? 'Salvo!' : 'Salvar configurações'}
             </button>
@@ -318,21 +286,15 @@ function MessageBubble({ msg, index, darkMode, theme, onEdit, isEditing, editVal
           {msg.role === 'user' ? 'Você' : (
             <span className="flex items-center gap-1.5">
               Solaris
-              {msg.model === 'pro' && (
-                <span className="flex items-center gap-0.5 text-amber-400 opacity-70">
-                  <Star size={8} />pro
-                </span>
-              )}
+              {msg.model === 'pro' && <span className="flex items-center gap-0.5 text-amber-400 opacity-70"><Star size={8} />pro</span>}
             </span>
           )}
           {msg.edited && <span className="ml-2 normal-case tracking-normal font-normal opacity-50">(editado)</span>}
         </div>
-
         {isEditing ? (
           <div className="text-left">
             <textarea
-              ref={editRef}
-              value={editValue}
+              ref={editRef} value={editValue}
               onChange={e => { setEditValue(e.target.value); e.target.style.height = 'auto'; e.target.style.height = e.target.scrollHeight + 'px'; }}
               onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onEditSave(); } if (e.key === 'Escape') onEditCancel(); }}
               className={`w-full bg-transparent border-b ${theme.inputBorder} text-base leading-relaxed resize-none focus:outline-none py-1 font-light ${darkMode ? 'text-white' : 'text-black'}`}
@@ -355,8 +317,7 @@ function MessageBubble({ msg, index, darkMode, theme, onEdit, isEditing, editVal
               <div className="flex items-center gap-2 mt-1.5 justify-end opacity-0 group-hover/msg:opacity-100 transition-opacity duration-200">
                 {hasHistory && (
                   <button onClick={() => setShowHistory(!showHistory)} className={`flex items-center gap-1 text-[10px] ${theme.textMuted} hover:text-current transition-colors`}>
-                    <RotateCcw size={10} />
-                    {msg.edit_history.length}v
+                    <RotateCcw size={10} />{msg.edit_history.length}v
                   </button>
                 )}
                 <button onClick={() => onEdit(index, msg.content)} className={`flex items-center gap-1 text-[10px] ${theme.textMuted} hover:text-current transition-colors`}>
@@ -366,7 +327,6 @@ function MessageBubble({ msg, index, darkMode, theme, onEdit, isEditing, editVal
             )}
           </div>
         )}
-
         {showHistory && hasHistory && !isEditing && (
           <div className={`mt-3 text-left border-l-2 ${darkMode ? 'border-white/10' : 'border-black/10'} pl-3 space-y-2`}>
             <p className={`text-[10px] uppercase tracking-widest ${theme.textMuted} mb-2`}>Versões anteriores</p>
@@ -405,31 +365,46 @@ export default function App() {
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [authReady, setAuthReady] = useState(false);
+  const [sendError, setSendError] = useState('');
 
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
   const fileInputRef = useRef(null);
   const moreProjectsRef = useRef(null);
 
-  const effectiveUserId = authUser?.id || getGuestId();
+  // ─── effectiveUserId calculado de forma estável ───────────────────────────
+  // Usa useRef para não disparar re-renders desnecessários
+  const guestIdRef = useRef(getGuestId());
+  const effectiveUserId = authUser?.id || guestIdRef.current;
+
   const displayName = authUser?.user_metadata?.display_name || authUser?.user_metadata?.full_name || authUser?.email?.split('@')[0] || null;
   const hasUserStartedChat = messages.some(m => m.role === 'user');
 
+  // ── Auth ────────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setAuthUser(session?.user ?? null);
+      setAuthReady(true);
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, session) => {
+      setAuthUser(session?.user ?? null);
+    });
+    return () => subscription.unsubscribe();
+  }, []);
+
+  // Se deslogar, volta para flash
   useEffect(() => {
     if (!authUser && model === 'pro') setModel('flash');
   }, [authUser]);
 
-  // Auth
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => { setAuthUser(session?.user ?? null); setAuthReady(true); });
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, session) => setAuthUser(session?.user ?? null));
-    return () => subscription.unsubscribe();
-  }, []);
-
   async function migrateGuestData(userId) {
-    const guestId = localStorage.getItem('solaris_guest_id');
+    const guestId = guestIdRef.current;
     if (!guestId || guestId === userId) return;
-    await fetch(`${API_BASE}/migrate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ guest_id: guestId, user_id: userId }) }).catch(() => { });
+    await fetch(`${API_BASE}/migrate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ guest_id: guestId, user_id: userId }),
+    }).catch(() => { });
   }
 
   async function handleAuthSuccess(user) {
@@ -441,133 +416,168 @@ export default function App() {
   async function handleLogout() {
     await supabase.auth.signOut();
     setModel('flash');
-    setAuthUser(null); setProjects([]); setChatHistory([]); setActiveChatId(null); setActiveProjectId(null); setMessages([]);
+    setAuthUser(null);
+    setProjects([]); setChatHistory([]);
+    setActiveChatId(null); setActiveProjectId(null);
+    setMessages([]);
   }
 
-  // Efeitos
+  // ── Headers ─────────────────────────────────────────────────────────────────
+  // FIX: função estável que sempre lê os valores atuais
+  const buildHeaders = useCallback((extra = {}) => ({
+    'Content-Type': 'application/json',
+    'x-user-id': effectiveUserId,
+    'x-model': authUser ? model : 'flash',
+    ...extra,
+  }), [effectiveUserId, authUser, model]);
+
+  // ── Efeitos ─────────────────────────────────────────────────────────────────
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, isLoading]);
   useEffect(() => { localStorage.setItem('solaris_dark', darkMode); }, [darkMode]);
   useEffect(() => {
     const h = (e) => { if (moreProjectsRef.current && !moreProjectsRef.current.contains(e.target)) setShowMoreProjects(false); };
-    document.addEventListener('mousedown', h); return () => document.removeEventListener('mousedown', h);
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
   }, []);
+
+  // Busca projetos só depois do auth estar pronto
   useEffect(() => { if (authReady) fetchProjects(); }, [authReady, effectiveUserId]);
 
-  // Projetos
+  // ── Projetos ─────────────────────────────────────────────────────────────────
   async function fetchProjects() {
     try {
       const r = await fetch(`${API_BASE}/projects`, { headers: { 'x-user-id': effectiveUserId } });
+      if (!r.ok) { setProjects([]); return; }
       const d = await r.json();
-      setProjects(d || []);
-    } catch (err) {
-      console.error('Erro ao buscar projetos:', err);
-      setProjects([]);
-    }
+      setProjects(Array.isArray(d) ? d : []);
+    } catch { setProjects([]); }
   }
 
+  // Ao selecionar projeto, carrega seus chats
   useEffect(() => {
-    if (!activeProjectId) { setChatHistory([]); setActiveChatId(null); setMessages([]); return; }
-    setActiveChatId(null); setMessages([]);
+    if (!activeProjectId) {
+      // FIX: NÃO limpa messages nem activeChatId ao sair de projeto —
+      // só limpa se não houver chat ativo fora de projeto
+      setChatHistory([]);
+      return;
+    }
+    setActiveChatId(null);
+    setMessages([]);
     (async () => {
       try {
         const r = await fetch(`${API_BASE}/projects/${activeProjectId}`, { headers: { 'x-user-id': effectiveUserId } });
+        if (!r.ok) { setChatHistory([]); return; }
         const d = await r.json();
         setChatHistory(d.chats || []);
         if (d.chats?.length > 0) setActiveChatId(d.chats[0].id);
-      } catch (err) {
-        console.error('Erro ao carregar projeto:', err);
-        setChatHistory([]);
-      }
+      } catch { setChatHistory([]); }
     })();
   }, [activeProjectId]);
 
+  // Ao selecionar chat, carrega mensagens
   useEffect(() => {
     if (!activeChatId) { setMessages([]); return; }
     (async () => {
       try {
         const r = await fetch(`${API_BASE}/messages/chat/${activeChatId}`, { headers: { 'x-user-id': effectiveUserId } });
+        if (!r.ok) return;
         const msgs = await r.json();
         setMessages(Array.isArray(msgs) ? msgs : []);
-      } catch (err) {
-        console.error('Erro ao carregar mensagens:', err);
-      }
+      } catch { }
     })();
   }, [activeChatId]);
 
-  // Headers
-  function buildHeaders(extra = {}) {
-    return {
-      'Content-Type': 'application/json',
-      'x-user-id': effectiveUserId,
-      'x-model': authUser ? model : 'flash',
-      ...extra,
-    };
+  // ── Criar chat (helper reutilizável) ─────────────────────────────────────────
+  // FIX: extraído como função separada para reusar em handleSend e handleNewChat
+  async function createChat(projectId) {
+    const endpoint = projectId
+      ? `${API_BASE}/projects/${projectId}/chats`
+      : `${API_BASE}/projects/none/chats`;
+
+    const r = await fetch(endpoint, {
+      method: 'POST',
+      headers: buildHeaders(),
+      body: JSON.stringify({ title: 'Nova conversa' }),
+    });
+
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.error || `Erro ${r.status} ao criar chat`);
+    }
+    return r.json();
   }
 
-  // Enviar mensagem (corrigido com tratamento de erro e limpeza condicional)
+  // ── Enviar mensagem ─────────────────────────────────────────────────────────
+  // FIX PRINCIPAL: não usa return em caso de erro na criação do chat — mostra erro
+  // FIX: limpa o input ANTES de qualquer await, evitando mensagem presa no campo
   const handleSend = async () => {
-    if (!input.trim() || isLoading) return;
+    const text = input.trim();
+    if (!text || isLoading) return;
+
+    setSendError('');
     setEditingMsgIndex(null);
+
+    // FIX: limpa o input imediatamente — antes de qualquer chamada async
+    setInput('');
+    if (textareaRef.current) textareaRef.current.style.height = 'auto';
 
     let chatId = activeChatId;
     const projectId = activeProjectId;
-    const userMessage = input.trim();
 
-    // Se não houver chat, tenta criar um novo
+    // Cria chat se não existir
     if (!chatId) {
       try {
-        const endpoint = projectId
-          ? `${API_BASE}/projects/${projectId}/chats`
-          : `${API_BASE}/projects/none/chats`;
-        const r = await fetch(endpoint, {
-          method: 'POST',
-          headers: buildHeaders(),
-          body: JSON.stringify({ title: 'Nova conversa' }),
+        const nc = await createChat(projectId);
+        setChatHistory(prev => {
+          // Evita duplicatas
+          if (prev.find(c => c.id === nc.id)) return prev;
+          return [nc, ...prev];
         });
-        if (!r.ok) {
-          const errorData = await r.json().catch(() => ({}));
-          throw new Error(errorData.error || `Erro ${r.status} ao criar chat`);
-        }
-        const nc = await r.json();
-        setChatHistory(prev => [nc, ...prev]);
         setActiveChatId(nc.id);
         chatId = nc.id;
       } catch (err) {
-        console.error('Falha ao criar chat:', err);
-        alert(`Não foi possível iniciar a conversa: ${err.message}`);
+        console.error('Erro ao criar chat:', err);
+        setSendError(`Não foi possível iniciar conversa: ${err.message}`);
+        // FIX: restaura o input para o usuário não perder o que digitou
+        setInput(text);
         return;
       }
     }
 
-    // Limpa o input e adiciona a mensagem do usuário na UI
-    setInput('');
-    if (textareaRef.current) textareaRef.current.style.height = 'auto';
-    setMessages(prev => [...prev, { role: 'user', content: userMessage }]);
+    // Adiciona mensagem do usuário na tela imediatamente
+    setMessages(prev => [...prev, { role: 'user', content: text }]);
     setIsLoading(true);
 
     try {
       const r = await fetch(`${API_BASE}/messages`, {
         method: 'POST',
         headers: buildHeaders(),
-        body: JSON.stringify({ project_id: projectId || null, chat_id: chatId, message: userMessage }),
+        body: JSON.stringify({
+          project_id: projectId || null,
+          chat_id: chatId,
+          message: text,
+        }),
       });
       const d = await safeJson(r);
       if (!r.ok) throw new Error(d.error || 'Erro no servidor');
       setMessages(prev => [...prev, { role: 'assistant', content: d.response, model: d.model }]);
     } catch (err) {
-      console.error('Erro ao enviar mensagem:', err);
-      alert(`Erro ao enviar: ${err.message}`);
-      // Remove a mensagem do usuário que foi adicionada, pois não obteve resposta
-      setMessages(prev => prev.slice(0, -1));
+      setMessages(prev => [...prev, { role: 'assistant', content: `⚠️ ${err.message}` }]);
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleKeyDown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } };
-  const handleInput = (e) => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`; };
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
+  };
+  const handleInput = (e) => {
+    setInput(e.target.value);
+    e.target.style.height = 'auto';
+    e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
+  };
 
-  // Edição
+  // ── Edição ───────────────────────────────────────────────────────────────────
   const handleEdit = (index, content) => { setEditingMsgIndex(index); setEditValue(content); };
   const handleEditCancel = () => { setEditingMsgIndex(null); setEditValue(''); };
   const handleEditSave = async () => {
@@ -575,9 +585,13 @@ export default function App() {
     const original = messages[editingMsgIndex];
     const newContent = editValue.trim();
     const newMessages = messages.slice(0, editingMsgIndex + 1).map((m, i) =>
-      i === editingMsgIndex ? { ...m, content: newContent, edited: true, edit_history: [...(m.edit_history || []), { content: m.content, edited_at: new Date().toISOString() }] } : m
+      i === editingMsgIndex
+        ? { ...m, content: newContent, edited: true, edit_history: [...(m.edit_history || []), { content: m.content, edited_at: new Date().toISOString() }] }
+        : m
     );
-    setMessages(newMessages); setEditingMsgIndex(null); setEditValue('');
+    setMessages(newMessages);
+    setEditingMsgIndex(null);
+    setEditValue('');
     setIsLoading(true);
     try {
       const r = await fetch(`${API_BASE}/messages/edit`, {
@@ -587,43 +601,41 @@ export default function App() {
       });
       const d = await safeJson(r);
       setMessages(prev => [...prev, { role: 'assistant', content: d.response, model: d.model }]);
-    } catch (err) {
-      console.error('Erro ao editar:', err);
-      alert(`Erro ao regerar: ${err.message}`);
-    } finally {
-      setIsLoading(false);
-    }
+    } catch {
+      setMessages(prev => [...prev, { role: 'assistant', content: 'Erro ao regerar.' }]);
+    } finally { setIsLoading(false); }
   };
 
-  // Compartilhar
+  // ── Compartilhar ─────────────────────────────────────────────────────────────
   const handleShare = () => {
     const text = messages.map(m => `${m.role === 'user' ? 'VOCÊ' : 'SOLARIS'}: ${m.content}`).join('\n\n');
     navigator.clipboard.writeText(text).catch(() => { });
-    setShowShareToast(true); setTimeout(() => setShowShareToast(false), 3000);
+    setShowShareToast(true);
+    setTimeout(() => setShowShareToast(false), 3000);
   };
 
-  // CRUD projetos
+  // ── CRUD projetos ─────────────────────────────────────────────────────────────
+  // FIX: createProject agora mostra erro em vez de falhar silenciosamente
   const createProject = async () => {
     if (!newProjectName.trim()) { setIsCreatingProject(false); return; }
     try {
       const r = await fetch(`${API_BASE}/projects`, {
         method: 'POST',
         headers: buildHeaders(),
-        body: JSON.stringify({ name: newProjectName.trim(), objective: '', response_style: 'direto', memory_mode: 'isolado' })
+        body: JSON.stringify({ name: newProjectName.trim(), objective: '', response_style: 'direto', memory_mode: 'isolado' }),
       });
       if (!r.ok) {
-        const errData = await r.json().catch(() => ({}));
-        throw new Error(errData.error || `Erro ${r.status}`);
+        const err = await r.json().catch(() => ({}));
+        throw new Error(err.error || `Erro ${r.status}`);
       }
       const p = await r.json();
-      setProjects([p, ...projects]);
+      setProjects(prev => [p, ...prev]);
       setNewProjectName('');
       setIsCreatingProject(false);
       setActiveProjectId(p.id);
     } catch (err) {
       console.error('Erro ao criar projeto:', err);
-      alert(`Falha ao criar projeto: ${err.message}`);
-      setIsCreatingProject(false);
+      setSendError(`Não foi possível criar projeto: ${err.message}`);
     }
   };
 
@@ -633,42 +645,37 @@ export default function App() {
     try {
       if (type === 'project') {
         await fetch(`${API_BASE}/projects/${data.id}`, { method: 'DELETE', headers: { 'x-user-id': effectiveUserId } });
-        const updated = projects.filter(p => p.id !== data.id);
-        setProjects(updated);
-        if (activeProjectId === data.id) { setActiveProjectId(null); setChatHistory([]); setActiveChatId(null); }
+        setProjects(prev => prev.filter(p => p.id !== data.id));
+        if (activeProjectId === data.id) { setActiveProjectId(null); setChatHistory([]); setActiveChatId(null); setMessages([]); }
       } else {
         await fetch(`${API_BASE}/projects/${activeProjectId || 'none'}/chats/${data.id}`, { method: 'DELETE', headers: { 'x-user-id': effectiveUserId } });
         const updated = chatHistory.filter(c => c.id !== data.id);
         setChatHistory(updated);
-        if (activeChatId === data.id) setActiveChatId(updated.length > 0 ? updated[0].id : null);
+        if (activeChatId === data.id) {
+          setActiveChatId(updated.length > 0 ? updated[0].id : null);
+          if (updated.length === 0) setMessages([]);
+        }
       }
     } catch (err) { console.error(err); }
     setItemToDelete(null);
   };
 
-  const handleNewChat = async () => {
-    if (activeProjectId) {
-      try {
-        const r = await fetch(`${API_BASE}/projects/${activeProjectId}/chats`, { method: 'POST', headers: buildHeaders(), body: JSON.stringify({ title: 'Nova conversa' }) });
-        const nc = await r.json();
-        setChatHistory(prev => [nc, ...prev]);
-        setActiveChatId(nc.id);
-        setMessages([]);
-      } catch (err) {
-        console.error('Erro ao criar novo chat:', err);
-        alert(`Não foi possível criar um novo chat: ${err.message}`);
-      }
-    } else {
-      setActiveChatId(null);
-      setMessages([]);
-    }
+  // FIX: handleNewChat não precisa de projeto — cria chat livre
+  const handleNewChat = () => {
+    setActiveChatId(null);
+    setMessages([]);
+    setSendError('');
+    // Se estiver num projeto, cria um chat novo no projeto ao enviar
+    // Se não estiver num projeto, o chat é criado no primeiro envio
   };
 
-  // Drag
+  // ── Drag ─────────────────────────────────────────────────────────────────────
   const onDragStart = (e, id) => { setDraggedItemId(id); e.dataTransfer.effectAllowed = 'move'; setTimeout(() => { e.currentTarget.style.opacity = '0.4'; }, 0); };
   const onDragOver = (e, id) => {
-    e.preventDefault(); if (!draggedItemId || draggedItemId === id) return;
-    const from = projects.findIndex(p => p.id === draggedItemId), to = projects.findIndex(p => p.id === id);
+    e.preventDefault();
+    if (!draggedItemId || draggedItemId === id) return;
+    const from = projects.findIndex(p => p.id === draggedItemId);
+    const to = projects.findIndex(p => p.id === id);
     if (from === -1 || to === -1) return;
     const arr = [...projects]; arr.splice(to, 0, arr.splice(from, 1)[0]); setProjects(arr);
   };
@@ -681,7 +688,7 @@ export default function App() {
     await fetch(`${API_BASE}/files/${activeProjectId}`, { method: 'POST', headers: { 'x-user-id': effectiveUserId }, body: fd }).catch(console.error);
   };
 
-  // Tema
+  // ── Tema ──────────────────────────────────────────────────────────────────────
   const theme = {
     bgAside: darkMode ? 'bg-[#0a0a0a]' : 'bg-white',
     bgMain: darkMode ? 'bg-[#111111]' : 'bg-[#fdfdfd]',
@@ -700,7 +707,9 @@ export default function App() {
 
   const visibleProjects = projects.slice(0, 3);
   const extraProjects = projects.slice(3);
-  const filteredChats = searchQuery.trim() ? chatHistory.filter(c => c.title?.toLowerCase().includes(searchQuery.toLowerCase())) : chatHistory;
+  const filteredChats = searchQuery.trim()
+    ? chatHistory.filter(c => c.title?.toLowerCase().includes(searchQuery.toLowerCase()))
+    : chatHistory;
 
   const ProjectItem = ({ project, isActive, compact = false }) => (
     <div
@@ -733,17 +742,18 @@ export default function App() {
 
   return (
     <div className={`flex h-screen ${darkMode ? 'bg-[#050505] text-white' : 'bg-[#fafafa] text-[#1a1a1a]'} font-sans antialiased overflow-hidden transition-colors duration-500`}>
+
       {showAuthModal && <AuthModal darkMode={darkMode} onClose={() => setShowAuthModal(false)} onAuthSuccess={handleAuthSuccess} />}
       {showSettingsModal && authUser && (
-        <SettingsModal darkMode={darkMode} onClose={() => setShowSettingsModal(false)} userId={authUser.id} effectiveUserId={effectiveUserId} />
+        <SettingsModal darkMode={darkMode} onClose={() => setShowSettingsModal(false)} effectiveUserId={effectiveUserId} />
       )}
 
-      {/* Toast de compartilhamento */}
+      {/* Share Toast */}
       <div className={`fixed top-24 left-1/2 -translate-x-1/2 z-[110] px-6 py-3 rounded-full bg-emerald-500 text-white text-xs font-bold tracking-widest uppercase shadow-2xl transition-all duration-500 ${showShareToast ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-4 pointer-events-none'}`}>
         Copiado para a área de transferência
       </div>
 
-      {/* Modal de exclusão */}
+      {/* Delete Modal */}
       {itemToDelete && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
           <div className={`${theme.modalBg} border ${theme.border} w-full max-w-sm rounded-2xl p-8 shadow-2xl`}>
@@ -760,7 +770,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Sidebar */}
+      {/* ── Sidebar ── */}
       <aside className={`hidden lg:flex flex-col border-r ${theme.border} ${theme.bgAside} relative transition-all duration-500 ease-in-out shrink-0 ${isSidebarOpen ? 'w-72' : 'w-20'}`}>
         <div className={`flex flex-col h-full overflow-hidden transition-all duration-500 ${isSidebarOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
           <div className="px-8 pt-12 pb-6 flex flex-col gap-5 shrink-0">
@@ -775,6 +785,7 @@ export default function App() {
           </div>
 
           <div className="px-8 flex flex-col flex-1 overflow-y-auto custom-scrollbar">
+            {/* Sistema Solar */}
             <div className="relative w-full aspect-square flex items-center justify-center opacity-80 hover:opacity-100 transition-opacity duration-700 mb-10 shrink-0">
               <div className={`w-6 h-6 ${darkMode ? 'bg-[#ffd700]' : 'bg-[#ffcc00] border border-amber-600/10'} rounded-full z-10`} style={{ boxShadow: '0 0 25px rgba(255,204,0,0.35)' }} />
               <OrbitLine size="w-10 h-10" themeColor={theme.orbit} />
@@ -795,13 +806,20 @@ export default function App() {
               <PlanetDot size="w-56 h-56" duration="45s" color="bg-[#4b70dd]" dotSize="w-1.5 h-1.5" darkMode={darkMode} />
             </div>
 
+            {/* Projetos */}
             <div className="flex flex-col gap-4 mb-8 shrink-0">
               <h2 className={`text-[10px] font-light tracking-[0.4em] uppercase ${theme.textSecondary}`}>PROJETOS</h2>
               {isCreatingProject ? (
                 <div className={`flex items-center gap-2 p-2 -ml-2 rounded-lg border ${theme.inputBorder}`}>
-                  <input autoFocus type="text" value={newProjectName} onChange={e => setNewProjectName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') createProject(); if (e.key === 'Escape') setIsCreatingProject(false); }} placeholder="Nome do projeto..." className="bg-transparent border-none text-xs w-full focus:outline-none font-light" />
+                  <input
+                    autoFocus type="text" value={newProjectName}
+                    onChange={e => setNewProjectName(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') createProject(); if (e.key === 'Escape') { setIsCreatingProject(false); setNewProjectName(''); } }}
+                    placeholder="Nome do projeto..."
+                    className="bg-transparent border-none text-xs w-full focus:outline-none font-light"
+                  />
                   <button onClick={createProject} className="text-emerald-500"><Check size={14} /></button>
-                  <button onClick={() => setIsCreatingProject(false)} className="text-red-400"><X size={14} /></button>
+                  <button onClick={() => { setIsCreatingProject(false); setNewProjectName(''); }} className="text-red-400"><X size={14} /></button>
                 </div>
               ) : (
                 <button onClick={() => setIsCreatingProject(true)} className={`flex items-center gap-3 p-2 -ml-2 rounded-lg text-left transition-all ${theme.projectHover} group`}>
@@ -827,6 +845,7 @@ export default function App() {
               )}
             </div>
 
+            {/* Conversas */}
             <div className="flex flex-col gap-4 mb-10 shrink-0">
               <h2 className={`text-[10px] font-light tracking-[0.4em] uppercase ${theme.textSecondary}`}>CONVERSAS</h2>
               {filteredChats.length === 0 && (
@@ -848,6 +867,7 @@ export default function App() {
             </div>
           </div>
 
+          {/* Footer */}
           <div className={`px-8 shrink-0 border-t ${theme.border}`}>
             {displayName && (
               <div className={`pt-4 pb-2 flex items-center gap-2 ${theme.textSecondary}`}>
@@ -862,6 +882,7 @@ export default function App() {
           </div>
         </div>
 
+        {/* Rail mode */}
         {!isSidebarOpen && (
           <div className="flex-1 flex flex-col items-center pt-12 gap-8 animate-in fade-in duration-700">
             <div className={`w-8 h-8 rounded-full border ${theme.orbit} flex items-center justify-center animate-pulse`}>
@@ -882,7 +903,7 @@ export default function App() {
         )}
       </aside>
 
-      {/* Main */}
+      {/* ── Main ── */}
       <main className={`flex-1 flex flex-col ${theme.bgMain} relative transition-colors duration-500`}>
         <header className={`h-20 flex items-center justify-between px-6 md:px-10 border-b ${theme.border} transition-colors duration-500`}>
           <div className="flex items-center gap-4">
@@ -922,6 +943,7 @@ export default function App() {
           </div>
         </header>
 
+        {/* Mensagens */}
         <div className="flex-1 relative overflow-y-auto px-6 md:px-20 py-10 custom-scrollbar transition-colors duration-500">
           {hasUserStartedChat && (
             <div className="sticky top-0 z-30 flex justify-end pointer-events-none mb-[-40px]">
@@ -932,9 +954,7 @@ export default function App() {
             </div>
           )}
 
-          {messages.length === 0 ? (
-            <WelcomeScreen />
-          ) : (
+          {messages.length === 0 ? <WelcomeScreen /> : (
             <div className="space-y-12">
               {messages.map((msg, i) => (
                 <MessageBubble
@@ -957,9 +977,18 @@ export default function App() {
           <div ref={messagesEndRef} />
         </div>
 
+        {/* Input */}
         <footer className="p-10 pt-4">
           <div className="max-w-3xl mx-auto">
+
             <ModelToggle model={model} onChange={setModel} authUser={authUser} darkMode={darkMode} />
+
+            {/* Erro visível ao usuário */}
+            {sendError && (
+              <p className="text-red-400 text-xs mb-3 flex items-center gap-1.5">
+                <AlertTriangle size={12} />{sendError}
+              </p>
+            )}
 
             <div className={`relative flex items-end border-b ${theme.inputBorder} pb-8 ${theme.inputFocus} transition-all duration-500`}>
               <textarea
@@ -967,7 +996,11 @@ export default function App() {
                 placeholder="O que deseja perguntar?"
                 className={`flex-1 bg-transparent border-none text-lg ${darkMode ? 'text-white placeholder-white/20' : 'text-black placeholder-black/30'} resize-none focus:outline-none py-2 font-light`}
               />
-              <button onClick={handleSend} disabled={isLoading} className={`p-2 mb-3 transition-all ${isLoading ? theme.textMuted : (darkMode ? 'text-white hover:scale-110' : 'text-black hover:scale-110')}`}>
+              <button
+                onClick={handleSend}
+                disabled={isLoading || !input.trim()}
+                className={`p-2 mb-3 transition-all ${(isLoading || !input.trim()) ? theme.textMuted : (darkMode ? 'text-white hover:scale-110' : 'text-black hover:scale-110')}`}
+              >
                 {isLoading ? <Loader2 size={20} className="animate-spin" /> : input.trim() ? <Send size={20} strokeWidth={1.5} /> : <Mic size={20} strokeWidth={1.5} />}
               </button>
             </div>
@@ -976,10 +1009,7 @@ export default function App() {
               <span>enter para enviar · shift+enter nova linha</span>
               <div className="flex items-center gap-4">
                 {!authUser && (
-                  <span
-                    onClick={() => setShowAuthModal(true)}
-                    className={`flex items-center gap-1.5 cursor-pointer text-amber-400/60 hover:text-amber-400 transition-colors mb-2`}
-                  >
+                  <span onClick={() => setShowAuthModal(true)} className="flex items-center gap-1.5 cursor-pointer text-amber-400/60 hover:text-amber-400 transition-colors mb-2">
                     <Star size={10} /> Entrar para usar Pro
                   </span>
                 )}

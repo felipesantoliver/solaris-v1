@@ -1,7 +1,6 @@
 // ============================================================
 //  server.js — Solaris Backend
-//  Modelos: Gemini 2.5 Flash (padrão) e Gemini 2.5 Pro (logados)
-//  Endpoint nativo da Gemini (generateContent)
+//  Modelos: gemini-2.5-flash (padrão) e gemini-2.5-pro (logados)
 // ============================================================
 
 import { setDefaultResultOrder } from 'dns';
@@ -24,11 +23,44 @@ const PORT = process.env.PORT || 3001;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 if (!GEMINI_API_KEY) throw new Error('❌ GEMINI_API_KEY não definida');
 
-// Modelos estáveis atuais (junho/2025)
 const MODELS = {
-  flash: 'gemini-2.5-flash',   // padrão — rápido e gratuito
-  pro: 'gemini-2.5-pro',       // premium — maior capacidade
+  flash: 'gemini-2.5-flash',
+  pro: 'gemini-2.5-pro',
 };
+
+function geminiUrl(modelKey) {
+  const model = MODELS[modelKey] || MODELS.flash;
+  return `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
+}
+
+// Converte histórico para o formato nativo do Gemini.
+// System prompt é injetado como texto no início do primeiro turno do usuário
+// pois o Gemini não possui role 'system' no formato generateContent básico.
+function buildGeminiBody(messages, systemPrompt) {
+  const contents = [];
+
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    // Gemini usa 'user' e 'model' (não 'assistant')
+    const role = msg.role === 'assistant' ? 'model' : 'user';
+    let text = msg.content;
+
+    // Injeta system prompt apenas na primeira mensagem do usuário
+    if (i === 0 && systemPrompt && role === 'user') {
+      text = `[INSTRUÇÃO DO SISTEMA]\n${systemPrompt}\n[FIM DA INSTRUÇÃO]\n\n${text}`;
+    }
+
+    contents.push({ role, parts: [{ text }] });
+  }
+
+  return {
+    contents,
+    generationConfig: {
+      maxOutputTokens: 2048,
+      temperature: 0.7,
+    },
+  };
+}
 
 // Retry simples para rate limit (429)
 async function withRetry(fn, maxRetries = 3, baseDelay = 3000) {
@@ -38,7 +70,7 @@ async function withRetry(fn, maxRetries = 3, baseDelay = 3000) {
       const is429 = err.message?.includes('429') || err.status === 429;
       if (is429 && attempt < maxRetries) {
         const wait = baseDelay * Math.pow(2, attempt);
-        console.warn(`⚠️ Rate limit. Aguardando ${wait / 1000}s...`);
+        console.warn(`⚠️ Rate limit Gemini. Aguardando ${wait / 1000}s...`);
         await new Promise(r => setTimeout(r, wait));
         continue;
       }
@@ -49,52 +81,24 @@ async function withRetry(fn, maxRetries = 3, baseDelay = 3000) {
 
 // modelKey: 'flash' | 'pro'
 async function geminiChat(messages, systemPrompt, modelKey = 'flash') {
-  const model = MODELS[modelKey] || MODELS.flash;
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
-
-  // Converte mensagens do formato {role, content} para o formato Gemini
-  const contents = messages.map(msg => ({
-    role: msg.role === 'assistant' ? 'model' : 'user',
-    parts: [{ text: msg.content }]
-  }));
-
-  const body = {
-    system_instruction: {
-      parts: [{ text: systemPrompt }]
-    },
-    contents,
-    generationConfig: {
-      temperature: 0.7,
-      maxOutputTokens: 2048,
-      topP: 0.95,
-    }
-  };
-
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30000);
-
   try {
     const res = await withRetry(() =>
-      fetch(url, {
+      fetch(geminiUrl(modelKey), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+        body: JSON.stringify(buildGeminiBody(messages, systemPrompt)),
         signal: controller.signal,
       })
     );
-
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(`Gemini ${res.status}: ${err.error?.message || res.statusText}`);
     }
-
     const data = await res.json();
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) throw new Error('Resposta da Gemini sem texto');
-    return text;
-  } finally {
-    clearTimeout(timeout);
-  }
+    return data.candidates[0].content.parts[0].text;
+  } finally { clearTimeout(timeout); }
 }
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
@@ -123,7 +127,9 @@ const upload = multer({
   },
 });
 
-// ─── Helpers de modelo ────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+// Pro só para usuários autenticados (x-user-id presente + x-model: pro)
 function resolveModelKey(req) {
   const requested = req.headers['x-model'];
   const userId = req.headers['x-user-id'];
@@ -219,6 +225,7 @@ async function extractMemories(projectId, response) {
   ).catch(() => { });
 }
 
+// autoTitle sempre usa flash — não consome cota do Pro
 async function autoTitle(chatId, firstMessage) {
   try {
     const title = await geminiChat(
@@ -230,7 +237,7 @@ async function autoTitle(chatId, firstMessage) {
   } catch { }
 }
 
-// ─── ROTAS (não alteradas, apenas o uso da geminiChat foi corrigido) ─────────
+// ─── ROTAS ────────────────────────────────────────────────────────────────────
 
 app.get('/api/health', (_, res) => res.json({
   status: 'ok',
@@ -238,7 +245,8 @@ app.get('/api/health', (_, res) => res.json({
   models: MODELS,
 }));
 
-// ── Configurações do usuário ──────────────────────────────────────────────────
+// ── Settings ──────────────────────────────────────────────────────────────────
+
 app.get('/api/settings', async (req, res) => {
   const userId = req.headers['x-user-id'];
   if (!userId) return res.status(400).json({ error: 'x-user-id obrigatório' });
@@ -263,6 +271,7 @@ app.post('/api/settings', async (req, res) => {
 });
 
 // ── Projetos ──────────────────────────────────────────────────────────────────
+
 app.get('/api/projects', async (req, res) => {
   const userId = req.headers['x-user-id'];
   if (!userId) return res.status(400).json({ error: 'x-user-id obrigatório' });
@@ -323,6 +332,7 @@ app.delete('/api/projects/:id', async (req, res) => {
 });
 
 // ── Chats ─────────────────────────────────────────────────────────────────────
+
 app.post('/api/projects/:id/chats', async (req, res) => {
   const userId = req.headers['x-user-id'];
   const projectId = req.params.id === 'none' ? null : req.params.id;
@@ -345,6 +355,7 @@ app.delete('/api/projects/:id/chats/:chatId', async (req, res) => {
 });
 
 // ── Mensagens ─────────────────────────────────────────────────────────────────
+
 app.get('/api/messages/chat/:chatId', async (req, res) => {
   try {
     const rows = await allAsync(
@@ -389,6 +400,7 @@ app.post('/api/messages', async (req, res) => {
 });
 
 // ── Edição de mensagem ────────────────────────────────────────────────────────
+
 app.post('/api/messages/edit', async (req, res) => {
   const userId = req.headers['x-user-id'];
   const modelKey = resolveModelKey(req);
@@ -443,6 +455,7 @@ app.post('/api/messages/edit', async (req, res) => {
 });
 
 // ── Arquivos ──────────────────────────────────────────────────────────────────
+
 app.get('/api/files/:projectId', async (req, res) => {
   try {
     const rows = await allAsync('SELECT id, original_name, mime_type, size, created_at FROM files WHERE project_id = $1 ORDER BY created_at DESC', [req.params.projectId]);
@@ -485,6 +498,7 @@ app.delete('/api/files/:projectId/:fileId', async (req, res) => {
 });
 
 // ── Migração ──────────────────────────────────────────────────────────────────
+
 app.post('/api/migrate', async (req, res) => {
   const { guest_id, user_id } = req.body;
   if (!guest_id || !user_id || guest_id === user_id) return res.json({ ok: true, migrated: 0 });
@@ -495,6 +509,7 @@ app.post('/api/migrate', async (req, res) => {
 });
 
 // ── Compartilhamento ──────────────────────────────────────────────────────────
+
 app.get('/api/share/:chatId', async (req, res) => {
   try {
     const chat = await getAsync('SELECT * FROM chats WHERE id = $1', [req.params.chatId]);
@@ -515,7 +530,9 @@ app.use((err, req, res, next) => {
 (async () => {
   try {
     await initDb();
-    app.listen(PORT, '0.0.0.0', () => console.log(`✅ Solaris backend na porta ${PORT} | flash: ${MODELS.flash} | pro: ${MODELS.pro}`));
+    app.listen(PORT, '0.0.0.0', () =>
+      console.log(`✅ Solaris backend na porta ${PORT} | flash: ${MODELS.flash} | pro: ${MODELS.pro}`)
+    );
   } catch (err) {
     console.error('❌ Falha ao iniciar:', err);
     process.exit(1);
