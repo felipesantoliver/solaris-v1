@@ -33,7 +33,7 @@ function geminiUrl(modelKey) {
   return `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
 }
 
-function buildGeminiBody(messages, systemPrompt) {
+function buildGeminiBody(messages, systemPrompt, modelKey = 'flash') {
   const contents = [];
 
   for (let i = 0; i < messages.length; i++) {
@@ -48,11 +48,14 @@ function buildGeminiBody(messages, systemPrompt) {
     contents.push({ role, parts: [{ text }] });
   }
 
+  // Temperatura conforme o modelo: 1.0 para pro (Gemini 3), 0.7 para flash
+  const temperature = modelKey === 'pro' ? 1.0 : 0.7;
+
   return {
     contents,
     generationConfig: {
       maxOutputTokens: 2048,
-      temperature: 0.7,
+      temperature: temperature,
     },
   };
 }
@@ -81,7 +84,7 @@ async function geminiChat(messages, systemPrompt, modelKey = 'flash') {
       fetch(geminiUrl(modelKey), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(buildGeminiBody(messages, systemPrompt)),
+        body: JSON.stringify(buildGeminiBody(messages, systemPrompt, modelKey)),
         signal: controller.signal,
       })
     );
