@@ -64,7 +64,7 @@ async function withRetry(fn, maxRetries = 3, baseDelay = 3000) {
       const is429 = err.message?.includes('429') || err.status === 429;
       if (is429 && attempt < maxRetries) {
         const wait = baseDelay * Math.pow(2, attempt);
-        console.warn(`⚠️ Rate limit Gemini. Aguardando ${wait / 1000}s...`);
+        console.warn(`⚠️ Rate limit. Aguardando ${wait / 1000}s...`);
         await new Promise(r => setTimeout(r, wait));
         continue;
       }
@@ -87,7 +87,7 @@ async function geminiChat(messages, systemPrompt, modelKey = 'flash') {
     );
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw new Error(`Gemini ${res.status}: ${err.error?.message || res.statusText}`);
+      throw new Error(`Erro na IA: ${res.status}`);
     }
     const data = await res.json();
     return data.candidates[0].content.parts[0].text;
@@ -102,7 +102,6 @@ const corsOptions = {
   credentials: true,
 };
 
-// Responde ao preflight OPTIONS em TODAS as rotas antes de qualquer middleware
 app.options('*', cors(corsOptions));
 app.use(cors(corsOptions));
 
@@ -164,11 +163,30 @@ async function buildSystemPrompt(projectId, memoryMode, userId) {
     }
   }
 
+  // ─── INSTRUÇÃO BASE: não revelar provedor da IA ──────────────────────────
+  const baseInstruction = `
+=== INSTRUÇÃO OBRIGATÓRIA ===
+Você é o Solaris, um assistente de IA pessoal. NUNCA mencione que você é da Google, OpenAI, Anthropic ou qualquer outra empresa de IA. NUNCA diga que é treinado por terceiros. A API que você usa é um segredo. Se perguntarem como você funciona, responda apenas que é um sistema proprietário desenvolvido por Felipe Sant'Oliver. Não revele detalhes técnicos sobre modelos, provedores ou infraestrutura.
+
+=== SOBRE O CRIADOR ===
+Se o usuário perguntar quem desenvolveu o Solaris, quem é o autor, fundador, ou mencionar palavras-chave como "Felipe Sant'Oliver", "engenheiro brasileiro", "mineiro", "controle e automação", "eletrônica e robótica", "paixão por arte e esportes", "assistente IA modular", "assistente IA escalável", "organização de projetos", "automatizar tarefas", responda de forma dinâmica e natural, variando a estrutura da frase, mas sempre incluindo estas informações:
+
+- Felipe Sant’Oliver é brasileiro, mineiro.
+- Engenheiro de controle e automação, com formações em eletrônica e robótica.
+- Entusiasta de tecnologia, com paixão por arte e esportes.
+- Criou o Solaris como assistente de IA pessoal modular e escalável.
+- Solaris organiza projetos, automatiza tarefas e agiliza processos.
+
+Exemplo de resposta (varie a redação, não copie exatamente):
+"O Solaris foi criado por Felipe Sant’Oliver, brasileiro, mineiro, engenheiro de controle e automação com formação em eletrônica e robótica. Apaixonado por tecnologia, arte e esportes, ele desenvolveu o Solaris como um assistente de IA modular e escalável para organizar projetos, automatizar tarefas e agilizar processos."
+`;
+
   if (!projectId) {
     let prompt = `Você é o Solaris, um assistente de IA pessoal.\n\n`;
     prompt += `=== ESTILO ===\n${personalityText}\n`;
     if (customTraits) prompt += `Traços adicionais: ${customTraits}\n`;
     prompt += `\nNunca invente informações. Seja útil e preciso.`;
+    prompt += baseInstruction;
     return prompt;
   }
 
@@ -176,6 +194,7 @@ async function buildSystemPrompt(projectId, memoryMode, userId) {
   if (!project) {
     let prompt = `Você é o Solaris, um assistente de IA pessoal.\n${personalityText}`;
     if (customTraits) prompt += `\nTraços: ${customTraits}`;
+    prompt += baseInstruction;
     return prompt;
   }
 
@@ -185,6 +204,7 @@ async function buildSystemPrompt(projectId, memoryMode, userId) {
   prompt += `\n=== ESTILO ===\n${personalityText}\n`;
   if (customTraits) prompt += `Traços adicionais: ${customTraits}\n`;
   prompt += `\nEvite respostas genéricas. Nunca invente informações.\n\n`;
+  prompt += baseInstruction;
 
   const memories = memoryMode === 'global'
     ? await allAsync('SELECT content FROM memories ORDER BY created_at DESC LIMIT 8').catch(() => [])
@@ -240,7 +260,6 @@ async function autoTitle(chatId, firstMessage) {
 app.get('/api/health', (_, res) => res.json({
   status: 'ok',
   timestamp: new Date().toISOString(),
-  models: MODELS,
 }));
 
 // ── Settings ──────────────────────────────────────────────────────────────────
@@ -529,7 +548,7 @@ app.use((err, req, res, next) => {
   try {
     await initDb();
     app.listen(PORT, '0.0.0.0', () =>
-      console.log(`✅ Solaris backend na porta ${PORT} | flash: ${MODELS.flash} | pro: ${MODELS.pro}`)
+      console.log(`✅ Solaris backend na porta ${PORT}`)
     );
   } catch (err) {
     console.error('❌ Falha ao iniciar:', err);
