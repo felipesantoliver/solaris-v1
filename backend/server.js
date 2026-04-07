@@ -64,7 +64,7 @@ async function withRetry(fn, maxRetries = 3, baseDelay = 3000) {
       const is429 = err.message?.includes('429') || err.status === 429;
       if (is429 && attempt < maxRetries) {
         const wait = baseDelay * Math.pow(2, attempt);
-        console.warn(`⚠️ Rate limit. Aguardando ${wait / 1000}s...`);
+        console.warn(`⚠️ Rate limit Gemini. Aguardando ${wait / 1000}s...`);
         await new Promise(r => setTimeout(r, wait));
         continue;
       }
@@ -87,7 +87,7 @@ async function geminiChat(messages, systemPrompt, modelKey = 'flash') {
     );
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw new Error(`Erro na IA: ${res.status}`);
+      throw new Error(`Gemini ${res.status}: ${err.error?.message || res.statusText}`);
     }
     const data = await res.json();
     return data.candidates[0].content.parts[0].text;
@@ -102,6 +102,7 @@ const corsOptions = {
   credentials: true,
 };
 
+// Responde ao preflight OPTIONS em TODAS as rotas antes de qualquer middleware
 app.options('*', cors(corsOptions));
 app.use(cors(corsOptions));
 
@@ -163,11 +164,8 @@ async function buildSystemPrompt(projectId, memoryMode, userId) {
     }
   }
 
-  // ─── INSTRUÇÃO BASE: não revelar provedor da IA ──────────────────────────
-  const baseInstruction = `
-=== INSTRUÇÃO OBRIGATÓRIA ===
-Você é o Solaris, um assistente de IA pessoal. NUNCA mencione que você é da Google, OpenAI, Anthropic ou qualquer outra empresa de IA. NUNCA diga que é treinado por terceiros. A API que você usa é um segredo. Se perguntarem como você funciona, responda apenas que é um sistema proprietário desenvolvido por Felipe Sant'Oliver. Não revele detalhes técnicos sobre modelos, provedores ou infraestrutura.
-
+  // ─── INSTRUÇÃO SOBRE O CRIADOR (Felipe Sant'Oliver) ───────────────────────
+  const creatorInstruction = `
 === SOBRE O CRIADOR ===
 Se o usuário perguntar quem desenvolveu o Solaris, quem é o autor, fundador, ou mencionar palavras-chave como "Felipe Sant'Oliver", "engenheiro brasileiro", "mineiro", "controle e automação", "eletrônica e robótica", "paixão por arte e esportes", "assistente IA modular", "assistente IA escalável", "organização de projetos", "automatizar tarefas", responda de forma dinâmica e natural, variando a estrutura da frase, mas sempre incluindo estas informações:
 
@@ -186,7 +184,7 @@ Exemplo de resposta (varie a redação, não copie exatamente):
     prompt += `=== ESTILO ===\n${personalityText}\n`;
     if (customTraits) prompt += `Traços adicionais: ${customTraits}\n`;
     prompt += `\nNunca invente informações. Seja útil e preciso.`;
-    prompt += baseInstruction;
+    prompt += creatorInstruction;
     return prompt;
   }
 
@@ -194,7 +192,7 @@ Exemplo de resposta (varie a redação, não copie exatamente):
   if (!project) {
     let prompt = `Você é o Solaris, um assistente de IA pessoal.\n${personalityText}`;
     if (customTraits) prompt += `\nTraços: ${customTraits}`;
-    prompt += baseInstruction;
+    prompt += creatorInstruction;
     return prompt;
   }
 
@@ -204,7 +202,7 @@ Exemplo de resposta (varie a redação, não copie exatamente):
   prompt += `\n=== ESTILO ===\n${personalityText}\n`;
   if (customTraits) prompt += `Traços adicionais: ${customTraits}\n`;
   prompt += `\nEvite respostas genéricas. Nunca invente informações.\n\n`;
-  prompt += baseInstruction;
+  prompt += creatorInstruction;
 
   const memories = memoryMode === 'global'
     ? await allAsync('SELECT content FROM memories ORDER BY created_at DESC LIMIT 8').catch(() => [])
@@ -260,6 +258,7 @@ async function autoTitle(chatId, firstMessage) {
 app.get('/api/health', (_, res) => res.json({
   status: 'ok',
   timestamp: new Date().toISOString(),
+  models: MODELS,
 }));
 
 // ── Settings ──────────────────────────────────────────────────────────────────
@@ -548,7 +547,7 @@ app.use((err, req, res, next) => {
   try {
     await initDb();
     app.listen(PORT, '0.0.0.0', () =>
-      console.log(`✅ Solaris backend na porta ${PORT}`)
+      console.log(`✅ Solaris backend na porta ${PORT} | flash: ${MODELS.flash} | pro: ${MODELS.pro}`)
     );
   } catch (err) {
     console.error('❌ Falha ao iniciar:', err);
