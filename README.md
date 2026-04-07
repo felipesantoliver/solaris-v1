@@ -6,7 +6,7 @@
 
 ## Visão geral
 
-Solaris é um assistente de IA pessoal construído com React no frontend e Node.js no backend, utilizando os modelos **Gemini 2.5 Flash** e **Gemini 2.5 Pro** do Google. Suporta autenticação via Supabase, organização por projetos, memória automática de conversas e upload de arquivos de referência.
+Solaris é um assistente de IA pessoal construído com React no frontend e Node.js no backend, utilizando os modelos **Gemini 2.5 Flash** e **Gemini 3 Flash com thinking_level (sendo usado como pro)** do Google. Suporta autenticação via Supabase, organização por projetos, memória automática de conversas e upload de arquivos de referência.
 
 ---
 
