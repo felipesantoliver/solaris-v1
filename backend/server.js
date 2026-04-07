@@ -33,19 +33,14 @@ function geminiUrl(modelKey) {
   return `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
 }
 
-// Converte histórico para o formato nativo do Gemini.
-// System prompt é injetado como texto no início do primeiro turno do usuário
-// pois o Gemini não possui role 'system' no formato generateContent básico.
 function buildGeminiBody(messages, systemPrompt) {
   const contents = [];
 
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
-    // Gemini usa 'user' e 'model' (não 'assistant')
     const role = msg.role === 'assistant' ? 'model' : 'user';
     let text = msg.content;
 
-    // Injeta system prompt apenas na primeira mensagem do usuário
     if (i === 0 && systemPrompt && role === 'user') {
       text = `[INSTRUÇÃO DO SISTEMA]\n${systemPrompt}\n[FIM DA INSTRUÇÃO]\n\n${text}`;
     }
@@ -62,7 +57,6 @@ function buildGeminiBody(messages, systemPrompt) {
   };
 }
 
-// Retry simples para rate limit (429)
 async function withRetry(fn, maxRetries = 3, baseDelay = 3000) {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try { return await fn(); }
@@ -79,7 +73,6 @@ async function withRetry(fn, maxRetries = 3, baseDelay = 3000) {
   }
 }
 
-// modelKey: 'flash' | 'pro'
 async function geminiChat(messages, systemPrompt, modelKey = 'flash') {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30000);
@@ -101,12 +94,19 @@ async function geminiChat(messages, systemPrompt, modelKey = 'flash') {
   } finally { clearTimeout(timeout); }
 }
 
-// ─── Middleware ───────────────────────────────────────────────────────────────
-app.use(cors({
+// ─── CORS ─────────────────────────────────────────────────────────────────────
+const corsOptions = {
   origin: process.env.FRONTEND_URL || '*',
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'x-user-id', 'x-model', 'Authorization'],
-}));
+  credentials: true,
+};
+
+// Responde ao preflight OPTIONS em TODAS as rotas antes de qualquer middleware
+app.options('*', cors(corsOptions));
+app.use(cors(corsOptions));
+
+// ─── Middleware ───────────────────────────────────────────────────────────────
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
@@ -129,7 +129,6 @@ const upload = multer({
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-// Pro só para usuários autenticados (x-user-id presente + x-model: pro)
 function resolveModelKey(req) {
   const requested = req.headers['x-model'];
   const userId = req.headers['x-user-id'];
@@ -225,7 +224,6 @@ async function extractMemories(projectId, response) {
   ).catch(() => { });
 }
 
-// autoTitle sempre usa flash — não consome cota do Pro
 async function autoTitle(chatId, firstMessage) {
   try {
     const title = await geminiChat(
