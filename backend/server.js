@@ -57,14 +57,14 @@ function buildGeminiBody(messages, systemPrompt) {
   };
 }
 
-async function withRetry(fn, maxRetries = 5, baseDelay = 5000) {
+async function withRetry(fn, maxRetries = 3, baseDelay = 3000) {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try { return await fn(); }
     catch (err) {
       const is429 = err.message?.includes('429') || err.status === 429;
       if (is429 && attempt < maxRetries) {
         const wait = baseDelay * Math.pow(2, attempt);
-        console.warn(`⚠️ Rate limit (429). Tentativa ${attempt + 1}/${maxRetries + 1} - Aguardando ${wait / 1000}s...`);
+        console.warn(`⚠️ Rate limit. Aguardando ${wait / 1000}s...`);
         await new Promise(r => setTimeout(r, wait));
         continue;
       }
@@ -75,7 +75,7 @@ async function withRetry(fn, maxRetries = 5, baseDelay = 5000) {
 
 async function geminiChat(messages, systemPrompt, modelKey = 'flash') {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 60000); // aumenta timeout para 60s
+  const timeout = setTimeout(() => controller.abort(), 30000);
   try {
     const res = await withRetry(() =>
       fetch(geminiUrl(modelKey), {
@@ -94,23 +94,6 @@ async function geminiChat(messages, systemPrompt, modelKey = 'flash') {
   } finally { clearTimeout(timeout); }
 }
 
-// ─── Rate Limiter por usuário (evita 429 por envio rápido) ───────────────────
-const userLastRequestTime = new Map();
-
-function rateLimitByUser(req, res, next) {
-  const userId = req.headers['x-user-id'] || 'anonymous';
-  const now = Date.now();
-  const last = userLastRequestTime.get(userId) || 0;
-  const minInterval = 2000; // 2 segundos entre requisições do mesmo usuário
-
-  if (now - last < minInterval) {
-    return res.status(429).json({ error: 'Muitas requisições. Aguarde um momento antes de enviar outra mensagem.' });
-  }
-
-  userLastRequestTime.set(userId, now);
-  next();
-}
-
 // ─── CORS ─────────────────────────────────────────────────────────────────────
 const corsOptions = {
   origin: process.env.FRONTEND_URL || '*',
@@ -126,9 +109,6 @@ app.use(cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-
-// Aplica rate limiter APENAS nas rotas que enviam mensagens (POST /api/messages e /api/messages/edit)
-app.use('/api/messages', rateLimitByUser);
 
 // ─── Upload ───────────────────────────────────────────────────────────────────
 const uploadsDir = path.join(__dirname, 'uploads');
