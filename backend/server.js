@@ -1,7 +1,7 @@
 // ============================================================
 //  server.js — Solaris Backend
 //  Modelos: gemini-2.5-flash (padrão) e gemini-3-flash-preview (pro)
-//  Apenas correção: temperature removida (padrão 1.0)
+//  v1.1.0 — Otimização de contexto: janela deslizante de mensagens
 // ============================================================
 
 import { setDefaultResultOrder } from 'dns';
@@ -95,6 +95,79 @@ async function geminiChat(messages, systemPrompt, modelKey = 'flash') {
   } finally { clearTimeout(timeout); }
 }
 
+// ─── OTIMIZAÇÃO DE CONTEXTO ───────────────────────────────────────────────────
+//
+//  selectContextWindow — Seleciona janela deslizante de mensagens para reduzir
+//  consumo de tokens sem perda de contexto relevante.
+//
+//  Regras aplicadas (em ordem de prioridade):
+//    1. Remove mensagens vazias ou nulas
+//    2. Remove duplicatas consecutivas (mesmo role + mesmo conteúdo)
+//    3. Garante que a última mensagem do usuário está presente
+//    4. Garante que a última resposta da IA está presente (se existir)
+//    5. Mantém ordem cronológica correta (mais antiga → mais recente)
+//    6. Limita o payload a MAX_CONTEXT_MESSAGES mensagens
+//    7. Fallback: se total < MAX_CONTEXT_MESSAGES, envia tudo disponível
+//
+//  O mecanismo de memória persistente (tabela `memories`) NÃO é afetado —
+//  ele opera no system prompt, completamente independente desta função.
+//
+const MAX_CONTEXT_MESSAGES = 8;
+
+function selectContextWindow(history) {
+  if (!Array.isArray(history) || history.length === 0) return [];
+
+  // ── 1. Filtrar mensagens inválidas (vazias / nulas) ──────────────────────────
+  const valid = history.filter(m =>
+    m &&
+    typeof m.role === 'string' &&
+    typeof m.content === 'string' &&
+    m.content.trim().length > 0
+  );
+
+  if (valid.length === 0) return [];
+
+  // ── 2. Remover duplicatas consecutivas (mesmo role + conteúdo idêntico) ──────
+  const deduped = valid.filter((m, i) => {
+    if (i === 0) return true;
+    const prev = valid[i - 1];
+    return !(prev.role === m.role && prev.content.trim() === m.content.trim());
+  });
+
+  // ── 3. Fallback: se o total cabe na janela, retorna tudo ─────────────────────
+  if (deduped.length <= MAX_CONTEXT_MESSAGES) {
+    console.log(`📦 Context window: ${deduped.length} msgs (sem corte necessário)`);
+    return deduped;
+  }
+
+  // ── 4. Identifica âncoras obrigatórias ───────────────────────────────────────
+  //       • Última mensagem do usuário
+  //       • Última resposta da IA (se existir e for diferente da acima)
+  const lastUserIdx   = [...deduped].map((m, i) => ({ m, i })).filter(x => x.m.role === 'user').at(-1)?.i ?? -1;
+  const lastModelIdx  = [...deduped].map((m, i) => ({ m, i })).filter(x => x.m.role === 'assistant').at(-1)?.i ?? -1;
+
+  const anchorIndices = new Set();
+  if (lastUserIdx  >= 0) anchorIndices.add(lastUserIdx);
+  if (lastModelIdx >= 0) anchorIndices.add(lastModelIdx);
+
+  // ── 5. Seleciona janela deslizante: (MAX - âncoras) msgs mais recentes ────────
+  //       + âncoras obrigatórias (que podem já estar dentro da janela)
+  const windowSize  = MAX_CONTEXT_MESSAGES - anchorIndices.size;
+  const windowStart = Math.max(0, deduped.length - MAX_CONTEXT_MESSAGES);
+
+  const windowIndices = new Set();
+  for (let i = windowStart; i < deduped.length; i++) windowIndices.add(i);
+  for (const idx of anchorIndices) windowIndices.add(idx);
+
+  // ── 6. Reconstrói em ordem cronológica ───────────────────────────────────────
+  const selected = [...windowIndices]
+    .sort((a, b) => a - b)
+    .map(i => ({ role: deduped[i].role, content: deduped[i].content }));
+
+  console.log(`📦 Context window: ${selected.length}/${deduped.length} msgs selecionadas (corte aplicado)`);
+  return selected;
+}
+
 // ─── CORS ─────────────────────────────────────────────────────────────────────
 const corsOptions = {
   origin: process.env.FRONTEND_URL || '*',
@@ -136,7 +209,7 @@ function resolveModelKey(req) {
   return 'flash';
 }
 
-// ─── System prompt (igual ao original) ────────────────────────────────────────────
+// ─── System prompt ────────────────────────────────────────────────────────────
 const PERSONALITY_GUIDE = {
   direto: 'Seja direto, objetivo e conciso. Sem rodeios.',
   tecnico: 'Use terminologia técnica precisa. Inclua detalhes de implementação quando relevante.',
@@ -171,14 +244,14 @@ Você é o Solaris, um assistente de IA pessoal. NUNCA mencione que você é da 
 === SOBRE O CRIADOR ===
 Se o usuário perguntar quem desenvolveu o Solaris, quem é o autor, fundador, ou mencionar palavras-chave como "Felipe Sant'Oliver", "engenheiro brasileiro", "mineiro", "controle e automação", "eletrônica e robótica", "paixão por arte e esportes", "assistente IA modular", "assistente IA escalável", "organização de projetos", "automatizar tarefas", responda de forma dinâmica e natural, variando a estrutura da frase, mas sempre incluindo estas informações:
 
-- Felipe Sant’Oliver é brasileiro, mineiro.
+- Felipe Sant'Oliver é brasileiro, mineiro.
 - Engenheiro de controle e automação, com formações em eletrônica e robótica.
 - Entusiasta de tecnologia, com paixão por arte e esportes.
 - Criou o Solaris como assistente de IA pessoal modular e escalável.
 - Solaris organiza projetos, automatiza tarefas e agiliza processos.
 
 Exemplo de resposta (varie a redação, não copie exatamente):
-"O Solaris foi criado por Felipe Sant’Oliver, brasileiro, mineiro, engenheiro de controle e automação com formação em eletrônica e robótica. Apaixonado por tecnologia, arte e esportes, ele desenvolveu o Solaris como um assistente de IA modular e escalável para organizar projetos, automatizar tarefas e agilizar processos."
+"O Solaris foi criado por Felipe Sant'Oliver, brasileiro, mineiro, engenheiro de controle e automação com formação em eletrônica e robótica. Apaixonado por tecnologia, arte e esportes, ele desenvolveu o Solaris como um assistente de IA modular e escalável para organizar projetos, automatizar tarefas e agilizar processos."
 `;
 
   if (!projectId) {
@@ -249,9 +322,9 @@ function generateLocalTitle(firstMessage) {
   if (!firstMessage || typeof firstMessage !== 'string') return FALLBACK;
 
   const cleaned = firstMessage
-    .replace(/[\r\n\t]+/g, ' ')   // quebras de linha → espaço
-    .replace(/\s{2,}/g, ' ')       // espaços duplos → simples
-    .replace(/["""''`]/g, '')       // aspas decorativas
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/["""''`]/g, '')
     .trim();
 
   if (cleaned.length < 3) return FALLBACK;
@@ -260,13 +333,9 @@ function generateLocalTitle(firstMessage) {
   const titleWords = words.slice(0, 7);
   let title = titleWords.join(' ');
 
-  // Capitaliza primeira letra
   title = title.charAt(0).toUpperCase() + title.slice(1);
-
-  // Adiciona reticências se a mensagem foi truncada
   if (words.length > 7) title += '…';
 
-  // Garante limite seguro para o banco
   return title.substring(0, 50);
 }
 
@@ -277,7 +346,7 @@ async function autoTitle(chatId, firstMessage) {
   } catch { }
 }
 
-// ─── ROTAS (todas idênticas ao original) ─────────────────────────────────────
+// ─── ROTAS ────────────────────────────────────────────────────────────────────
 
 app.get('/api/health', (_, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
 
@@ -420,12 +489,15 @@ app.post('/api/messages', async (req, res) => {
   try {
     await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'user', message]);
 
+    // Busca histórico completo do banco mas aplica janela deslizante antes de enviar à IA
     const history = await allAsync('SELECT role, content FROM messages WHERE chat_id = $1 ORDER BY created_at ASC', [chat_id]);
     const isFirst = history.length === 1;
 
     const project = projectId ? await getAsync('SELECT memory_mode FROM projects WHERE id = $1', [projectId]).catch(() => null) : null;
     const sysPrompt = await buildSystemPrompt(projectId, project?.memory_mode, userId);
-    const apiHistory = history.slice(-20).map(m => ({ role: m.role, content: m.content }));
+
+    // ✅ Substituído .slice(-20) pela janela de contexto otimizada
+    const apiHistory = selectContextWindow(history);
 
     const responseText = await geminiChat(apiHistory, sysPrompt, modelKey);
 
@@ -482,7 +554,9 @@ app.post('/api/messages/edit', async (req, res) => {
 
     const project = projectId ? await getAsync('SELECT memory_mode FROM projects WHERE id = $1', [projectId]).catch(() => null) : null;
     const sysPrompt = await buildSystemPrompt(projectId, project?.memory_mode, userId);
-    const responseText = await geminiChat(cleanHistory.slice(-20), sysPrompt, modelKey);
+
+    // ✅ Substituído .slice(-20) pela janela de contexto otimizada
+    const responseText = await geminiChat(selectContextWindow(cleanHistory), sysPrompt, modelKey);
 
     await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'assistant', responseText]);
     await runAsync('UPDATE chats SET updated_at = NOW() WHERE id = $1', [chat_id]);
