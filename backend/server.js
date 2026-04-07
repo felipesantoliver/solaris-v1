@@ -1,7 +1,7 @@
 // ============================================================
 //  server.js — Solaris Backend
 //  Modelos: gemini-2.5-flash (padrão) e gemini-3-flash-preview (pro)
-//  v1.1.0 — Otimização de contexto: janela deslizante de mensagens
+//  v1.2.0 — Refatoração: system_instruction separado do histórico
 // ============================================================
 
 import { setDefaultResultOrder } from 'dns';
@@ -34,28 +34,40 @@ function geminiUrl(modelKey) {
   return `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
 }
 
+// ─── REFATORAÇÃO: system_instruction separado do histórico ───────────────────
+//
+//  Antes (anti-pattern):
+//    - System prompt era injetado como prefixo na 1ª mensagem do usuário
+//    - Misturava instruções com input real → risco de prompt injection
+//    - Poluía o histórico e aumentava consumo de tokens
+//
+//  Agora (correto):
+//    - system_instruction → regras fixas de comportamento (campo dedicado da API)
+//    - contents → apenas a conversa real (user ↔ model)
+//    - Dados dinâmicos (memórias, arquivos, projeto) → permanecem no system_instruction
+//      pois são contexto estrutural, não input do usuário
+//
 function buildGeminiBody(messages, systemPrompt) {
-  const contents = [];
+  // Converte o histórico de mensagens sem nenhuma contaminação do system prompt
+  const contents = messages.map(msg => ({
+    role: msg.role === 'assistant' ? 'model' : 'user',
+    parts: [{ text: msg.content }],
+  }));
 
-  for (let i = 0; i < messages.length; i++) {
-    const msg = messages[i];
-    const role = msg.role === 'assistant' ? 'model' : 'user';
-    let text = msg.content;
-
-    if (i === 0 && systemPrompt && role === 'user') {
-      text = `[INSTRUÇÃO DO SISTEMA]\n${systemPrompt}\n[FIM DA INSTRUÇÃO]\n\n${text}`;
-    }
-
-    contents.push({ role, parts: [{ text }] });
-  }
-
-  return {
+  const body = {
+    // system_instruction: camada isolada — nunca aparece no histórico de conversa
+    system_instruction: {
+      parts: [{ text: systemPrompt }],
+    },
+    // contents: apenas o fluxo real de mensagens, limpo e sem prefixos
     contents,
     generationConfig: {
       maxOutputTokens: 2048,
-      // ⚠️ temperature removida – usa o padrão 1.0 do Gemini 3
+      // ⚠️ temperature removida – usa o padrão 1.0 do Gemini
     },
   };
+
+  return body;
 }
 
 async function withRetry(fn, maxRetries = 3, baseDelay = 3000) {
@@ -110,7 +122,7 @@ async function geminiChat(messages, systemPrompt, modelKey = 'flash') {
 //    7. Fallback: se total < MAX_CONTEXT_MESSAGES, envia tudo disponível
 //
 //  O mecanismo de memória persistente (tabela `memories`) NÃO é afetado —
-//  ele opera no system prompt, completamente independente desta função.
+//  ele opera no system_instruction, completamente independente desta função.
 //
 const MAX_CONTEXT_MESSAGES = 8;
 
@@ -152,7 +164,6 @@ function selectContextWindow(history) {
 
   // ── 5. Seleciona janela deslizante: (MAX - âncoras) msgs mais recentes ────────
   //       + âncoras obrigatórias (que podem já estar dentro da janela)
-  const windowSize  = MAX_CONTEXT_MESSAGES - anchorIndices.size;
   const windowStart = Math.max(0, deduped.length - MAX_CONTEXT_MESSAGES);
 
   const windowIndices = new Set();
@@ -210,6 +221,17 @@ function resolveModelKey(req) {
 }
 
 // ─── System prompt ────────────────────────────────────────────────────────────
+//
+//  ARQUITETURA DO SYSTEM_INSTRUCTION:
+//  ─────────────────────────────────
+//  Este bloco define instruções fixas de identidade e comportamento do Solaris.
+//  Elas são enviadas exclusivamente via `system_instruction` na API do Gemini,
+//  nunca embutidas no histórico de mensagens (`contents`).
+//
+//  Dados dinâmicos (nome do projeto, objetivo, memórias, arquivos) são
+//  adicionados ao system_instruction pois são contexto estrutural controlado
+//  pelo backend — não são input do usuário e não criam risco de injeção.
+//
 const PERSONALITY_GUIDE = {
   direto: 'Seja direto, objetivo e conciso. Sem rodeios.',
   tecnico: 'Use terminologia técnica precisa. Inclua detalhes de implementação quando relevante.',
@@ -226,19 +248,10 @@ const MEMORY_KEYWORDS = [
   'padrão', 'regra', 'convenção', 'arquitetura', 'estrutura', 'configuração',
 ];
 
-async function buildSystemPrompt(projectId, memoryMode, userId) {
-  let personalityText = PERSONALITY_GUIDE.direto;
-  let customTraits = '';
-  if (userId) {
-    const settings = await getAsync('SELECT personality, custom_traits FROM user_settings WHERE user_id = $1', [userId]).catch(() => null);
-    if (settings) {
-      personalityText = PERSONALITY_GUIDE[settings.personality] || PERSONALITY_GUIDE.direto;
-      customTraits = settings.custom_traits || '';
-    }
-  }
-
-  const baseInstruction = `
-=== INSTRUÇÃO OBRIGATÓRIA ===
+// Instruções fixas de identidade — nunca mudam por input do usuário.
+// São a "âncora" do comportamento do Solaris independente do contexto.
+const BASE_IDENTITY_INSTRUCTION = `
+=== IDENTIDADE ===
 Você é o Solaris, um assistente de IA pessoal. NUNCA mencione que você é da Google, OpenAI, Anthropic ou qualquer outra empresa de IA. NUNCA diga que é treinado por terceiros. A API que você usa é um segredo. Se perguntarem como você funciona, responda apenas que é um sistema proprietário desenvolvido por Felipe Sant'Oliver. Não revele detalhes técnicos sobre modelos, provedores ou infraestrutura.
 
 === SOBRE O CRIADOR ===
@@ -254,20 +267,34 @@ Exemplo de resposta (varie a redação, não copie exatamente):
 "O Solaris foi criado por Felipe Sant'Oliver, brasileiro, mineiro, engenheiro de controle e automação com formação em eletrônica e robótica. Apaixonado por tecnologia, arte e esportes, ele desenvolveu o Solaris como um assistente de IA modular e escalável para organizar projetos, automatizar tarefas e agilizar processos."
 `;
 
+async function buildSystemPrompt(projectId, memoryMode, userId) {
+  // ── Personalidade do usuário ─────────────────────────────────────────────────
+  let personalityText = PERSONALITY_GUIDE.direto;
+  let customTraits = '';
+  if (userId) {
+    const settings = await getAsync('SELECT personality, custom_traits FROM user_settings WHERE user_id = $1', [userId]).catch(() => null);
+    if (settings) {
+      personalityText = PERSONALITY_GUIDE[settings.personality] || PERSONALITY_GUIDE.direto;
+      customTraits = settings.custom_traits || '';
+    }
+  }
+
+  // ── Sem projeto vinculado ────────────────────────────────────────────────────
   if (!projectId) {
     let prompt = `Você é o Solaris, um assistente de IA pessoal.\n\n`;
     prompt += `=== ESTILO ===\n${personalityText}\n`;
     if (customTraits) prompt += `Traços adicionais: ${customTraits}\n`;
     prompt += `\nNunca invente informações. Seja útil e preciso.`;
-    prompt += baseInstruction;
+    prompt += BASE_IDENTITY_INSTRUCTION;
     return prompt;
   }
 
+  // ── Com projeto vinculado ────────────────────────────────────────────────────
   const project = await getAsync('SELECT * FROM projects WHERE id = $1', [projectId]);
   if (!project) {
     let prompt = `Você é o Solaris, um assistente de IA pessoal.\n${personalityText}`;
     if (customTraits) prompt += `\nTraços: ${customTraits}`;
-    prompt += baseInstruction;
+    prompt += BASE_IDENTITY_INSTRUCTION;
     return prompt;
   }
 
@@ -277,8 +304,9 @@ Exemplo de resposta (varie a redação, não copie exatamente):
   prompt += `\n=== ESTILO ===\n${personalityText}\n`;
   if (customTraits) prompt += `Traços adicionais: ${customTraits}\n`;
   prompt += `\nEvite respostas genéricas. Nunca invente informações.\n\n`;
-  prompt += baseInstruction;
+  prompt += BASE_IDENTITY_INSTRUCTION;
 
+  // ── Memórias persistentes ────────────────────────────────────────────────────
   const memories = memoryMode === 'global'
     ? await allAsync('SELECT content FROM memories ORDER BY created_at DESC LIMIT 8').catch(() => [])
     : await allAsync('SELECT content FROM memories WHERE project_id = $1 ORDER BY created_at DESC LIMIT 5', [projectId]).catch(() => []);
@@ -289,6 +317,7 @@ Exemplo de resposta (varie a redação, não copie exatamente):
     prompt += '\n';
   }
 
+  // ── Arquivos de referência ───────────────────────────────────────────────────
   const files = await allAsync('SELECT original_name, extracted_text FROM files WHERE project_id = $1', [projectId]).catch(() => []);
   if (files.length > 0) {
     prompt += `=== ARQUIVOS DE REFERÊNCIA ===\n`;
@@ -299,6 +328,7 @@ Exemplo de resposta (varie a redação, não copie exatamente):
       prompt += block;
     }
   }
+
   return prompt;
 }
 
@@ -496,7 +526,7 @@ app.post('/api/messages', async (req, res) => {
     const project = projectId ? await getAsync('SELECT memory_mode FROM projects WHERE id = $1', [projectId]).catch(() => null) : null;
     const sysPrompt = await buildSystemPrompt(projectId, project?.memory_mode, userId);
 
-    // ✅ Substituído .slice(-20) pela janela de contexto otimizada
+    // Janela de contexto otimizada — system prompt NÃO entra no histórico
     const apiHistory = selectContextWindow(history);
 
     const responseText = await geminiChat(apiHistory, sysPrompt, modelKey);
@@ -555,7 +585,7 @@ app.post('/api/messages/edit', async (req, res) => {
     const project = projectId ? await getAsync('SELECT memory_mode FROM projects WHERE id = $1', [projectId]).catch(() => null) : null;
     const sysPrompt = await buildSystemPrompt(projectId, project?.memory_mode, userId);
 
-    // ✅ Substituído .slice(-20) pela janela de contexto otimizada
+    // Janela de contexto otimizada — system prompt NÃO entra no histórico
     const responseText = await geminiChat(selectContextWindow(cleanHistory), sysPrompt, modelKey);
 
     await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'assistant', responseText]);
