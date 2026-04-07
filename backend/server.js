@@ -1,8 +1,8 @@
 // ============================================================
-//  server.js — Solaris Backend (somente GPT-OSS 120B)
+//  server.js — Solaris Backend
+//  Modelos: Gemini 2.5 Flash-Lite (padrão) e Gemini 2.5 Pro (logados)
 // ============================================================
 
-// Forçar DNS IPv4 — Render free tier não suporta IPv6
 import { setDefaultResultOrder } from 'dns';
 setDefaultResultOrder('ipv4first');
 
@@ -19,12 +19,17 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// ─── Groq ─────────────────────────────────────────────────────────────────────
-const GROQ_API_KEY = process.env.GROQ_API_KEY;
-if (!GROQ_API_KEY) throw new Error('❌ GROQ_API_KEY não definida');
+// ─── Gemini ───────────────────────────────────────────────────────────────────
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+if (!GEMINI_API_KEY) throw new Error('❌ GEMINI_API_KEY não definida');
 
-const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
-const MODEL = 'openai/gpt-oss-120b';   // Único modelo utilizado
+// Compatível com OpenAI — mesma interface, só muda base URL e modelo
+const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/openai';
+
+const MODELS = {
+  flash: 'gemini-2.5-flash-lite-preview-06-17',  // padrão — 1.000 req/dia free
+  pro: 'gemini-2.5-pro-preview-06-05',          // premium — 100 req/dia free
+};
 
 // Retry simples para rate limit (429)
 async function withRetry(fn, maxRetries = 3, baseDelay = 3000) {
@@ -43,16 +48,21 @@ async function withRetry(fn, maxRetries = 3, baseDelay = 3000) {
   }
 }
 
-async function groqChat(messages, systemPrompt) {
+// modelKey: 'flash' | 'pro'
+async function geminiChat(messages, systemPrompt, modelKey = 'flash') {
+  const model = MODELS[modelKey] || MODELS.flash;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30000);
   try {
     const res = await withRetry(() =>
-      fetch(GROQ_URL, {
+      fetch(`${GEMINI_BASE}/chat/completions`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GROQ_API_KEY}` },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${GEMINI_API_KEY}`,
+        },
         body: JSON.stringify({
-          model: MODEL,
+          model,
           max_tokens: 2048,
           temperature: 0.7,
           messages: [{ role: 'system', content: systemPrompt }, ...messages],
@@ -62,7 +72,7 @@ async function groqChat(messages, systemPrompt) {
     );
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw new Error(`Groq ${res.status}: ${err.error?.message || res.statusText}`);
+      throw new Error(`Gemini ${res.status}: ${err.error?.message || res.statusText}`);
     }
     const data = await res.json();
     return data.choices[0].message.content;
@@ -73,7 +83,7 @@ async function groqChat(messages, systemPrompt) {
 app.use(cors({
   origin: process.env.FRONTEND_URL || '*',
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'x-user-id', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'x-user-id', 'x-model', 'Authorization'],
 }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
@@ -95,15 +105,30 @@ const upload = multer({
   },
 });
 
+// ─── Helpers de modelo ────────────────────────────────────────────────────────
+
+// Valida se o usuário pode usar o modelo Pro.
+// Pro é restrito a usuários autenticados (x-user-id não é UUID de guest).
+// A distinção simples: guest IDs ficam no localStorage sem registro no DB.
+// O frontend envia x-model: 'pro' apenas quando authUser existe.
+function resolveModelKey(req) {
+  const requested = req.headers['x-model'];
+  const userId = req.headers['x-user-id'];
+
+  // Só aceita 'pro' se vier com x-model: pro E o userId não for nulo
+  if (requested === 'pro' && userId) return 'pro';
+  return 'flash';
+}
+
 // ─── System prompt ────────────────────────────────────────────────────────────
 const PERSONALITY_GUIDE = {
-  direto:      'Seja direto, objetivo e conciso. Sem rodeios.',
-  tecnico:     'Use terminologia técnica precisa. Inclua detalhes de implementação quando relevante.',
-  analitico:   'Analise profundamente. Apresente prós e contras. Questione premissas.',
+  direto: 'Seja direto, objetivo e conciso. Sem rodeios.',
+  tecnico: 'Use terminologia técnica precisa. Inclua detalhes de implementação quando relevante.',
+  analitico: 'Analise profundamente. Apresente prós e contras. Questione premissas.',
   estrategico: 'Foque em planejamento, impacto de longo prazo e visão macro.',
-  sarcastico:  'Seja levemente sarcástico e irônico, mas sempre útil. Use humor ácido com moderação.',
-  bem_humorado:'Seja descontraído, bem-humorado e use analogias divertidas. Mantenha a precisão.',
-  empatico:    'Seja caloroso, empático e encorajador. Valide sentimentos antes de resolver problemas.',
+  sarcastico: 'Seja levemente sarcástico e irônico, mas sempre útil. Use humor ácido com moderação.',
+  bem_humorado: 'Seja descontraído, bem-humorado e use analogias divertidas. Mantenha a precisão.',
+  empatico: 'Seja caloroso, empático e encorajador. Valide sentimentos antes de resolver problemas.',
 };
 
 const MEMORY_KEYWORDS = [
@@ -175,19 +200,21 @@ async function extractMemories(projectId, response) {
     .filter(s => s.length > 50 && MEMORY_KEYWORDS.some(k => s.toLowerCase().includes(k)))
     .slice(0, 2);
   for (const content of candidates) {
-    await runAsync('INSERT INTO memories (project_id, content, source) VALUES ($1, $2, $3)', [projectId, content.trim(), 'auto']).catch(() => {});
+    await runAsync('INSERT INTO memories (project_id, content, source) VALUES ($1, $2, $3)', [projectId, content.trim(), 'auto']).catch(() => { });
   }
   await runAsync(
     `DELETE FROM memories WHERE project_id = $1 AND id NOT IN (SELECT id FROM memories WHERE project_id = $1 ORDER BY created_at DESC LIMIT 20)`,
     [projectId]
-  ).catch(() => {});
+  ).catch(() => { });
 }
 
+// autoTitle usa sempre flash-lite (tarefa simples, economiza cota do Pro)
 async function autoTitle(chatId, firstMessage) {
   try {
-    const title = await groqChat(
+    const title = await geminiChat(
       [{ role: 'user', content: `Gere um título curto (máx 5 palavras) para: "${firstMessage.substring(0, 100)}". Só o título, sem aspas.` }],
-      'Você gera títulos curtos e precisos.'
+      'Você gera títulos curtos e precisos.',
+      'flash' // sempre flash para autoTitle
     );
     await runAsync('UPDATE chats SET title = $1 WHERE id = $2', [title.trim().substring(0, 50), chatId]);
   } catch { }
@@ -195,7 +222,11 @@ async function autoTitle(chatId, firstMessage) {
 
 // ─── ROTAS ────────────────────────────────────────────────────────────────────
 
-app.get('/api/health', (_, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
+app.get('/api/health', (_, res) => res.json({
+  status: 'ok',
+  timestamp: new Date().toISOString(),
+  models: MODELS,
+}));
 
 // ── Configurações do usuário ──────────────────────────────────────────────────
 
@@ -320,6 +351,7 @@ app.get('/api/messages/chat/:chatId', async (req, res) => {
 
 app.post('/api/messages', async (req, res) => {
   const userId = req.headers['x-user-id'];
+  const modelKey = resolveModelKey(req); // 'flash' ou 'pro'
   const { project_id, chat_id, message } = req.body;
   if (!chat_id || !message) return res.status(400).json({ error: 'chat_id e message são obrigatórios' });
 
@@ -335,7 +367,7 @@ app.post('/api/messages', async (req, res) => {
     const sysPrompt = await buildSystemPrompt(projectId, project?.memory_mode, userId);
     const apiHistory = history.slice(-20).map(m => ({ role: m.role, content: m.content }));
 
-    const responseText = await groqChat(apiHistory, sysPrompt);
+    const responseText = await geminiChat(apiHistory, sysPrompt, modelKey);
 
     await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'assistant', responseText]);
     await runAsync('UPDATE chats SET updated_at = NOW() WHERE id = $1', [chat_id]);
@@ -343,7 +375,8 @@ app.post('/api/messages', async (req, res) => {
     if (isFirst) autoTitle(chat_id, message).catch(console.error);
     if (projectId) extractMemories(projectId, responseText).catch(console.error);
 
-    res.json({ response: responseText });
+    // Devolve o modelo usado para o frontend exibir se quiser
+    res.json({ response: responseText, model: modelKey });
   } catch (err) {
     console.error('Erro ao enviar mensagem:', err);
     res.status(500).json({ error: err.message });
@@ -353,6 +386,7 @@ app.post('/api/messages', async (req, res) => {
 // ── Edição de mensagem ────────────────────────────────────────────────────────
 app.post('/api/messages/edit', async (req, res) => {
   const userId = req.headers['x-user-id'];
+  const modelKey = resolveModelKey(req);
   const { chat_id, project_id, message_index, new_content, original_content } = req.body;
   if (!chat_id || !new_content || message_index === undefined)
     return res.status(400).json({ error: 'chat_id, new_content e message_index são obrigatórios' });
@@ -389,14 +423,14 @@ app.post('/api/messages/edit', async (req, res) => {
 
     const project = projectId ? await getAsync('SELECT memory_mode FROM projects WHERE id = $1', [projectId]).catch(() => null) : null;
     const sysPrompt = await buildSystemPrompt(projectId, project?.memory_mode, userId);
-    const responseText = await groqChat(cleanHistory.slice(-20), sysPrompt);
+    const responseText = await geminiChat(cleanHistory.slice(-20), sysPrompt, modelKey);
 
     await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'assistant', responseText]);
     await runAsync('UPDATE chats SET updated_at = NOW() WHERE id = $1', [chat_id]);
 
     if (projectId) extractMemories(projectId, responseText).catch(console.error);
 
-    res.json({ response: responseText });
+    res.json({ response: responseText, model: modelKey });
   } catch (err) {
     console.error('Erro ao editar mensagem:', err);
     res.status(500).json({ error: err.message });
@@ -477,7 +511,7 @@ app.use((err, req, res, next) => {
 (async () => {
   try {
     await initDb();
-    app.listen(PORT, '0.0.0.0', () => console.log(`✅ Solaris backend rodando na porta ${PORT} com modelo ${MODEL}`));
+    app.listen(PORT, '0.0.0.0', () => console.log(`✅ Solaris backend na porta ${PORT} | flash: ${MODELS.flash} | pro: ${MODELS.pro}`));
   } catch (err) {
     console.error('❌ Falha ao iniciar:', err);
     process.exit(1);

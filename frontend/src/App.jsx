@@ -3,7 +3,7 @@ import {
   Send, Loader2, Plus, Moon, Sun, Mic, FolderPlus, Folder, Check, X,
   Trash2, AlertTriangle, History, GripVertical, PencilLine, Search,
   Share2, PanelLeft, LogIn, LogOut, User, ChevronDown, Pencil,
-  RotateCcw, Settings, Save
+  RotateCcw, Settings, Save, Zap, Star
 } from 'lucide-react';
 import { createClient } from '@supabase/supabase-js';
 
@@ -19,7 +19,6 @@ function getGuestId() {
   return id;
 }
 
-// Helper — lança erro legível se a resposta não for JSON (ex: HTML de erro 502/404)
 async function safeJson(res) {
   const ct = res.headers.get('content-type') || '';
   if (!ct.includes('application/json')) {
@@ -33,7 +32,7 @@ function OrbitLine({ size, themeColor }) {
   return <div className={`absolute border ${themeColor} rounded-full ${size} transition-colors duration-500`} />;
 }
 
-function PlanetDot({ size, duration, color, glow, dotSize = 'w-1.5 h-1.5', hasRing = false, ringColor = 'border-white/20', darkMode = true }) {
+function PlanetDot({ size, duration, color, glow, dotSize = 'w-1.5 h-1.5', hasRing = false, darkMode = true }) {
   return (
     <div className={`absolute orbit-rotate ${size}`} style={{ animationDuration: duration }}>
       <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center justify-center">
@@ -58,6 +57,59 @@ function PlanetDot({ size, duration, color, glow, dotSize = 'w-1.5 h-1.5', hasRi
           />
         )}
       </div>
+    </div>
+  );
+}
+
+// ─── Model Toggle ─────────────────────────────────────────────────────────────
+function ModelToggle({ model, onChange, authUser, darkMode }) {
+  const isPro = model === 'pro';
+
+  // Guest vê o botão desabilitado com tooltip
+  if (!authUser) {
+    return (
+      <div className="relative group mb-3" title="Faça login para usar o modo Pro">
+        <button
+          disabled
+          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[10px] font-medium uppercase tracking-widest transition-all opacity-30 cursor-not-allowed
+            ${darkMode ? 'border-white/10 text-white/40' : 'border-black/10 text-black/40'}`}
+        >
+          <Zap size={10} />
+          Flash
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mb-3 flex items-center gap-1">
+      {/* Flash */}
+      <button
+        onClick={() => onChange('flash')}
+        title="Gemini Flash-Lite — rápido, 1.000 req/dia"
+        className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[10px] font-medium uppercase tracking-widest transition-all
+          ${!isPro
+            ? (darkMode ? 'border-white/60 text-white bg-white/10' : 'border-black/60 text-black bg-black/8')
+            : (darkMode ? 'border-white/10 text-white/30 hover:text-white/60' : 'border-black/10 text-black/30 hover:text-black/60')
+          }`}
+      >
+        <Zap size={10} />
+        Flash
+      </button>
+
+      {/* Pro */}
+      <button
+        onClick={() => onChange('pro')}
+        title="Gemini Pro — mais inteligente, 100 req/dia"
+        className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[10px] font-medium uppercase tracking-widest transition-all
+          ${isPro
+            ? 'border-amber-400/80 text-amber-400 bg-amber-400/10'
+            : (darkMode ? 'border-white/10 text-white/30 hover:text-amber-400/60 hover:border-amber-400/30' : 'border-black/10 text-black/30 hover:text-amber-500/60 hover:border-amber-400/30')
+          }`}
+      >
+        <Star size={10} />
+        Pro
+      </button>
     </div>
   );
 }
@@ -116,10 +168,10 @@ function AuthModal({ onClose, darkMode, onAuthSuccess }) {
         <div className="flex flex-col gap-3">
           <button onClick={handleGoogle} disabled={loading} className={`flex items-center justify-center gap-3 w-full py-3 rounded-xl border ${t.google} text-sm font-light transition-all`}>
             <svg width="16" height="16" viewBox="0 0 24 24">
-              <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-              <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-              <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
-              <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+              <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+              <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+              <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
+              <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
             </svg>
             Continuar com Google
           </button>
@@ -146,13 +198,13 @@ function AuthModal({ onClose, darkMode, onAuthSuccess }) {
 
 // ─── Settings Modal ───────────────────────────────────────────────────────────
 const PERSONALITIES = [
-  { id: 'direto',       label: 'Direto',        desc: 'Respostas curtas e objetivas, sem rodeios.' },
-  { id: 'tecnico',      label: 'Técnico',        desc: 'Terminologia precisa e detalhes de implementação.' },
-  { id: 'analitico',    label: 'Analítico',      desc: 'Análise profunda, prós e contras.' },
-  { id: 'estrategico',  label: 'Estratégico',    desc: 'Visão macro, planejamento e longo prazo.' },
-  { id: 'sarcastico',   label: 'Sarcástico',     desc: 'Irônico e ácido, mas sempre útil.' },
-  { id: 'bem_humorado', label: 'Bem-humorado',   desc: 'Descontraído, com analogias divertidas.' },
-  { id: 'empatico',     label: 'Empático',       desc: 'Caloroso, acolhedor e encorajador.' },
+  { id: 'direto', label: 'Direto', desc: 'Respostas curtas e objetivas, sem rodeios.' },
+  { id: 'tecnico', label: 'Técnico', desc: 'Terminologia precisa e detalhes de implementação.' },
+  { id: 'analitico', label: 'Analítico', desc: 'Análise profunda, prós e contras.' },
+  { id: 'estrategico', label: 'Estratégico', desc: 'Visão macro, planejamento e longo prazo.' },
+  { id: 'sarcastico', label: 'Sarcástico', desc: 'Irônico e ácido, mas sempre útil.' },
+  { id: 'bem_humorado', label: 'Bem-humorado', desc: 'Descontraído, com analogias divertidas.' },
+  { id: 'empatico', label: 'Empático', desc: 'Caloroso, acolhedor e encorajador.' },
 ];
 
 function SettingsModal({ onClose, darkMode, userId, effectiveUserId }) {
@@ -177,7 +229,7 @@ function SettingsModal({ onClose, darkMode, userId, effectiveUserId }) {
     fetch(`${API_BASE}/settings`, { headers: { 'x-user-id': effectiveUserId } })
       .then(r => r.json())
       .then(d => { setPersonality(d.personality || 'direto'); setCustomTraits(d.custom_traits || ''); })
-      .catch(() => {})
+      .catch(() => { })
       .finally(() => setLoading(false));
   }, []);
 
@@ -267,8 +319,17 @@ function MessageBubble({ msg, index, darkMode, theme, onEdit, isEditing, editVal
     <div className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} group/msg animate-in fade-in slide-in-from-bottom-2 duration-700`}>
       <div className={`max-w-[70%] ${msg.role === 'user' ? 'text-right' : 'text-left'}`}>
         <div className={`text-[9px] uppercase tracking-[0.2em] font-bold mb-3 ${theme.textMuted}`}>
-          {msg.role === 'user' ? 'Você' : 'Solaris'}
-          {msg.edited && <span className={`ml-2 normal-case tracking-normal font-normal opacity-50`}>(editado)</span>}
+          {msg.role === 'user' ? 'Você' : (
+            <span className="flex items-center gap-1.5">
+              Solaris
+              {msg.model === 'pro' && (
+                <span className="flex items-center gap-0.5 text-amber-400 opacity-70">
+                  <Star size={8} />pro
+                </span>
+              )}
+            </span>
+          )}
+          {msg.edited && <span className="ml-2 normal-case tracking-normal font-normal opacity-50">(editado)</span>}
         </div>
 
         {isEditing ? (
@@ -329,6 +390,7 @@ export default function App() {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [darkMode, setDarkMode] = useState(() => localStorage.getItem('solaris_dark') !== 'false');
+  const [model, setModel] = useState('flash'); // 'flash' | 'pro'
   const [searchQuery, setSearchQuery] = useState('');
   const [showShareToast, setShowShareToast] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
@@ -357,6 +419,11 @@ export default function App() {
   const displayName = authUser?.user_metadata?.display_name || authUser?.user_metadata?.full_name || authUser?.email?.split('@')[0] || null;
   const hasUserStartedChat = messages.some(m => m.role === 'user');
 
+  // Garante que se o user deslogar, volta para flash
+  useEffect(() => {
+    if (!authUser && model === 'pro') setModel('flash');
+  }, [authUser]);
+
   // ── Auth ────────────────────────────────────────────────────────────────────
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => { setAuthUser(session?.user ?? null); setAuthReady(true); });
@@ -367,7 +434,7 @@ export default function App() {
   async function migrateGuestData(userId) {
     const guestId = localStorage.getItem('solaris_guest_id');
     if (!guestId || guestId === userId) return;
-    await fetch(`${API_BASE}/migrate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ guest_id: guestId, user_id: userId }) }).catch(() => {});
+    await fetch(`${API_BASE}/migrate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ guest_id: guestId, user_id: userId }) }).catch(() => { });
   }
 
   async function handleAuthSuccess(user) {
@@ -378,16 +445,13 @@ export default function App() {
 
   async function handleLogout() {
     await supabase.auth.signOut();
+    setModel('flash');
     setAuthUser(null); setProjects([]); setChatHistory([]); setActiveChatId(null); setActiveProjectId(null); setMessages([]);
   }
 
   // ── Efeitos ─────────────────────────────────────────────────────────────────
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, isLoading]);
   useEffect(() => { localStorage.setItem('solaris_dark', darkMode); }, [darkMode]);
-  useEffect(() => {
-    const ping = () => fetch(`${API_BASE}/health`).catch(() => {});
-    ping(); const iv = setInterval(ping, 10 * 60 * 1000); return () => clearInterval(iv);
-  }, []);
   useEffect(() => {
     const h = (e) => { if (moreProjectsRef.current && !moreProjectsRef.current.contains(e.target)) setShowMoreProjects(false); };
     document.addEventListener('mousedown', h); return () => document.removeEventListener('mousedown', h);
@@ -426,7 +490,18 @@ export default function App() {
     })();
   }, [activeChatId]);
 
-  // ── Enviar mensagem (apenas um modelo, sem modo pensar) ───────────────────────
+  // ── Enviar mensagem ───────────────────────────────────────────────────────────
+  // Monta headers com x-model para o backend decidir qual modelo usar
+  function buildHeaders(extra = {}) {
+    return {
+      'Content-Type': 'application/json',
+      'x-user-id': effectiveUserId,
+      // Pro só enviado quando authUser existe (backend valida também)
+      'x-model': authUser ? model : 'flash',
+      ...extra,
+    };
+  }
+
   const handleSend = async () => {
     if (!input.trim() || isLoading) return;
     setEditingMsgIndex(null);
@@ -441,7 +516,7 @@ export default function App() {
           : `${API_BASE}/projects/none/chats`;
         const r = await fetch(endpoint, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-user-id': effectiveUserId },
+          headers: buildHeaders(),
           body: JSON.stringify({ title: 'Nova conversa' }),
         });
         if (!r.ok) throw new Error('Falha ao criar chat');
@@ -461,12 +536,13 @@ export default function App() {
     try {
       const r = await fetch(`${API_BASE}/messages`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-user-id': effectiveUserId },
+        headers: buildHeaders(),
         body: JSON.stringify({ project_id: projectId || null, chat_id: chatId, message: userMessage }),
       });
       const d = await safeJson(r);
       if (!r.ok) throw new Error(d.error || 'Erro no servidor');
-      setMessages(prev => [...prev, { role: 'assistant', content: d.response }]);
+      // Salva o modelo usado na mensagem para exibir badge "pro" se aplicável
+      setMessages(prev => [...prev, { role: 'assistant', content: d.response, model: d.model }]);
     } catch (err) {
       setMessages(prev => [...prev, { role: 'assistant', content: `Erro: ${err.message}` }]);
     } finally { setIsLoading(false); }
@@ -490,11 +566,11 @@ export default function App() {
     try {
       const r = await fetch(`${API_BASE}/messages/edit`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-user-id': effectiveUserId },
+        headers: buildHeaders(),
         body: JSON.stringify({ chat_id: activeChatId, project_id: activeProjectId, message_index: editingMsgIndex, new_content: newContent, original_content: original.content }),
       });
       const d = await safeJson(r);
-      setMessages(prev => [...prev, { role: 'assistant', content: d.response }]);
+      setMessages(prev => [...prev, { role: 'assistant', content: d.response, model: d.model }]);
     } catch { setMessages(prev => [...prev, { role: 'assistant', content: 'Erro ao regerar.' }]); }
     finally { setIsLoading(false); }
   };
@@ -502,7 +578,7 @@ export default function App() {
   // ── Compartilhar ─────────────────────────────────────────────────────────────
   const handleShare = () => {
     const text = messages.map(m => `${m.role === 'user' ? 'VOCÊ' : 'SOLARIS'}: ${m.content}`).join('\n\n');
-    navigator.clipboard.writeText(text).catch(() => {});
+    navigator.clipboard.writeText(text).catch(() => { });
     setShowShareToast(true); setTimeout(() => setShowShareToast(false), 3000);
   };
 
@@ -510,7 +586,7 @@ export default function App() {
   const createProject = async () => {
     if (!newProjectName.trim()) { setIsCreatingProject(false); return; }
     try {
-      const r = await fetch(`${API_BASE}/projects`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-user-id': effectiveUserId }, body: JSON.stringify({ name: newProjectName.trim(), objective: '', response_style: 'direto', memory_mode: 'isolado' }) });
+      const r = await fetch(`${API_BASE}/projects`, { method: 'POST', headers: buildHeaders(), body: JSON.stringify({ name: newProjectName.trim(), objective: '', response_style: 'direto', memory_mode: 'isolado' }) });
       const p = await r.json(); setProjects([p, ...projects]); setNewProjectName(''); setIsCreatingProject(false); setActiveProjectId(p.id);
     } catch (err) { console.error(err); }
   };
@@ -535,7 +611,7 @@ export default function App() {
   const handleNewChat = async () => {
     if (activeProjectId) {
       try {
-        const r = await fetch(`${API_BASE}/projects/${activeProjectId}/chats`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-user-id': effectiveUserId }, body: JSON.stringify({ title: 'Nova conversa' }) });
+        const r = await fetch(`${API_BASE}/projects/${activeProjectId}/chats`, { method: 'POST', headers: buildHeaders(), body: JSON.stringify({ title: 'Nova conversa' }) });
         const nc = await r.json(); setChatHistory(prev => [nc, ...prev]); setActiveChatId(nc.id); setMessages([]);
       } catch (err) { console.error(err); }
     } else {
@@ -642,8 +718,6 @@ export default function App() {
 
       {/* ── Sidebar ── */}
       <aside className={`hidden lg:flex flex-col border-r ${theme.border} ${theme.bgAside} relative transition-all duration-500 ease-in-out shrink-0 ${isSidebarOpen ? 'w-72' : 'w-20'}`}>
-
-        {/* Sidebar expandida */}
         <div className={`flex flex-col h-full overflow-hidden transition-all duration-500 ${isSidebarOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
           <div className="px-8 pt-12 pb-6 flex flex-col gap-5 shrink-0">
             <button onClick={handleNewChat} className={`flex items-center gap-3 w-full text-left transition-colors ${theme.textPrimary} group`}>
@@ -668,9 +742,9 @@ export default function App() {
               <OrbitLine size="w-40 h-40" themeColor={theme.orbit} />
               <OrbitLine size="w-48 h-48" themeColor={theme.orbit} />
               <OrbitLine size="w-56 h-56" themeColor={theme.orbit} />
-              <PlanetDot size="w-10 h-10" duration="3s"  color={darkMode ? 'bg-[#888]' : 'bg-[#666]'} dotSize="w-1 h-1" darkMode={darkMode} />
-              <PlanetDot size="w-14 h-14" duration="5s"  color="bg-[#e3bb76]" dotSize="w-1.5 h-1.5" darkMode={darkMode} />
-              <PlanetDot size="w-20 h-20" duration="8s"  color="bg-[#2271b3]" dotSize="w-2 h-2" glow={darkMode ? '0 0 10px rgba(34,113,179,0.9)' : '0 0 8px rgba(34,113,179,0.5)'} darkMode={darkMode} />
+              <PlanetDot size="w-10 h-10" duration="3s" color={darkMode ? 'bg-[#888]' : 'bg-[#666]'} dotSize="w-1 h-1" darkMode={darkMode} />
+              <PlanetDot size="w-14 h-14" duration="5s" color="bg-[#e3bb76]" dotSize="w-1.5 h-1.5" darkMode={darkMode} />
+              <PlanetDot size="w-20 h-20" duration="8s" color="bg-[#2271b3]" dotSize="w-2 h-2" glow={darkMode ? '0 0 10px rgba(34,113,179,0.9)' : '0 0 8px rgba(34,113,179,0.5)'} darkMode={darkMode} />
               <PlanetDot size="w-24 h-24" duration="12s" color="bg-[#e27b58]" dotSize="w-1 h-1" darkMode={darkMode} />
               <PlanetDot size="w-32 h-32" duration="20s" color="bg-[#d39c7e]" dotSize="w-2.5 h-2.5" darkMode={darkMode} />
               <PlanetDot size="w-40 h-40" duration="28s" color="bg-[#eadaa4]" dotSize="w-2 h-2" hasRing darkMode={darkMode} />
@@ -848,6 +922,15 @@ export default function App() {
         {/* Input */}
         <footer className="p-10 pt-4">
           <div className="max-w-3xl mx-auto">
+
+            {/* ── Model Toggle — acima do input ── */}
+            <ModelToggle
+              model={model}
+              onChange={setModel}
+              authUser={authUser}
+              darkMode={darkMode}
+            />
+
             <div className={`relative flex items-end border-b ${theme.inputBorder} pb-8 ${theme.inputFocus} transition-all duration-500`}>
               <textarea
                 ref={textareaRef} value={input} onChange={handleInput} onKeyDown={handleKeyDown} rows={1}
@@ -858,9 +941,18 @@ export default function App() {
                 {isLoading ? <Loader2 size={20} className="animate-spin" /> : input.trim() ? <Send size={20} strokeWidth={1.5} /> : <Mic size={20} strokeWidth={1.5} />}
               </button>
             </div>
+
             <div className={`mt-5 flex justify-between items-center text-[9px] ${theme.textMuted} font-bold tracking-[0.2em] uppercase`}>
               <span>enter para enviar · shift+enter nova linha</span>
               <div className="flex items-center gap-4">
+                {!authUser && (
+                  <span
+                    onClick={() => setShowAuthModal(true)}
+                    className={`flex items-center gap-1.5 cursor-pointer text-amber-400/60 hover:text-amber-400 transition-colors mb-2`}
+                  >
+                    <Star size={10} /> Entrar para usar Pro
+                  </span>
+                )}
                 <span onClick={() => fileInputRef.current?.click()} className={`flex items-center gap-3 cursor-pointer ${darkMode ? 'hover:text-white' : 'hover:text-black'} transition-colors mb-2`}>
                   <Plus size={10} /> Anexo
                 </span>
@@ -872,7 +964,8 @@ export default function App() {
 
       <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileUpload} accept=".pdf,.txt,.md,.json,.js,.ts,.py,.css,.html,.csv" />
 
-      <style dangerouslySetInnerHTML={{ __html: `
+      <style dangerouslySetInnerHTML={{
+        __html: `
         @keyframes rotate-slow { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
         .orbit-rotate { animation: rotate-slow linear infinite; }
         .custom-scrollbar::-webkit-scrollbar { width: 3px; }
