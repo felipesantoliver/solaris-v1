@@ -373,7 +373,6 @@ export default function App() {
   const moreProjectsRef = useRef(null);
 
   // ─── effectiveUserId calculado de forma estável ───────────────────────────
-  // Usa useRef para não disparar re-renders desnecessários
   const guestIdRef = useRef(getGuestId());
   const effectiveUserId = authUser?.id || guestIdRef.current;
 
@@ -423,7 +422,6 @@ export default function App() {
   }
 
   // ── Headers ─────────────────────────────────────────────────────────────────
-  // FIX: função estável que sempre lê os valores atuais
   const buildHeaders = useCallback((extra = {}) => ({
     'Content-Type': 'application/json',
     'x-user-id': effectiveUserId,
@@ -456,8 +454,6 @@ export default function App() {
   // Ao selecionar projeto, carrega seus chats
   useEffect(() => {
     if (!activeProjectId) {
-      // FIX: NÃO limpa messages nem activeChatId ao sair de projeto —
-      // só limpa se não houver chat ativo fora de projeto
       setChatHistory([]);
       return;
     }
@@ -488,7 +484,6 @@ export default function App() {
   }, [activeChatId]);
 
   // ── Criar chat (helper reutilizável) ─────────────────────────────────────────
-  // FIX: extraído como função separada para reusar em handleSend e handleNewChat
   async function createChat(projectId) {
     const endpoint = projectId
       ? `${API_BASE}/projects/${projectId}/chats`
@@ -507,9 +502,7 @@ export default function App() {
     return r.json();
   }
 
-  // ── Enviar mensagem ─────────────────────────────────────────────────────────
-  // FIX PRINCIPAL: não usa return em caso de erro na criação do chat — mostra erro
-  // FIX: limpa o input ANTES de qualquer await, evitando mensagem presa no campo
+  // ── Enviar mensagem (com tratamento amigável para erro 429) ─────────────────
   const handleSend = async () => {
     const text = input.trim();
     if (!text || isLoading) return;
@@ -517,7 +510,7 @@ export default function App() {
     setSendError('');
     setEditingMsgIndex(null);
 
-    // FIX: limpa o input imediatamente — antes de qualquer chamada async
+    // limpa o input imediatamente
     setInput('');
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
 
@@ -528,17 +521,12 @@ export default function App() {
     if (!chatId) {
       try {
         const nc = await createChat(projectId);
-        setChatHistory(prev => {
-          // Evita duplicatas
-          if (prev.find(c => c.id === nc.id)) return prev;
-          return [nc, ...prev];
-        });
+        setChatHistory(prev => (prev.find(c => c.id === nc.id) ? prev : [nc, ...prev]));
         setActiveChatId(nc.id);
         chatId = nc.id;
       } catch (err) {
         console.error('Erro ao criar chat:', err);
         setSendError(`Não foi possível iniciar conversa: ${err.message}`);
-        // FIX: restaura o input para o usuário não perder o que digitou
         setInput(text);
         return;
       }
@@ -558,11 +546,22 @@ export default function App() {
           message: text,
         }),
       });
+
+      // --- TRATAMENTO AMIGÁVEL PARA ERRO 429 (Muitas requisições) ---
+      if (r.status === 429) {
+        const errorData = await r.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Muitas requisições. Aguarde um pouco antes de enviar outra mensagem.');
+      }
+      // -------------------------------------------------------------
+
       const d = await safeJson(r);
       if (!r.ok) throw new Error(d.error || 'Erro no servidor');
       setMessages(prev => [...prev, { role: 'assistant', content: d.response, model: d.model }]);
     } catch (err) {
-      setMessages(prev => [...prev, { role: 'assistant', content: `⚠️ ${err.message}` }]);
+      // Remove a mensagem do usuário que foi adicionada temporariamente e restaura o texto no input
+      setMessages(prev => prev.slice(0, -1));
+      setInput(text);
+      setSendError(err.message);
     } finally {
       setIsLoading(false);
     }
@@ -615,7 +614,6 @@ export default function App() {
   };
 
   // ── CRUD projetos ─────────────────────────────────────────────────────────────
-  // FIX: createProject agora mostra erro em vez de falhar silenciosamente
   const createProject = async () => {
     if (!newProjectName.trim()) { setIsCreatingProject(false); return; }
     try {
@@ -660,13 +658,10 @@ export default function App() {
     setItemToDelete(null);
   };
 
-  // FIX: handleNewChat não precisa de projeto — cria chat livre
   const handleNewChat = () => {
     setActiveChatId(null);
     setMessages([]);
     setSendError('');
-    // Se estiver num projeto, cria um chat novo no projeto ao enviar
-    // Se não estiver num projeto, o chat é criado no primeiro envio
   };
 
   // ── Drag ─────────────────────────────────────────────────────────────────────
