@@ -367,6 +367,9 @@ export default function App() {
   const [authReady, setAuthReady] = useState(false);
   const [sendError, setSendError] = useState('');
 
+  const [editingChatTitleId, setEditingChatTitleId] = useState(null);
+  const [editingChatTitleValue, setEditingChatTitleValue] = useState('');
+
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -669,6 +672,30 @@ export default function App() {
     // Se não estiver num projeto, o chat é criado no primeiro envio
   };
 
+  // ── Renomear título do chat ───────────────────────────────────────────────────
+  const startRenameChatTitle = (e, chat) => {
+    e.stopPropagation();
+    setEditingChatTitleId(chat.id);
+    setEditingChatTitleValue(chat.title || '');
+  };
+
+  const confirmRenameChatTitle = async (chatId) => {
+    const newTitle = editingChatTitleValue.trim();
+    setEditingChatTitleId(null);
+    setEditingChatTitleValue('');
+    if (!newTitle) return;
+    try {
+      const r = await fetch(`${API_BASE}/chats/${chatId}/title`, {
+        method: 'PATCH',
+        headers: buildHeaders(),
+        body: JSON.stringify({ title: newTitle }),
+      });
+      if (!r.ok) return;
+      const { title } = await r.json();
+      setChatHistory(prev => prev.map(c => c.id === chatId ? { ...c, title } : c));
+    } catch { }
+  };
+
   // ── Drag ─────────────────────────────────────────────────────────────────────
   const onDragStart = (e, id) => { setDraggedItemId(id); e.dataTransfer.effectAllowed = 'move'; setTimeout(() => { e.currentTarget.style.opacity = '0.4'; }, 0); };
   const onDragOver = (e, id) => {
@@ -853,14 +880,40 @@ export default function App() {
               )}
               <div className="flex flex-col gap-1">
                 {filteredChats.map(chat => (
-                  <div key={chat.id} onClick={() => setActiveChatId(chat.id)} className={`flex items-center justify-between p-2 -ml-2 rounded-lg cursor-pointer transition-all group/chat ${activeChatId === chat.id ? theme.projectActive : theme.projectHover}`}>
-                    <div className="flex items-center gap-3 overflow-hidden">
-                      <History size={14} className={activeChatId === chat.id ? 'text-current opacity-60' : theme.textMuted} />
-                      <span className={`text-xs font-light truncate max-w-[120px] ${activeChatId === chat.id ? 'font-normal' : theme.textSecondary}`}>{chat.title}</span>
+                  <div key={chat.id} onClick={() => { if (editingChatTitleId !== chat.id) setActiveChatId(chat.id); }} className={`flex items-center justify-between p-2 -ml-2 rounded-lg cursor-pointer transition-all group/chat ${activeChatId === chat.id ? theme.projectActive : theme.projectHover}`}>
+                    <div className="flex items-center gap-3 overflow-hidden flex-1 min-w-0">
+                      <History size={14} className={`shrink-0 ${activeChatId === chat.id ? 'text-current opacity-60' : theme.textMuted}`} />
+                      {editingChatTitleId === chat.id ? (
+                        <input
+                          autoFocus
+                          type="text"
+                          value={editingChatTitleValue}
+                          onChange={e => setEditingChatTitleValue(e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') confirmRenameChatTitle(chat.id);
+                            if (e.key === 'Escape') { setEditingChatTitleId(null); setEditingChatTitleValue(''); }
+                          }}
+                          onBlur={() => confirmRenameChatTitle(chat.id)}
+                          onClick={e => e.stopPropagation()}
+                          className={`text-xs font-light bg-transparent border-none focus:outline-none w-full min-w-0 ${darkMode ? 'text-white' : 'text-black'}`}
+                          maxLength={50}
+                        />
+                      ) : (
+                        <span className={`text-xs font-light truncate max-w-[100px] ${activeChatId === chat.id ? 'font-normal' : theme.textSecondary}`}>{chat.title}</span>
+                      )}
                     </div>
-                    <button onClick={e => { e.stopPropagation(); setItemToDelete({ type: 'chat', data: chat }); }} className="opacity-0 group-hover/chat:opacity-100 p-1 hover:text-red-500 transition-all duration-200">
-                      <Trash2 size={12} />
-                    </button>
+                    <div className="flex items-center gap-0.5 opacity-0 group-hover/chat:opacity-100 transition-all duration-200 shrink-0">
+                      <button
+                        onClick={e => startRenameChatTitle(e, chat)}
+                        title="Renomear"
+                        className={`p-1 hover:text-current transition-colors ${theme.textMuted}`}
+                      >
+                        <Pencil size={11} />
+                      </button>
+                      <button onClick={e => { e.stopPropagation(); setItemToDelete({ type: 'chat', data: chat }); }} className="p-1 hover:text-red-500 transition-all duration-200">
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>

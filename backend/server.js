@@ -244,14 +244,36 @@ async function extractMemories(projectId, response) {
   ).catch(() => { });
 }
 
+function generateLocalTitle(firstMessage) {
+  const FALLBACK = 'Nova conversa';
+  if (!firstMessage || typeof firstMessage !== 'string') return FALLBACK;
+
+  const cleaned = firstMessage
+    .replace(/[\r\n\t]+/g, ' ')   // quebras de linha → espaço
+    .replace(/\s{2,}/g, ' ')       // espaços duplos → simples
+    .replace(/["""''`]/g, '')       // aspas decorativas
+    .trim();
+
+  if (cleaned.length < 3) return FALLBACK;
+
+  const words = cleaned.split(' ').filter(Boolean);
+  const titleWords = words.slice(0, 7);
+  let title = titleWords.join(' ');
+
+  // Capitaliza primeira letra
+  title = title.charAt(0).toUpperCase() + title.slice(1);
+
+  // Adiciona reticências se a mensagem foi truncada
+  if (words.length > 7) title += '…';
+
+  // Garante limite seguro para o banco
+  return title.substring(0, 50);
+}
+
 async function autoTitle(chatId, firstMessage) {
   try {
-    const title = await geminiChat(
-      [{ role: 'user', content: `Gere um título curto (máx 5 palavras) para: "${firstMessage.substring(0, 100)}". Só o título, sem aspas.` }],
-      'Você gera títulos curtos e precisos.',
-      'flash'
-    );
-    await runAsync('UPDATE chats SET title = $1 WHERE id = $2', [title.trim().substring(0, 50), chatId]);
+    const title = generateLocalTitle(firstMessage);
+    await runAsync('UPDATE chats SET title = $1 WHERE id = $2', [title, chatId]);
   } catch { }
 }
 
@@ -362,6 +384,17 @@ app.delete('/api/projects/:id/chats/:chatId', async (req, res) => {
   try {
     await runAsync('DELETE FROM chats WHERE id = $1', [req.params.chatId]);
     res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Edição manual de título de chat
+app.patch('/api/chats/:chatId/title', async (req, res) => {
+  const { title } = req.body;
+  if (!title || !title.trim()) return res.status(400).json({ error: 'title obrigatório' });
+  try {
+    const trimmed = title.trim().substring(0, 50);
+    await runAsync('UPDATE chats SET title = $1, updated_at = NOW() WHERE id = $2', [trimmed, req.params.chatId]);
+    res.json({ ok: true, title: trimmed });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
