@@ -1,6 +1,6 @@
 // ============================================================
 //  server.js — Solaris Backend
-//  Modelos: gemini-2.5-flash (padrão) e gemini-2.5-pro (logados)
+//  Modelos: gemini-2.5-flash (padrão) e gemini-3-flash-preview (pro)
 // ============================================================
 
 import { setDefaultResultOrder } from 'dns';
@@ -25,7 +25,7 @@ if (!GEMINI_API_KEY) throw new Error('❌ GEMINI_API_KEY não definida');
 
 const MODELS = {
   flash: 'gemini-2.5-flash',
-  pro: 'gemini-2.5-pro',
+  pro: 'gemini-3-flash-preview',
 };
 
 function geminiUrl(modelKey) {
