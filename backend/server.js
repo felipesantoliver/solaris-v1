@@ -1,7 +1,6 @@
 // ============================================================
-//  server.js — Solaris Backend
-//  Modelos: gemini-2.5-flash (padrão) e gemini-3-flash-preview (pro)
-//  v1.5.1 — Paralelização de inserts em extractMemories
+//  server.js — Solaris Backend 
+//  Agora com busca semântica por chunks de arquivos (embedding)
 // ============================================================
 
 import { setDefaultResultOrder } from 'dns';
@@ -21,9 +20,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// ─── Cache do System Prompt (in-memory) ──────────────────────────────────────
-const SYSTEM_PROMPT_CACHE_TTL = 60000; // 60 segundos
-const systemPromptCache = new Map(); // chave: `${userId}:${projectId}`
+// ─── Cache do System Prompt (apenas parte estática) ──────────────────────────
+const SYSTEM_PROMPT_CACHE_TTL = 60000;
+const systemPromptCache = new Map();
 
 function getCacheKey(userId, projectId) {
   return `${userId}:${projectId || 'none'}`;
@@ -36,10 +35,7 @@ function getCachedSystemPrompt(userId, projectId) {
     console.log(`💾 Cache hit para ${key}`);
     return entry.data;
   }
-  if (entry) {
-    // entrada expirada, remover
-    systemPromptCache.delete(key);
-  }
+  if (entry) systemPromptCache.delete(key);
   return null;
 }
 
@@ -49,7 +45,7 @@ function setCachedSystemPrompt(userId, projectId, data) {
     data,
     expiresAt: Date.now() + SYSTEM_PROMPT_CACHE_TTL,
   });
-  console.log(`💾 Cache set para ${key}, expira em ${SYSTEM_PROMPT_CACHE_TTL / 1000}s`);
+  console.log(`💾 Cache set para ${key}`);
 }
 
 function invalidateSystemPromptCache(userId, projectId) {
@@ -58,7 +54,6 @@ function invalidateSystemPromptCache(userId, projectId) {
   console.log(`🗑️ Cache invalidado para ${key}`);
 }
 
-// Limpeza periódica de entradas expiradas (a cada 5 minutos)
 setInterval(() => {
   const now = Date.now();
   let deleted = 0;
@@ -68,10 +63,10 @@ setInterval(() => {
       deleted++;
     }
   }
-  if (deleted > 0) console.log(`🧹 Limpeza de cache: ${deleted} entradas removidas`);
+  if (deleted) console.log(`🧹 Cache limpo: ${deleted} entradas`);
 }, 5 * 60 * 1000);
 
-// ─── Gemini ───────────────────────────────────────────────────────────────────
+// ─── Gemini (Chat + Embedding) ───────────────────────────────────────────────
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 if (!GEMINI_API_KEY) throw new Error('❌ GEMINI_API_KEY não definida');
 
@@ -85,12 +80,15 @@ function geminiUrl(modelKey) {
   return `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
 }
 
+function geminiEmbeddingUrl() {
+  return `https://generativelanguage.googleapis.com/v1beta/models/embedding-001:embedContent?key=${GEMINI_API_KEY}`;
+}
+
 function buildGeminiBody(messages, systemPrompt) {
   const contents = messages.map(msg => ({
     role: msg.role === 'assistant' ? 'model' : 'user',
     parts: [{ text: msg.content }],
   }));
-
   return {
     system_instruction: { parts: [{ text: systemPrompt }] },
     contents,
@@ -100,8 +98,9 @@ function buildGeminiBody(messages, systemPrompt) {
 
 async function withRetry(fn, maxRetries = 3, baseDelay = 3000) {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try { return await fn(); }
-    catch (err) {
+    try {
+      return await fn();
+    } catch (err) {
       const is429 = err.message?.includes('429') || err.status === 429;
       if (is429 && attempt < maxRetries) {
         const wait = baseDelay * Math.pow(2, attempt);
@@ -145,68 +144,153 @@ async function geminiChat(messages, systemPrompt, modelKey = 'flash') {
   }
 }
 
-// ─── OTIMIZAÇÃO DE CONTEXTO ───────────────────────────────────────────────────
+async function generateEmbedding(text) {
+  const response = await fetch(geminiEmbeddingUrl(), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: 'models/embedding-001', content: { parts: [{ text }] } }),
+  });
+  if (!response.ok) {
+    throw new Error(`Erro ao gerar embedding: ${response.status}`);
+  }
+  const data = await response.json();
+  return data.embedding.values; // array de floats
+}
+
+// ─── Chunking e busca semântica ──────────────────────────────────────────────
+function splitTextIntoChunks(text, chunkSize = 500, overlap = 100) {
+  if (!text || text.length === 0) return [];
+  const chunks = [];
+  let start = 0;
+  while (start < text.length) {
+    let end = start + chunkSize;
+    if (end > text.length) end = text.length;
+    let chunk = text.slice(start, end);
+    // tenta quebrar em final de frase
+    const lastPeriod = chunk.lastIndexOf('.');
+    if (lastPeriod > chunkSize * 0.7 && end < text.length) {
+      chunk = text.slice(start, start + lastPeriod + 1);
+      end = start + lastPeriod + 1;
+    }
+    chunks.push(chunk.trim());
+    start = end - overlap;
+    if (start < 0) start = 0;
+    if (start >= text.length) break;
+  }
+  return chunks;
+}
+
+async function indexFileChunks(fileId, text) {
+  const chunks = splitTextIntoChunks(text);
+  if (chunks.length === 0) return;
+  // Remove chunks antigos
+  await runAsync('DELETE FROM file_chunks WHERE file_id = $1', [fileId]);
+  for (let i = 0; i < chunks.length; i++) {
+    try {
+      const embedding = await generateEmbedding(chunks[i]);
+      await runAsync(
+        'INSERT INTO file_chunks (file_id, chunk_index, chunk_text, embedding) VALUES ($1, $2, $3, $4)',
+        [fileId, i, chunks[i], JSON.stringify(embedding)]
+      );
+    } catch (err) {
+      console.error(`Erro ao indexar chunk ${i}:`, err.message);
+    }
+  }
+  console.log(`✅ Indexados ${chunks.length} chunks para arquivo ${fileId}`);
+}
+
+// Cálculo de similaridade de cosseno entre dois vetores
+function cosineSimilarity(vecA, vecB) {
+  if (!vecA || !vecB || vecA.length !== vecB.length) return 0;
+  let dot = 0, magA = 0, magB = 0;
+  for (let i = 0; i < vecA.length; i++) {
+    dot += vecA[i] * vecB[i];
+    magA += vecA[i] * vecA[i];
+    magB += vecB[i] * vecB[i];
+  }
+  if (magA === 0 || magB === 0) return 0;
+  return dot / (Math.sqrt(magA) * Math.sqrt(magB));
+}
+
+async function searchRelevantChunks(projectId, query, limit = 3) {
+  if (!projectId) return [];
+  // Gera embedding da consulta
+  let queryEmbedding;
+  try {
+    queryEmbedding = await generateEmbedding(query);
+  } catch (err) {
+    console.error('Erro ao gerar embedding da query:', err.message);
+    return [];
+  }
+  // Busca todos os chunks dos arquivos do projeto
+  const chunks = await allAsync(
+    `SELECT fc.chunk_text, fc.embedding 
+     FROM file_chunks fc
+     JOIN files f ON f.id = fc.file_id
+     WHERE f.project_id = $1`,
+    [projectId]
+  );
+  if (!chunks.length) return [];
+  // Calcula similaridade
+  const withScores = chunks.map(c => ({
+    text: c.chunk_text,
+    score: cosineSimilarity(queryEmbedding, JSON.parse(c.embedding)),
+  }));
+  withScores.sort((a, b) => b.score - a.score);
+  return withScores.slice(0, limit).map(c => c.text);
+}
+
+// ─── Otimização de contexto (histórico) ──────────────────────────────────────
 const MAX_CONTEXT_MESSAGES = 8;
 
 function selectContextWindow(history) {
   if (!Array.isArray(history) || history.length === 0) return [];
-
   const valid = history.filter(m =>
     m && typeof m.role === 'string' && typeof m.content === 'string' && m.content.trim().length > 0
   );
   if (valid.length === 0) return [];
-
   const deduped = valid.filter((m, i) => {
     if (i === 0) return true;
     const prev = valid[i - 1];
     return !(prev.role === m.role && prev.content.trim() === m.content.trim());
   });
-
   if (deduped.length <= MAX_CONTEXT_MESSAGES) {
-    console.log(`📦 Context window: ${deduped.length} msgs (sem corte necessário)`);
+    console.log(`📦 Context window: ${deduped.length} msgs`);
     return deduped;
   }
-
   const lastUserIdx = [...deduped].map((m, i) => ({ m, i })).filter(x => x.m.role === 'user').at(-1)?.i ?? -1;
   const lastModelIdx = [...deduped].map((m, i) => ({ m, i })).filter(x => x.m.role === 'assistant').at(-1)?.i ?? -1;
   const anchorIndices = new Set();
   if (lastUserIdx >= 0) anchorIndices.add(lastUserIdx);
   if (lastModelIdx >= 0) anchorIndices.add(lastModelIdx);
-
   const windowStart = Math.max(0, deduped.length - MAX_CONTEXT_MESSAGES);
   const windowIndices = new Set();
   for (let i = windowStart; i < deduped.length; i++) windowIndices.add(i);
   for (const idx of anchorIndices) windowIndices.add(idx);
-
   const selected = [...windowIndices].sort((a, b) => a - b).map(i => ({
     role: deduped[i].role,
     content: deduped[i].content
   }));
-
-  console.log(`📦 Context window: ${selected.length}/${deduped.length} msgs selecionadas (corte aplicado)`);
+  console.log(`📦 Context window: ${selected.length}/${deduped.length} msgs`);
   return selected;
 }
 
-// ─── CORS ─────────────────────────────────────────────────────────────────────
+// ─── CORS ────────────────────────────────────────────────────────────────────
 const corsOptions = {
   origin: process.env.FRONTEND_URL || '*',
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'x-user-id', 'x-model', 'Authorization'],
   credentials: true,
 };
-
 app.options('*', cors(corsOptions));
 app.use(cors(corsOptions));
-
-// ─── Middleware ───────────────────────────────────────────────────────────────
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-// ─── Upload ───────────────────────────────────────────────────────────────────
+// ─── Upload ──────────────────────────────────────────────────────────────────
 const uploadsDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
-
 const upload = multer({
   storage: multer.diskStorage({
     destination: (_, __, cb) => cb(null, uploadsDir),
@@ -219,7 +303,7 @@ const upload = multer({
   },
 });
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 function resolveModelKey(req) {
   const requested = req.headers['x-model'];
   const userId = req.headers['x-user-id'];
@@ -227,7 +311,7 @@ function resolveModelKey(req) {
   return 'flash';
 }
 
-// ─── Montagem do System Prompt a partir de dados pré-carregados ───────────────
+// ─── Montagem do System Prompt (parte estática, sem arquivos) ─────────────────
 const PERSONALITY_GUIDE = {
   direto: 'Seja direto, objetivo e conciso. Sem rodeios.',
   tecnico: 'Use terminologia técnica precisa. Inclua detalhes de implementação quando relevante.',
@@ -250,12 +334,9 @@ Se o usuário perguntar quem desenvolveu o Solaris, quem é o autor, fundador, o
 - Entusiasta de tecnologia, com paixão por arte e esportes.
 - Criou o Solaris como assistente de IA pessoal modular e escalável.
 - Solaris organiza projetos, automatiza tarefas e agiliza processos.
-
-Exemplo de resposta (varie a redação, não copie exatamente):
-"O Solaris foi criado por Felipe Sant'Oliver, brasileiro, mineiro, engenheiro de controle e automação com formação em eletrônica e robótica. Apaixonado por tecnologia, arte e esportes, ele desenvolveu o Solaris como um assistente de IA modular e escalável para organizar projetos, automatizar tarefas e agilizar processos."
 `;
 
-function assembleSystemPrompt({ settings, project, memories, files }) {
+function assembleBaseSystemPrompt({ settings, project, memories }) {
   let personalityText = PERSONALITY_GUIDE.direto;
   let customTraits = '';
   if (settings) {
@@ -264,7 +345,6 @@ function assembleSystemPrompt({ settings, project, memories, files }) {
   }
 
   let prompt = '';
-
   if (!project) {
     prompt = `Você é o Solaris, um assistente de IA pessoal.\n\n`;
     prompt += `=== ESTILO ===\n${personalityText}\n`;
@@ -287,74 +367,54 @@ function assembleSystemPrompt({ settings, project, memories, files }) {
     memories.forEach((m, i) => { prompt += `[${i + 1}] ${m.content}\n`; });
     prompt += '\n';
   }
-
-  if (files && files.length > 0) {
-    prompt += `=== ARQUIVOS DE REFERÊNCIA ===\n`;
-    for (const file of files) {
-      const snippet = (file.extracted_text || '').substring(0, 2000);
-      const block = `\n[${file.original_name}]\n${snippet}${(file.extracted_text?.length || 0) > 2000 ? '...[truncado]' : ''}\n`;
-      if (prompt.length + block.length > 12000) break;
-      prompt += block;
-    }
-  }
-
   return prompt;
 }
 
-// Função para obter o system prompt com cache (já paralelizado com Promise.all)
-async function getSystemPromptWithCache(userId, projectId) {
-  // Se não há userId (guest), fallback sem cache
+// Busca a parte estática do system prompt com cache
+async function getBaseSystemPromptWithCache(userId, projectId) {
   if (!userId) {
-    const [settings, project, memories, files] = await Promise.all([
+    const [settings, project, memories] = await Promise.all([
       null,
       projectId ? getAsync('SELECT * FROM projects WHERE id = $1', [projectId]) : Promise.resolve(null),
       projectId ? allAsync('SELECT content FROM memories WHERE project_id = $1 ORDER BY created_at DESC LIMIT 5', [projectId]) : Promise.resolve([]),
-      projectId ? allAsync('SELECT original_name, extracted_text FROM files WHERE project_id = $1', [projectId]) : Promise.resolve([])
     ]);
-    return assembleSystemPrompt({ settings, project, memories, files });
+    return assembleBaseSystemPrompt({ settings, project, memories });
   }
 
   const cached = getCachedSystemPrompt(userId, projectId);
   if (cached) return cached;
 
-  // Paraleliza todas as consultas independentes
-  const [settings, project, memories, files] = await Promise.all([
+  const [settings, project, memories] = await Promise.all([
     getAsync('SELECT personality, custom_traits FROM user_settings WHERE user_id = $1', [userId]),
     projectId ? getAsync('SELECT * FROM projects WHERE id = $1', [projectId]) : Promise.resolve(null),
     projectId ? allAsync('SELECT content FROM memories WHERE project_id = $1 ORDER BY created_at DESC LIMIT 5', [projectId]) : Promise.resolve([]),
-    projectId ? allAsync('SELECT original_name, extracted_text FROM files WHERE project_id = $1', [projectId]) : Promise.resolve([])
   ]);
-
-  const systemPrompt = assembleSystemPrompt({ settings, project, memories, files });
+  const systemPrompt = assembleBaseSystemPrompt({ settings, project, memories });
   setCachedSystemPrompt(userId, projectId, systemPrompt);
   return systemPrompt;
 }
 
+// ─── Memórias automáticas ────────────────────────────────────────────────────
 const MEMORY_KEYWORDS = [
   'importante', 'lembre-se', 'concluímos', 'aprendemos', 'descobrimos',
   'fato', 'sabemos que', 'definimos', 'decidimos', 'sempre', 'nunca',
   'padrão', 'regra', 'convenção', 'arquitetura', 'estrutura', 'configuração',
 ];
 
-// OTIMIZAÇÃO: paraleliza os inserts de memórias candidatas
 async function extractMemories(projectId, response) {
   if (!projectId) return;
   const candidates = response
     .split(/[.!?]+\s+/)
     .filter(s => s.length > 50 && MEMORY_KEYWORDS.some(k => s.toLowerCase().includes(k)))
     .slice(0, 2);
-
-  // Executa todos os inserts em paralelo (Promise.all)
-  if (candidates.length > 0) {
+  if (candidates.length) {
     await Promise.all(
       candidates.map(content =>
         runAsync('INSERT INTO memories (project_id, content, source) VALUES ($1, $2, $3)', [projectId, content.trim(), 'auto'])
-          .catch(() => { }) // silencia erros individuais
+          .catch(() => { })
       )
     );
   }
-
-  // Mantém apenas as 20 memórias mais recentes
   await runAsync(
     `DELETE FROM memories WHERE project_id = $1 AND id NOT IN (SELECT id FROM memories WHERE project_id = $1 ORDER BY created_at DESC LIMIT 20)`,
     [projectId]
@@ -364,22 +424,12 @@ async function extractMemories(projectId, response) {
 function generateLocalTitle(firstMessage) {
   const FALLBACK = 'Nova conversa';
   if (!firstMessage || typeof firstMessage !== 'string') return FALLBACK;
-
-  const cleaned = firstMessage
-    .replace(/[\r\n\t]+/g, ' ')
-    .replace(/\s{2,}/g, ' ')
-    .replace(/["""''`]/g, '')
-    .trim();
-
+  const cleaned = firstMessage.replace(/[\r\n\t]+/g, ' ').replace(/\s{2,}/g, ' ').replace(/["""''`]/g, '').trim();
   if (cleaned.length < 3) return FALLBACK;
-
   const words = cleaned.split(' ').filter(Boolean);
-  const titleWords = words.slice(0, 7);
-  let title = titleWords.join(' ');
-
+  let title = words.slice(0, 7).join(' ');
   title = title.charAt(0).toUpperCase() + title.slice(1);
   if (words.length > 7) title += '…';
-
   return title.substring(0, 50);
 }
 
@@ -390,9 +440,8 @@ async function autoTitle(chatId, firstMessage) {
   } catch { }
 }
 
-// ─── ROTAS ────────────────────────────────────────────────────────────────────
-
-app.get('/api/health', (_, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
+// ─── ROTAS ───────────────────────────────────────────────────────────────────
+app.get('/api/health', (_, res) => res.json({ status: 'ok' }));
 
 app.get('/api/settings', async (req, res, next) => {
   const userId = req.headers['x-user-id'];
@@ -413,11 +462,10 @@ app.post('/api/settings', async (req, res, next) => {
       VALUES ($1, $2, $3, NOW())
       ON CONFLICT (user_id) DO UPDATE SET personality = $2, custom_traits = $3, updated_at = NOW()
     `, [userId, personality, custom_traits]);
-    // Invalida cache para todos os projetos deste usuário
     for (const key of systemPromptCache.keys()) {
       if (key.startsWith(`${userId}:`)) systemPromptCache.delete(key);
     }
-    res.json({ ok: true, personality, custom_traits });
+    res.json({ ok: true });
   } catch (err) { next(err); }
 });
 
@@ -505,7 +553,7 @@ app.delete('/api/projects/:id/chats/:chatId', async (req, res, next) => {
 
 app.patch('/api/chats/:chatId/title', async (req, res, next) => {
   const { title } = req.body;
-  if (!title || !title.trim()) return res.status(400).json({ error: 'title obrigatório' });
+  if (!title?.trim()) return res.status(400).json({ error: 'title obrigatório' });
   try {
     const trimmed = title.trim().substring(0, 50);
     await runAsync('UPDATE chats SET title = $1, updated_at = NOW() WHERE id = $2', [trimmed, req.params.chatId]);
@@ -527,19 +575,34 @@ app.post('/api/messages', async (req, res, next) => {
   const userId = req.headers['x-user-id'];
   const modelKey = resolveModelKey(req);
   const { project_id, chat_id, message } = req.body;
-  if (!chat_id || !message) return res.status(400).json({ error: 'chat_id e message são obrigatórios' });
+  if (!chat_id || !message) return res.status(400).json({ error: 'chat_id e message obrigatórios' });
 
   const projectId = (project_id && project_id !== 'none') ? project_id : null;
 
   try {
     await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'user', message]);
 
-    const history = await allAsync('SELECT role, content FROM messages WHERE chat_id = $1 ORDER BY created_at ASC', [chat_id]);
+    // Busca chunks relevantes (apenas se houver projeto)
+    let relevantChunks = [];
+    if (projectId) {
+      relevantChunks = await searchRelevantChunks(projectId, message, 3);
+    }
 
-    const systemPrompt = await getSystemPromptWithCache(userId, projectId);
+    const history = await allAsync('SELECT role, content FROM messages WHERE chat_id = $1 ORDER BY created_at ASC', [chat_id]);
+    const baseSystemPrompt = await getBaseSystemPromptWithCache(userId, projectId);
+
+    // Monta prompt final com contexto dos arquivos
+    let finalSystemPrompt = baseSystemPrompt;
+    if (relevantChunks.length > 0) {
+      finalSystemPrompt += `\n=== CONTEXTO DOS ARQUIVOS ===\nOs seguintes trechos dos seus documentos podem ser relevantes para a pergunta atual:\n\n`;
+      relevantChunks.forEach((chunk, idx) => {
+        finalSystemPrompt += `[Trecho ${idx + 1}]\n${chunk}\n\n`;
+      });
+      finalSystemPrompt += `Utilize essas informações sempre que pertinente. Se não forem úteis, ignore-as.\n`;
+    }
 
     const apiHistory = selectContextWindow(history);
-    const responseText = await geminiChat(apiHistory, systemPrompt, modelKey);
+    const responseText = await geminiChat(apiHistory, finalSystemPrompt, modelKey);
 
     await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'assistant', responseText]);
     await runAsync('UPDATE chats SET updated_at = NOW() WHERE id = $1', [chat_id]);
@@ -560,7 +623,7 @@ app.post('/api/messages/edit', async (req, res, next) => {
   const modelKey = resolveModelKey(req);
   const { chat_id, project_id, message_index, new_content, original_content } = req.body;
   if (!chat_id || !new_content || message_index === undefined)
-    return res.status(400).json({ error: 'chat_id, new_content e message_index são obrigatórios' });
+    return res.status(400).json({ error: 'chat_id, new_content e message_index obrigatórios' });
 
   const projectId = (project_id && project_id !== 'none') ? project_id : null;
 
@@ -583,7 +646,7 @@ app.post('/api/messages/edit', async (req, res, next) => {
     );
 
     const idsToDelete = allMessages.slice(message_index + 1).map(m => m.id);
-    if (idsToDelete.length > 0) {
+    if (idsToDelete.length) {
       await runAsync(`DELETE FROM messages WHERE id = ANY($1::int[])`, [idsToDelete]);
     }
 
@@ -592,10 +655,24 @@ app.post('/api/messages/edit', async (req, res, next) => {
       content: m.id === targetMsg.id ? new_content : m.content,
     }));
 
-    const systemPrompt = await getSystemPromptWithCache(userId, projectId);
+    // Busca chunks relevantes para a nova pergunta editada
+    let relevantChunks = [];
+    if (projectId) {
+      relevantChunks = await searchRelevantChunks(projectId, new_content, 3);
+    }
+
+    const baseSystemPrompt = await getBaseSystemPromptWithCache(userId, projectId);
+    let finalSystemPrompt = baseSystemPrompt;
+    if (relevantChunks.length) {
+      finalSystemPrompt += `\n=== CONTEXTO DOS ARQUIVOS ===\n`;
+      relevantChunks.forEach((chunk, idx) => {
+        finalSystemPrompt += `[Trecho ${idx + 1}]\n${chunk}\n\n`;
+      });
+      finalSystemPrompt += `Utilize essas informações sempre que pertinente.\n`;
+    }
 
     const apiHistory = selectContextWindow(cleanHistory);
-    const responseText = await geminiChat(apiHistory, systemPrompt, modelKey);
+    const responseText = await geminiChat(apiHistory, finalSystemPrompt, modelKey);
 
     await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'assistant', responseText]);
     await runAsync('UPDATE chats SET updated_at = NOW() WHERE id = $1', [chat_id]);
@@ -630,13 +707,19 @@ app.post('/api/files/:projectId', upload.single('file'), async (req, res, next) 
         const pdfParse = (await import('pdf-parse')).default;
         const data = await pdfParse(fs.readFileSync(req.file.path));
         extractedText = data.text.substring(0, 50000);
-      } catch { extractedText = '[PDF: não foi possível extrair texto]'; }
+      } catch {
+        extractedText = '[PDF: não foi possível extrair texto]';
+      }
     }
     const fileId = randomUUID();
     await runAsync(
       'INSERT INTO files (id, project_id, original_name, mime_type, size, extracted_text, path) VALUES ($1,$2,$3,$4,$5,$6,$7)',
       [fileId, req.params.projectId, req.file.originalname, req.file.mimetype, req.file.size, extractedText, req.file.path]
     );
+    // Indexa os chunks do arquivo
+    if (extractedText && extractedText.length > 0) {
+      await indexFileChunks(fileId, extractedText);
+    }
     if (userId) invalidateSystemPromptCache(userId, req.params.projectId);
     res.status(201).json({ id: fileId, original_name: req.file.originalname, size: req.file.size });
   } catch (err) { next(err); }
@@ -672,19 +755,14 @@ app.get('/api/share/:chatId', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ─── Error handler (normalização) ─────────────────────────────────────────────
 app.use(errorHandler);
 
-// ─── Unhandled rejections ────────────────────────────────────────────────────
 process.on('unhandledRejection', (reason) => console.error('Unhandled rejection:', reason));
 
-// ─── Boot ───────────────────────────────────────────────────────────────────
 (async () => {
   try {
     await initDb();
-    app.listen(PORT, '0.0.0.0', () =>
-      console.log(`✅ Solaris backend na porta ${PORT}`)
-    );
+    app.listen(PORT, '0.0.0.0', () => console.log(`✅ Solaris backend na porta ${PORT}`));
   } catch (err) {
     console.error('❌ Falha ao iniciar:', err);
     process.exit(1);

@@ -2,15 +2,14 @@ import pg from 'pg';
 import net from 'net';
 import dns from 'dns/promises';
 
-// Força IPv4 globalmente no Node antes de qualquer conexão
+// Força IPv4 globalmente
 import { setDefaultResultOrder } from 'dns';
 setDefaultResultOrder('ipv4first');
 
-// Monkey-patch no net.connect para rejeitar qualquer tentativa de IPv6
+// Monkey-patch net.connect para rejeitar IPv6
 const _originalConnect = net.connect;
 net.connect = function (options, ...args) {
   if (options && typeof options === 'object' && options.host) {
-    // Se o host for um endereço IPv6 puro, substitui por localhost para forçar erro visível
     if (net.isIPv6(options.host)) {
       console.error(`🚫 Bloqueando tentativa de conexão IPv6: ${options.host}`);
       options.family = 4;
@@ -22,22 +21,21 @@ net.connect = function (options, ...args) {
 const { Pool } = pg;
 
 if (!process.env.DATABASE_URL) {
-  throw new Error('❌ DATABASE_URL não definida nas variáveis de ambiente');
+  throw new Error('❌ DATABASE_URL não definida');
 }
 
 let pool = null;
 
 async function resolveIPv4(hostname) {
-  // Tenta resolver IPv4 até 3 vezes com delay
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       const addresses = await dns.resolve4(hostname);
-      if (addresses && addresses.length > 0) {
-        console.log(`✅ IPv4 resolvido (tentativa ${attempt}): ${hostname} -> ${addresses[0]}`);
+      if (addresses?.length) {
+        console.log(`✅ IPv4 resolvido: ${hostname} -> ${addresses[0]}`);
         return addresses[0];
       }
     } catch (err) {
-      console.warn(`⚠️ Tentativa ${attempt}/3 falhou para ${hostname}: ${err.message}`);
+      console.warn(`⚠️ Tentativa ${attempt}/3 falhou: ${err.message}`);
       if (attempt < 3) await new Promise(r => setTimeout(r, 1000 * attempt));
     }
   }
@@ -47,63 +45,40 @@ async function resolveIPv4(hostname) {
 async function getPoolConfig() {
   const url = new URL(process.env.DATABASE_URL);
   const hostname = url.hostname;
-
-  console.log(`🔍 Resolvendo hostname: ${hostname}`);
-
   const ipv4 = await resolveIPv4(hostname);
-
-  if (!ipv4) {
-    // Último recurso: usa o hostname diretamente mas força family=4 no pg
-    console.warn(`⚠️ Não foi possível resolver IPv4 para ${hostname}. Usando hostname com family=4 forçado.`);
-  }
-
   const config = {
     user: decodeURIComponent(url.username),
     password: decodeURIComponent(url.password),
     host: ipv4 || hostname,
     port: parseInt(url.port || '5432'),
     database: url.pathname.slice(1),
-    // Força IPv4 no nível do driver pg
     family: 4,
     max: 10,
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 15000,
-    // SSL obrigatório para Supabase
     ssl: { rejectUnauthorized: false },
   };
-
-  // Respeita sslmode da URL se presente
   const sslParam = url.searchParams.get('sslmode');
-  if (sslParam === 'disable') {
-    config.ssl = false;
-  } else if (sslParam === 'verify-full' || sslParam === 'verify-ca') {
-    config.ssl = { rejectUnauthorized: true };
-  }
-
-  console.log(`📦 Config PostgreSQL -> ${config.host}:${config.port} | family: 4 | ssl: ${!!config.ssl}`);
+  if (sslParam === 'disable') config.ssl = false;
+  else if (sslParam === 'verify-full' || sslParam === 'verify-ca') config.ssl = { rejectUnauthorized: true };
+  console.log(`📦 Config PostgreSQL -> ${config.host}:${config.port} | family:4 | ssl:${!!config.ssl}`);
   return config;
 }
 
 export async function getPool() {
   if (pool) return pool;
-
   const config = await getPoolConfig();
   pool = new Pool(config);
-
-  pool.on('error', (err) => {
-    console.error('❌ Erro no pool PostgreSQL:', err.message);
-  });
-
+  pool.on('error', (err) => console.error('❌ Pool error:', err.message));
   try {
     const client = await pool.connect();
-    console.log('✅ Conexão com Supabase PostgreSQL estabelecida com sucesso');
+    console.log('✅ Conectado ao Supabase');
     client.release();
   } catch (err) {
-    console.error('❌ Falha na conexão de teste:', err.message);
-    pool = null; // reseta para tentar novamente na próxima chamada
+    console.error('❌ Falha conexão:', err.message);
+    pool = null;
     throw err;
   }
-
   return pool;
 }
 
@@ -147,46 +122,46 @@ export async function initDb() {
     await client.query(`
       CREATE TABLE IF NOT EXISTS projects (
         id             TEXT PRIMARY KEY,
-        user_id        TEXT        NOT NULL,
-        name           TEXT        NOT NULL,
+        user_id        TEXT NOT NULL,
+        name           TEXT NOT NULL,
         objective      TEXT,
-        response_style TEXT        DEFAULT 'direto',
-        memory_mode    TEXT        DEFAULT 'isolado',
+        response_style TEXT DEFAULT 'direto',
+        memory_mode    TEXT DEFAULT 'isolado',
         created_at     TIMESTAMPTZ DEFAULT NOW(),
         updated_at     TIMESTAMPTZ DEFAULT NOW()
       );
 
       CREATE TABLE IF NOT EXISTS chats (
         id         TEXT PRIMARY KEY,
-        project_id TEXT        REFERENCES projects(id) ON DELETE CASCADE,
-        title      TEXT        DEFAULT 'Nova conversa',
+        project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+        title      TEXT DEFAULT 'Nova conversa',
         created_at TIMESTAMPTZ DEFAULT NOW(),
         updated_at TIMESTAMPTZ DEFAULT NOW()
       );
 
       CREATE TABLE IF NOT EXISTS messages (
         id           SERIAL PRIMARY KEY,
-        chat_id      TEXT        NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
-        role         TEXT        NOT NULL,
-        content      TEXT        NOT NULL,
-        edited       BOOLEAN     DEFAULT FALSE,
-        edit_history JSONB       DEFAULT '[]',
+        chat_id      TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+        role         TEXT NOT NULL,
+        content      TEXT NOT NULL,
+        edited       BOOLEAN DEFAULT FALSE,
+        edit_history JSONB DEFAULT '[]',
         created_at   TIMESTAMPTZ DEFAULT NOW(),
         updated_at   TIMESTAMPTZ DEFAULT NOW()
       );
 
       CREATE TABLE IF NOT EXISTS memories (
         id         SERIAL PRIMARY KEY,
-        project_id TEXT        NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-        content    TEXT        NOT NULL,
-        source     TEXT        DEFAULT 'auto',
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        content    TEXT NOT NULL,
+        source     TEXT DEFAULT 'auto',
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
 
       CREATE TABLE IF NOT EXISTS files (
         id             TEXT PRIMARY KEY,
-        project_id     TEXT        NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-        original_name  TEXT        NOT NULL,
+        project_id     TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        original_name  TEXT NOT NULL,
         mime_type      TEXT,
         size           INTEGER,
         extracted_text TEXT,
@@ -194,10 +169,19 @@ export async function initDb() {
         created_at     TIMESTAMPTZ DEFAULT NOW()
       );
 
+      CREATE TABLE IF NOT EXISTS file_chunks (
+        id         SERIAL PRIMARY KEY,
+        file_id    TEXT NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+        chunk_index INTEGER NOT NULL,
+        chunk_text TEXT NOT NULL,
+        embedding  JSONB,   -- array de floats do embedding
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+
       CREATE TABLE IF NOT EXISTS user_settings (
         user_id        TEXT PRIMARY KEY,
-        personality    TEXT        DEFAULT 'direto',
-        custom_traits  TEXT        DEFAULT '',
+        personality    TEXT DEFAULT 'direto',
+        custom_traits  TEXT DEFAULT '',
         updated_at     TIMESTAMPTZ DEFAULT NOW()
       );
     `);
@@ -212,7 +196,7 @@ export async function initDb() {
       await client.query(sql).catch(() => { });
     }
 
-    console.log('✅ Tabelas verificadas/criadas no Supabase');
+    console.log('✅ Tabelas verificadas/criadas');
   } finally {
     client.release();
   }
