@@ -270,7 +270,7 @@ function selectContextWindow(history) {
 
 // ─── CORS ──────────────────────────────────────────────────────────────
 const corsOptions = {
-  origin: process.env.FRONTEND_URL || '*',
+  origin: process.env.FRONTEND_URL || false,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'x-user-id', 'x-model', 'Authorization'],
   credentials: true,
