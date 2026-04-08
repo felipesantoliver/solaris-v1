@@ -241,7 +241,7 @@ async function searchRelevantChunks(projectId, query, limit = 3) {
 }
 
 // ─── Otimização de contexto (histórico) ──────────────────────────────────────
-const MAX_CONTEXT_MESSAGES = 8;
+const MAX_CONTEXT_MESSAGES = 6;
 
 function selectContextWindow(history) {
   if (!Array.isArray(history) || history.length === 0) return [];
