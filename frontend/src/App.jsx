@@ -31,6 +31,20 @@ async function safeJson(res) {
   return res.json();
 }
 
+// ================== UTILITÁRIO DE LIMPEZA ==================
+// Remove repetições do nome "Solaris" no início de parágrafos
+function cleanAssistantMessage(text) {
+  if (!text) return text;
+  // Remove "Solaris:" ou "Solaris diz:" após quebra de linha
+  const repeatedPattern = /\n\s*Solaris\s*[:：]?\s*(diz\s*)?[:：]?\s*/gi;
+  let cleaned = text.replace(repeatedPattern, '\n');
+  // Remove "Solaris" isolado em linha vazia
+  cleaned = cleaned.replace(/\n\s*Solaris\s*\n/gi, '\n');
+  // Normaliza quebras de linha excessivas
+  cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
+  return cleaned.trim();
+}
+
 // ─── Solar System ──────────────────────────────────────────────────────────
 function OrbitLine({ size, themeColor }) {
   return <div className={`absolute border ${themeColor} rounded-full ${size} transition-colors duration-500`} />;
@@ -765,6 +779,15 @@ export default function App() {
         }
       }
     }
+    // Após o término do streaming, limpar o conteúdo final da mensagem do assistente
+    if (assistantMessageIndex !== null) {
+      setMessages(prev => {
+        const updated = [...prev];
+        const finalContent = cleanAssistantMessage(updated[assistantMessageIndex].content);
+        updated[assistantMessageIndex] = { ...updated[assistantMessageIndex], content: finalContent };
+        return updated;
+      });
+    }
   };
 
   const guestIdRef = useRef(getGuestId());
@@ -807,7 +830,15 @@ export default function App() {
   }, [activeProjectId]);
   useEffect(() => {
     if (!activeChatId) { setMessages([]); return; }
-    (async () => { try { const r = await fetch(`${API_BASE}/messages/chat/${activeChatId}`, { headers: { 'x-user-id': effectiveUserId } }); if (!r.ok) return; const msgs = await r.json(); setMessages(Array.isArray(msgs) ? msgs : []); } catch { } })();
+    (async () => {
+      try { const r = await fetch(`${API_BASE}/messages/chat/${activeChatId}`, { headers: { 'x-user-id': effectiveUserId } }); if (!r.ok) return; const msgs = await r.json(); 
+        // Limpa as mensagens do assistente ao carregar do histórico
+        const cleanedMsgs = msgs.map(msg => 
+          msg.role === 'assistant' ? { ...msg, content: cleanAssistantMessage(msg.content) } : msg
+        );
+        setMessages(cleanedMsgs);
+      } catch { }
+    })();
   }, [activeChatId]);
 
   async function createChat(projectId) {
@@ -830,7 +861,10 @@ export default function App() {
     setIsLoading(true); await showStatusSequence(); setIsStreaming(true); setIsLoading(false);
     try { await streamResponse(chatId, projectId, text, model); } catch (err) {
       console.error('Streaming falhou, usando fallback:', err);
-      try { const r = await fetch(`${API_BASE}/messages`, { method: 'POST', headers: buildHeaders(), body: JSON.stringify({ project_id: projectId || null, chat_id: chatId, message: text }) }); const d = await safeJson(r); if (!r.ok) throw new Error(d.error || 'Erro no servidor'); setMessages(prev => [...prev, { role: 'assistant', content: d.response, model: d.model }]); } catch (fallbackErr) { setMessages(prev => [...prev, { role: 'assistant', content: `⚠️ ${fallbackErr.message}` }]); }
+      try { const r = await fetch(`${API_BASE}/messages`, { method: 'POST', headers: buildHeaders(), body: JSON.stringify({ project_id: projectId || null, chat_id: chatId, message: text }) }); const d = await safeJson(r); if (!r.ok) throw new Error(d.error || 'Erro no servidor'); 
+        const cleanedResponse = cleanAssistantMessage(d.response);
+        setMessages(prev => [...prev, { role: 'assistant', content: cleanedResponse, model: d.model }]);
+      } catch (fallbackErr) { setMessages(prev => [...prev, { role: 'assistant', content: `⚠️ ${fallbackErr.message}` }]); }
     } finally { setIsStreaming(false); setStatusMessage(''); }
   };
   const handleKeyDown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } };
@@ -844,7 +878,10 @@ export default function App() {
     const newMessages = messages.slice(0, editingMsgIndex + 1).map((m, i) => i === editingMsgIndex ? { ...m, content: newContent, edited: true, edit_history: [...(m.edit_history || []), { content: m.content, edited_at: new Date().toISOString() }] } : m);
     setMessages(newMessages); setEditingMsgIndex(null); setEditValue('');
     setIsLoading(true); await showStatusSequence(); setIsStreaming(true); setIsLoading(false);
-    try { const r = await fetch(`${API_BASE}/messages/edit`, { method: 'POST', headers: buildHeaders(), body: JSON.stringify({ chat_id: activeChatId, project_id: activeProjectId, message_index: editingMsgIndex, new_content: newContent, original_content: original.content }) }); const d = await safeJson(r); setMessages(prev => [...prev, { role: 'assistant', content: d.response, model: d.model }]); } catch { setMessages(prev => [...prev, { role: 'assistant', content: 'Erro ao regerar.' }]); } finally { setIsStreaming(false); setStatusMessage(''); }
+    try { const r = await fetch(`${API_BASE}/messages/edit`, { method: 'POST', headers: buildHeaders(), body: JSON.stringify({ chat_id: activeChatId, project_id: activeProjectId, message_index: editingMsgIndex, new_content: newContent, original_content: original.content }) }); const d = await safeJson(r); 
+      const cleanedResponse = cleanAssistantMessage(d.response);
+      setMessages(prev => [...prev, { role: 'assistant', content: cleanedResponse, model: d.model }]);
+    } catch { setMessages(prev => [...prev, { role: 'assistant', content: 'Erro ao regerar.' }]); } finally { setIsStreaming(false); setStatusMessage(''); }
   };
   const handleShare = () => { const text = messages.map(m => `${m.role === 'user' ? 'VOCÊ' : 'SOLARIS'}: ${m.content}`).join('\n\n'); navigator.clipboard.writeText(text).catch(() => { }); setShowShareToast(true); setTimeout(() => setShowShareToast(false), 3000); };
   const createProject = async () => {
