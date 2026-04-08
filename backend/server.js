@@ -16,7 +16,10 @@ import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
 import { initDb, runAsync, getAsync, allAsync } from './database.js';
 import { errorHandler } from './utils/errorHandler.js';
-import { getJobQueue } from './jobQueue.js';  // <-- importa a fila de jobs
+import { getJobQueue } from './jobQueue.js';
+
+// Importa funções de embedding do módulo dedicado (quebra circularidade)
+import { generateEmbedding, indexFileChunks, cosineSimilarity } from './lib/embeddings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -71,7 +74,7 @@ setInterval(() => {
   if (deleted) console.log(`🧹 Cache limpo: ${deleted} entradas`);
 }, 5 * 60 * 1000);
 
-// ─── Gemini (Chat + Embedding + Streaming) ───────────────────────────────
+// ─── Gemini (Chat + Streaming) ───────────────────────────────────────
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 if (!GEMINI_API_KEY) throw new Error('❌ GEMINI_API_KEY não definida');
 
@@ -160,70 +163,7 @@ async function* streamGeminiChat(messages, systemPrompt, modelKey = 'flash') {
   }
 }
 
-// ─── Embedding e busca semântica ──────────────────────────────────────
-export async function generateEmbedding(text) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/embedding-001:embedContent?key=${GEMINI_API_KEY}`;
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: 'models/embedding-001', content: { parts: [{ text }] } }),
-  });
-  if (!response.ok) throw new Error(`Erro ao gerar embedding: ${response.status}`);
-  const data = await response.json();
-  return data.embedding.values;
-}
-
-function splitTextIntoChunks(text, chunkSize = 500, overlap = 100) {
-  if (!text) return [];
-  const chunks = [];
-  let start = 0;
-  while (start < text.length) {
-    let end = start + chunkSize;
-    if (end > text.length) end = text.length;
-    let chunk = text.slice(start, end);
-    const lastPeriod = chunk.lastIndexOf('.');
-    if (lastPeriod > chunkSize * 0.7 && end < text.length) {
-      chunk = text.slice(start, start + lastPeriod + 1);
-      end = start + lastPeriod + 1;
-    }
-    chunks.push(chunk.trim());
-    start = end - overlap;
-    if (start < 0) start = 0;
-    if (start >= text.length) break;
-  }
-  return chunks;
-}
-
-export async function indexFileChunks(fileId, text) {
-  const chunks = splitTextIntoChunks(text);
-  if (!chunks.length) return;
-  await runAsync('DELETE FROM file_chunks WHERE file_id = $1', [fileId]);
-  for (let i = 0; i < chunks.length; i++) {
-    try {
-      const embedding = await generateEmbedding(chunks[i]);
-      await runAsync(
-        'INSERT INTO file_chunks (file_id, chunk_index, chunk_text, embedding) VALUES ($1, $2, $3, $4)',
-        [fileId, i, chunks[i], JSON.stringify(embedding)]
-      );
-    } catch (err) {
-      console.error(`Erro ao indexar chunk ${i}:`, err.message);
-    }
-  }
-  console.log(`✅ Indexados ${chunks.length} chunks para arquivo ${fileId}`);
-}
-
-function cosineSimilarity(vecA, vecB) {
-  if (!vecA || !vecB || vecA.length !== vecB.length) return 0;
-  let dot = 0, magA = 0, magB = 0;
-  for (let i = 0; i < vecA.length; i++) {
-    dot += vecA[i] * vecB[i];
-    magA += vecA[i] * vecA[i];
-    magB += vecB[i] * vecB[i];
-  }
-  if (magA === 0 || magB === 0) return 0;
-  return dot / (Math.sqrt(magA) * Math.sqrt(magB));
-}
-
+// ─── Busca semântica (usa funções importadas de embeddings.js) ───────
 async function searchRelevantChunks(projectId, query, limit = 3) {
   if (!projectId) return [];
   const queryEmbedding = await generateEmbedding(query);

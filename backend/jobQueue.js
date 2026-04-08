@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import { runAsync, getAsync, allAsync } from './database.js';
-import { generateEmbedding, indexFileChunks } from './server.js'; // exportar essas funções
+// Importa do módulo dedicado de embeddings (quebra circularidade)
+import { indexFileChunks } from './lib/embeddings.js';
 
 class JobQueue {
     constructor(options = {}) {
@@ -113,7 +114,9 @@ class JobQueue {
 
     async processEmbedding(payload) {
         const { fileId, projectId, text } = payload;
-        await indexFileChunks(fileId, text);
+        // Injeta o objeto db com os métodos necessários para o indexFileChunks
+        const db = { runAsync, allAsync, getAsync };
+        await indexFileChunks(fileId, text, db);
         return { status: 'embedded', chunks: Math.ceil(text.length / 500) };
     }
 }
