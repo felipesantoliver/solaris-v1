@@ -1,7 +1,6 @@
 // ============================================================
 //  server.js — Solaris Backend
-//  Modelos: gemini-2.5-flash (padrão) e gemini-3-flash-preview (pro)
-//  v1.2.0 — Refatoração: system_instruction separado do histórico
+//  v1.3.0 — Tratamento centralizado de erros
 // ============================================================
 
 import { setDefaultResultOrder } from 'dns';
@@ -20,6 +19,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// ─── Classe de erro customizada ───────────────────────────────────────────────
+class ApiError extends Error {
+  constructor(message, status) {
+    super(message);
+    this.status = status;
+    this.name = 'ApiError';
+  }
+}
+
 // ─── Gemini ───────────────────────────────────────────────────────────────────
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 if (!GEMINI_API_KEY) throw new Error('❌ GEMINI_API_KEY não definida');
@@ -34,39 +42,17 @@ function geminiUrl(modelKey) {
   return `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
 }
 
-// ─── REFATORAÇÃO: system_instruction separado do histórico ───────────────────
-//
-//  Antes (anti-pattern):
-//    - System prompt era injetado como prefixo na 1ª mensagem do usuário
-//    - Misturava instruções com input real → risco de prompt injection
-//    - Poluía o histórico e aumentava consumo de tokens
-//
-//  Agora (correto):
-//    - system_instruction → regras fixas de comportamento (campo dedicado da API)
-//    - contents → apenas a conversa real (user ↔ model)
-//    - Dados dinâmicos (memórias, arquivos, projeto) → permanecem no system_instruction
-//      pois são contexto estrutural, não input do usuário
-//
 function buildGeminiBody(messages, systemPrompt) {
-  // Converte o histórico de mensagens sem nenhuma contaminação do system prompt
   const contents = messages.map(msg => ({
     role: msg.role === 'assistant' ? 'model' : 'user',
     parts: [{ text: msg.content }],
   }));
 
   const body = {
-    // system_instruction: camada isolada — nunca aparece no histórico de conversa
-    system_instruction: {
-      parts: [{ text: systemPrompt }],
-    },
-    // contents: apenas o fluxo real de mensagens, limpo e sem prefixos
+    system_instruction: { parts: [{ text: systemPrompt }] },
     contents,
-    generationConfig: {
-      maxOutputTokens: 2048,
-      // ⚠️ temperature removida – usa o padrão 1.0 do Gemini
-    },
+    generationConfig: { maxOutputTokens: 2048 },
   };
-
   return body;
 }
 
@@ -84,6 +70,7 @@ async function withRetry(fn, maxRetries = 3, baseDelay = 3000) {
       throw err;
     }
   }
+  throw new ApiError('Muitas requisições, tente novamente em alguns instantes.', 429);
 }
 
 async function geminiChat(messages, systemPrompt, modelKey = 'flash') {
@@ -99,84 +86,38 @@ async function geminiChat(messages, systemPrompt, modelKey = 'flash') {
       })
     );
     if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(`Erro na IA: ${res.status}`);
+      if (res.status === 429) throw new ApiError('Rate limit atingido', 429);
+      throw new Error(`HTTP ${res.status}`);
     }
     const data = await res.json();
     return data.candidates[0].content.parts[0].text;
+  } catch (err) {
+    if (err.name === 'AbortError') throw new ApiError('Timeout na IA', 504);
+    throw err;
   } finally { clearTimeout(timeout); }
 }
 
 // ─── OTIMIZAÇÃO DE CONTEXTO ───────────────────────────────────────────────────
-//
-//  selectContextWindow — Seleciona janela deslizante de mensagens para reduzir
-//  consumo de tokens sem perda de contexto relevante.
-//
-//  Regras aplicadas (em ordem de prioridade):
-//    1. Remove mensagens vazias ou nulas
-//    2. Remove duplicatas consecutivas (mesmo role + mesmo conteúdo)
-//    3. Garante que a última mensagem do usuário está presente
-//    4. Garante que a última resposta da IA está presente (se existir)
-//    5. Mantém ordem cronológica correta (mais antiga → mais recente)
-//    6. Limita o payload a MAX_CONTEXT_MESSAGES mensagens
-//    7. Fallback: se total < MAX_CONTEXT_MESSAGES, envia tudo disponível
-//
-//  O mecanismo de memória persistente (tabela `memories`) NÃO é afetado —
-//  ele opera no system_instruction, completamente independente desta função.
-//
 const MAX_CONTEXT_MESSAGES = 8;
 
 function selectContextWindow(history) {
   if (!Array.isArray(history) || history.length === 0) return [];
-
-  // ── 1. Filtrar mensagens inválidas (vazias / nulas) ──────────────────────────
-  const valid = history.filter(m =>
-    m &&
-    typeof m.role === 'string' &&
-    typeof m.content === 'string' &&
-    m.content.trim().length > 0
-  );
-
+  const valid = history.filter(m => m && m.role && m.content?.trim());
   if (valid.length === 0) return [];
-
-  // ── 2. Remover duplicatas consecutivas (mesmo role + conteúdo idêntico) ──────
   const deduped = valid.filter((m, i) => {
     if (i === 0) return true;
     const prev = valid[i - 1];
     return !(prev.role === m.role && prev.content.trim() === m.content.trim());
   });
-
-  // ── 3. Fallback: se o total cabe na janela, retorna tudo ─────────────────────
-  if (deduped.length <= MAX_CONTEXT_MESSAGES) {
-    console.log(`📦 Context window: ${deduped.length} msgs (sem corte necessário)`);
-    return deduped;
-  }
-
-  // ── 4. Identifica âncoras obrigatórias ───────────────────────────────────────
-  //       • Última mensagem do usuário
-  //       • Última resposta da IA (se existir e for diferente da acima)
-  const lastUserIdx   = [...deduped].map((m, i) => ({ m, i })).filter(x => x.m.role === 'user').at(-1)?.i ?? -1;
-  const lastModelIdx  = [...deduped].map((m, i) => ({ m, i })).filter(x => x.m.role === 'assistant').at(-1)?.i ?? -1;
-
-  const anchorIndices = new Set();
-  if (lastUserIdx  >= 0) anchorIndices.add(lastUserIdx);
-  if (lastModelIdx >= 0) anchorIndices.add(lastModelIdx);
-
-  // ── 5. Seleciona janela deslizante: (MAX - âncoras) msgs mais recentes ────────
-  //       + âncoras obrigatórias (que podem já estar dentro da janela)
+  if (deduped.length <= MAX_CONTEXT_MESSAGES) return deduped;
+  const lastUserIdx = deduped.map((m, i) => i).filter(i => deduped[i].role === 'user').pop() ?? -1;
+  const lastModelIdx = deduped.map((m, i) => i).filter(i => deduped[i].role === 'assistant').pop() ?? -1;
+  const anchors = new Set([lastUserIdx, lastModelIdx].filter(i => i >= 0));
   const windowStart = Math.max(0, deduped.length - MAX_CONTEXT_MESSAGES);
-
-  const windowIndices = new Set();
-  for (let i = windowStart; i < deduped.length; i++) windowIndices.add(i);
-  for (const idx of anchorIndices) windowIndices.add(idx);
-
-  // ── 6. Reconstrói em ordem cronológica ───────────────────────────────────────
-  const selected = [...windowIndices]
-    .sort((a, b) => a - b)
-    .map(i => ({ role: deduped[i].role, content: deduped[i].content }));
-
-  console.log(`📦 Context window: ${selected.length}/${deduped.length} msgs selecionadas (corte aplicado)`);
-  return selected;
+  const indices = new Set();
+  for (let i = windowStart; i < deduped.length; i++) indices.add(i);
+  anchors.forEach(i => indices.add(i));
+  return [...indices].sort((a, b) => a - b).map(i => ({ role: deduped[i].role, content: deduped[i].content }));
 }
 
 // ─── CORS ─────────────────────────────────────────────────────────────────────
@@ -186,11 +127,8 @@ const corsOptions = {
   allowedHeaders: ['Content-Type', 'x-user-id', 'x-model', 'Authorization'],
   credentials: true,
 };
-
 app.options('*', cors(corsOptions));
 app.use(cors(corsOptions));
-
-// ─── Middleware ───────────────────────────────────────────────────────────────
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
@@ -198,7 +136,6 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 // ─── Upload ───────────────────────────────────────────────────────────────────
 const uploadsDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
-
 const upload = multer({
   storage: multer.diskStorage({
     destination: (_, __, cb) => cb(null, uploadsDir),
@@ -212,7 +149,6 @@ const upload = multer({
 });
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
 function resolveModelKey(req) {
   const requested = req.headers['x-model'];
   const userId = req.headers['x-user-id'];
@@ -221,17 +157,6 @@ function resolveModelKey(req) {
 }
 
 // ─── System prompt ────────────────────────────────────────────────────────────
-//
-//  ARQUITETURA DO SYSTEM_INSTRUCTION:
-//  ─────────────────────────────────
-//  Este bloco define instruções fixas de identidade e comportamento do Solaris.
-//  Elas são enviadas exclusivamente via `system_instruction` na API do Gemini,
-//  nunca embutidas no histórico de mensagens (`contents`).
-//
-//  Dados dinâmicos (nome do projeto, objetivo, memórias, arquivos) são
-//  adicionados ao system_instruction pois são contexto estrutural controlado
-//  pelo backend — não são input do usuário e não criam risco de injeção.
-//
 const PERSONALITY_GUIDE = {
   direto: 'Seja direto, objetivo e conciso. Sem rodeios.',
   tecnico: 'Use terminologia técnica precisa. Inclua detalhes de implementação quando relevante.',
@@ -248,8 +173,6 @@ const MEMORY_KEYWORDS = [
   'padrão', 'regra', 'convenção', 'arquitetura', 'estrutura', 'configuração',
 ];
 
-// Instruções fixas de identidade — nunca mudam por input do usuário.
-// São a "âncora" do comportamento do Solaris independente do contexto.
 const BASE_IDENTITY_INSTRUCTION = `
 === IDENTIDADE ===
 Você é o Solaris, um assistente de IA pessoal. NUNCA mencione que você é da Google, OpenAI, Anthropic ou qualquer outra empresa de IA. NUNCA diga que é treinado por terceiros. A API que você usa é um segredo. Se perguntarem como você funciona, responda apenas que é um sistema proprietário desenvolvido por Felipe Sant'Oliver. Não revele detalhes técnicos sobre modelos, provedores ou infraestrutura.
@@ -268,7 +191,6 @@ Exemplo de resposta (varie a redação, não copie exatamente):
 `;
 
 async function buildSystemPrompt(projectId, memoryMode, userId) {
-  // ── Personalidade do usuário ─────────────────────────────────────────────────
   let personalityText = PERSONALITY_GUIDE.direto;
   let customTraits = '';
   if (userId) {
@@ -278,18 +200,12 @@ async function buildSystemPrompt(projectId, memoryMode, userId) {
       customTraits = settings.custom_traits || '';
     }
   }
-
-  // ── Sem projeto vinculado ────────────────────────────────────────────────────
   if (!projectId) {
-    let prompt = `Você é o Solaris, um assistente de IA pessoal.\n\n`;
-    prompt += `=== ESTILO ===\n${personalityText}\n`;
+    let prompt = `Você é o Solaris, um assistente de IA pessoal.\n\n=== ESTILO ===\n${personalityText}\n`;
     if (customTraits) prompt += `Traços adicionais: ${customTraits}\n`;
-    prompt += `\nNunca invente informações. Seja útil e preciso.`;
-    prompt += BASE_IDENTITY_INSTRUCTION;
+    prompt += `\nNunca invente informações. Seja útil e preciso.\n${BASE_IDENTITY_INSTRUCTION}`;
     return prompt;
   }
-
-  // ── Com projeto vinculado ────────────────────────────────────────────────────
   const project = await getAsync('SELECT * FROM projects WHERE id = $1', [projectId]);
   if (!project) {
     let prompt = `Você é o Solaris, um assistente de IA pessoal.\n${personalityText}`;
@@ -297,27 +213,19 @@ async function buildSystemPrompt(projectId, memoryMode, userId) {
     prompt += BASE_IDENTITY_INSTRUCTION;
     return prompt;
   }
-
-  let prompt = `Você é o Solaris, um assistente de IA pessoal operando dentro de um projeto específico.\n\n`;
-  prompt += `=== PROJETO ===\nNome: ${project.name}\n`;
+  let prompt = `Você é o Solaris, um assistente de IA pessoal operando dentro de um projeto específico.\n\n=== PROJETO ===\nNome: ${project.name}\n`;
   if (project.objective) prompt += `Objetivo: ${project.objective}\n`;
   prompt += `\n=== ESTILO ===\n${personalityText}\n`;
   if (customTraits) prompt += `Traços adicionais: ${customTraits}\n`;
-  prompt += `\nEvite respostas genéricas. Nunca invente informações.\n\n`;
-  prompt += BASE_IDENTITY_INSTRUCTION;
-
-  // ── Memórias persistentes ────────────────────────────────────────────────────
+  prompt += `\nEvite respostas genéricas. Nunca invente informações.\n\n${BASE_IDENTITY_INSTRUCTION}`;
   const memories = memoryMode === 'global'
     ? await allAsync('SELECT content FROM memories ORDER BY created_at DESC LIMIT 8').catch(() => [])
     : await allAsync('SELECT content FROM memories WHERE project_id = $1 ORDER BY created_at DESC LIMIT 5', [projectId]).catch(() => []);
-
   if (memories.length > 0) {
     prompt += `=== MEMÓRIAS ===\n`;
     memories.forEach((m, i) => { prompt += `[${i + 1}] ${m.content}\n`; });
     prompt += '\n';
   }
-
-  // ── Arquivos de referência ───────────────────────────────────────────────────
   const files = await allAsync('SELECT original_name, extracted_text FROM files WHERE project_id = $1', [projectId]).catch(() => []);
   if (files.length > 0) {
     prompt += `=== ARQUIVOS DE REFERÊNCIA ===\n`;
@@ -328,44 +236,27 @@ async function buildSystemPrompt(projectId, memoryMode, userId) {
       prompt += block;
     }
   }
-
   return prompt;
 }
 
 async function extractMemories(projectId, response) {
   if (!projectId) return;
-  const candidates = response
-    .split(/[.!?]+\s+/)
-    .filter(s => s.length > 50 && MEMORY_KEYWORDS.some(k => s.toLowerCase().includes(k)))
-    .slice(0, 2);
+  const candidates = response.split(/[.!?]+\s+/).filter(s => s.length > 50 && MEMORY_KEYWORDS.some(k => s.toLowerCase().includes(k))).slice(0, 2);
   for (const content of candidates) {
     await runAsync('INSERT INTO memories (project_id, content, source) VALUES ($1, $2, $3)', [projectId, content.trim(), 'auto']).catch(() => { });
   }
-  await runAsync(
-    `DELETE FROM memories WHERE project_id = $1 AND id NOT IN (SELECT id FROM memories WHERE project_id = $1 ORDER BY created_at DESC LIMIT 20)`,
-    [projectId]
-  ).catch(() => { });
+  await runAsync(`DELETE FROM memories WHERE project_id = $1 AND id NOT IN (SELECT id FROM memories WHERE project_id = $1 ORDER BY created_at DESC LIMIT 20)`, [projectId]).catch(() => { });
 }
 
 function generateLocalTitle(firstMessage) {
   const FALLBACK = 'Nova conversa';
   if (!firstMessage || typeof firstMessage !== 'string') return FALLBACK;
-
-  const cleaned = firstMessage
-    .replace(/[\r\n\t]+/g, ' ')
-    .replace(/\s{2,}/g, ' ')
-    .replace(/["""''`]/g, '')
-    .trim();
-
+  const cleaned = firstMessage.replace(/[\r\n\t]+/g, ' ').replace(/\s{2,}/g, ' ').replace(/["""''`]/g, '').trim();
   if (cleaned.length < 3) return FALLBACK;
-
   const words = cleaned.split(' ').filter(Boolean);
-  const titleWords = words.slice(0, 7);
-  let title = titleWords.join(' ');
-
+  let title = words.slice(0, 7).join(' ');
   title = title.charAt(0).toUpperCase() + title.slice(1);
   if (words.length > 7) title += '…';
-
   return title.substring(0, 50);
 }
 
@@ -376,21 +267,20 @@ async function autoTitle(chatId, firstMessage) {
   } catch { }
 }
 
-// ─── ROTAS ────────────────────────────────────────────────────────────────────
+// ─── ROTAS (todas agora usam next(err) no catch) ──────────────────────────────
 
-app.get('/api/health', (_, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
+app.get('/api/health', (_, res) => res.json({ status: 'ok' }));
 
-// Settings
-app.get('/api/settings', async (req, res) => {
+app.get('/api/settings', async (req, res, next) => {
   const userId = req.headers['x-user-id'];
   if (!userId) return res.status(400).json({ error: 'x-user-id obrigatório' });
   try {
     const settings = await getAsync('SELECT * FROM user_settings WHERE user_id = $1', [userId]);
     res.json(settings || { user_id: userId, personality: 'direto', custom_traits: '' });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { next(err); }
 });
 
-app.post('/api/settings', async (req, res) => {
+app.post('/api/settings', async (req, res, next) => {
   const userId = req.headers['x-user-id'];
   if (!userId) return res.status(400).json({ error: 'x-user-id obrigatório' });
   const { personality = 'direto', custom_traits = '' } = req.body;
@@ -401,71 +291,62 @@ app.post('/api/settings', async (req, res) => {
       ON CONFLICT (user_id) DO UPDATE SET personality = $2, custom_traits = $3, updated_at = NOW()
     `, [userId, personality, custom_traits]);
     res.json({ ok: true, personality, custom_traits });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { next(err); }
 });
 
-// Projetos
-app.get('/api/projects', async (req, res) => {
+app.get('/api/projects', async (req, res, next) => {
   const userId = req.headers['x-user-id'];
   if (!userId) return res.status(400).json({ error: 'x-user-id obrigatório' });
   try {
     const rows = await allAsync('SELECT * FROM projects WHERE user_id = $1 ORDER BY created_at DESC', [userId]);
     res.json(rows);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { next(err); }
 });
 
-app.get('/api/projects/:id', async (req, res) => {
+app.get('/api/projects/:id', async (req, res, next) => {
   const userId = req.headers['x-user-id'];
   try {
     const project = await getAsync('SELECT * FROM projects WHERE id = $1 AND user_id = $2', [req.params.id, userId]);
     if (!project) return res.status(404).json({ error: 'Projeto não encontrado' });
     const chats = await allAsync('SELECT * FROM chats WHERE project_id = $1 ORDER BY updated_at DESC', [req.params.id]);
     res.json({ ...project, chats });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { next(err); }
 });
 
-app.post('/api/projects', async (req, res) => {
+app.post('/api/projects', async (req, res, next) => {
   const userId = req.headers['x-user-id'];
   if (!userId) return res.status(400).json({ error: 'x-user-id obrigatório' });
   const { name, objective, response_style = 'direto', memory_mode = 'isolado' } = req.body;
   if (!name) return res.status(400).json({ error: 'name obrigatório' });
   try {
     const id = randomUUID();
-    await runAsync(
-      'INSERT INTO projects (id, user_id, name, objective, response_style, memory_mode) VALUES ($1,$2,$3,$4,$5,$6)',
-      [id, userId, name, objective || null, response_style, memory_mode]
-    );
+    await runAsync('INSERT INTO projects (id, user_id, name, objective, response_style, memory_mode) VALUES ($1,$2,$3,$4,$5,$6)', [id, userId, name, objective || null, response_style, memory_mode]);
     res.status(201).json(await getAsync('SELECT * FROM projects WHERE id = $1', [id]));
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { next(err); }
 });
 
-app.patch('/api/projects/:id', async (req, res) => {
+app.patch('/api/projects/:id', async (req, res, next) => {
   const userId = req.headers['x-user-id'];
   const { name, objective, response_style, memory_mode } = req.body;
   try {
     const project = await getAsync('SELECT id FROM projects WHERE id = $1 AND user_id = $2', [req.params.id, userId]);
     if (!project) return res.status(404).json({ error: 'Projeto não encontrado' });
-    await runAsync(`
-      UPDATE projects SET name=COALESCE($1,name), objective=COALESCE($2,objective),
-        response_style=COALESCE($3,response_style), memory_mode=COALESCE($4,memory_mode), updated_at=NOW()
-      WHERE id=$5
-    `, [name ?? null, objective ?? null, response_style ?? null, memory_mode ?? null, req.params.id]);
+    await runAsync(`UPDATE projects SET name=COALESCE($1,name), objective=COALESCE($2,objective), response_style=COALESCE($3,response_style), memory_mode=COALESCE($4,memory_mode), updated_at=NOW() WHERE id=$5`, [name ?? null, objective ?? null, response_style ?? null, memory_mode ?? null, req.params.id]);
     res.json(await getAsync('SELECT * FROM projects WHERE id = $1', [req.params.id]));
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { next(err); }
 });
 
-app.delete('/api/projects/:id', async (req, res) => {
+app.delete('/api/projects/:id', async (req, res, next) => {
   const userId = req.headers['x-user-id'];
   try {
     const project = await getAsync('SELECT id FROM projects WHERE id = $1 AND user_id = $2', [req.params.id, userId]);
     if (!project) return res.status(404).json({ error: 'Projeto não encontrado' });
     await runAsync('DELETE FROM projects WHERE id = $1', [req.params.id]);
     res.json({ ok: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { next(err); }
 });
 
-// Chats
-app.post('/api/projects/:id/chats', async (req, res) => {
+app.post('/api/projects/:id/chats', async (req, res, next) => {
   const userId = req.headers['x-user-id'];
   const projectId = req.params.id === 'none' ? null : req.params.id;
   try {
@@ -476,139 +357,93 @@ app.post('/api/projects/:id/chats', async (req, res) => {
     const chatId = randomUUID();
     await runAsync('INSERT INTO chats (id, project_id, title) VALUES ($1,$2,$3)', [chatId, projectId, 'Nova conversa']);
     res.status(201).json(await getAsync('SELECT * FROM chats WHERE id = $1', [chatId]));
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { next(err); }
 });
 
-app.delete('/api/projects/:id/chats/:chatId', async (req, res) => {
+app.delete('/api/projects/:id/chats/:chatId', async (req, res, next) => {
   try {
     await runAsync('DELETE FROM chats WHERE id = $1', [req.params.chatId]);
     res.json({ ok: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { next(err); }
 });
 
-// Edição manual de título de chat
-app.patch('/api/chats/:chatId/title', async (req, res) => {
+app.patch('/api/chats/:chatId/title', async (req, res, next) => {
   const { title } = req.body;
   if (!title || !title.trim()) return res.status(400).json({ error: 'title obrigatório' });
   try {
     const trimmed = title.trim().substring(0, 50);
     await runAsync('UPDATE chats SET title = $1, updated_at = NOW() WHERE id = $2', [trimmed, req.params.chatId]);
     res.json({ ok: true, title: trimmed });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { next(err); }
 });
 
-// Mensagens
-app.get('/api/messages/chat/:chatId', async (req, res) => {
+app.get('/api/messages/chat/:chatId', async (req, res, next) => {
   try {
-    const rows = await allAsync(
-      'SELECT id, role, content, edited, edit_history, created_at FROM messages WHERE chat_id = $1 ORDER BY created_at ASC',
-      [req.params.chatId]
-    );
+    const rows = await allAsync('SELECT id, role, content, edited, edit_history, created_at FROM messages WHERE chat_id = $1 ORDER BY created_at ASC', [req.params.chatId]);
     res.json(rows);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { next(err); }
 });
 
-app.post('/api/messages', async (req, res) => {
+app.post('/api/messages', async (req, res, next) => {
   const userId = req.headers['x-user-id'];
   const modelKey = resolveModelKey(req);
   const { project_id, chat_id, message } = req.body;
   if (!chat_id || !message) return res.status(400).json({ error: 'chat_id e message são obrigatórios' });
-
   const projectId = (project_id && project_id !== 'none') ? project_id : null;
-
   try {
     await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'user', message]);
-
-    // Busca histórico completo do banco mas aplica janela deslizante antes de enviar à IA
     const history = await allAsync('SELECT role, content FROM messages WHERE chat_id = $1 ORDER BY created_at ASC', [chat_id]);
     const isFirst = history.length === 1;
-
     const project = projectId ? await getAsync('SELECT memory_mode FROM projects WHERE id = $1', [projectId]).catch(() => null) : null;
     const sysPrompt = await buildSystemPrompt(projectId, project?.memory_mode, userId);
-
-    // Janela de contexto otimizada — system prompt NÃO entra no histórico
     const apiHistory = selectContextWindow(history);
-
     const responseText = await geminiChat(apiHistory, sysPrompt, modelKey);
-
     await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'assistant', responseText]);
     await runAsync('UPDATE chats SET updated_at = NOW() WHERE id = $1', [chat_id]);
-
     if (isFirst) autoTitle(chat_id, message).catch(console.error);
     if (projectId) extractMemories(projectId, responseText).catch(console.error);
-
     res.json({ response: responseText, model: modelKey });
-  } catch (err) {
-    console.error('Erro ao enviar mensagem:', err);
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { next(err); }
 });
 
-// Edição de mensagem
-app.post('/api/messages/edit', async (req, res) => {
+app.post('/api/messages/edit', async (req, res, next) => {
   const userId = req.headers['x-user-id'];
   const modelKey = resolveModelKey(req);
   const { chat_id, project_id, message_index, new_content, original_content } = req.body;
-  if (!chat_id || !new_content || message_index === undefined)
-    return res.status(400).json({ error: 'chat_id, new_content e message_index são obrigatórios' });
-
+  if (!chat_id || !new_content || message_index === undefined) return res.status(400).json({ error: 'chat_id, new_content e message_index são obrigatórios' });
   const projectId = (project_id && project_id !== 'none') ? project_id : null;
-
   try {
-    const allMessages = await allAsync(
-      'SELECT id, role, content, edit_history FROM messages WHERE chat_id = $1 ORDER BY created_at ASC',
-      [chat_id]
-    );
+    const allMessages = await allAsync('SELECT id, role, content, edit_history FROM messages WHERE chat_id = $1 ORDER BY created_at ASC', [chat_id]);
     if (message_index >= allMessages.length) return res.status(400).json({ error: 'Índice inválido' });
-
     const targetMsg = allMessages[message_index];
     if (targetMsg.role !== 'user') return res.status(400).json({ error: 'Só é possível editar mensagens do usuário' });
-
     const editHistory = Array.isArray(targetMsg.edit_history) ? targetMsg.edit_history : [];
     editHistory.push({ content: original_content || targetMsg.content, edited_at: new Date().toISOString() });
-
-    await runAsync(
-      'UPDATE messages SET content=$1, edited=TRUE, edit_history=$2, updated_at=NOW() WHERE id=$3',
-      [new_content, JSON.stringify(editHistory), targetMsg.id]
-    );
-
+    await runAsync('UPDATE messages SET content=$1, edited=TRUE, edit_history=$2, updated_at=NOW() WHERE id=$3', [new_content, JSON.stringify(editHistory), targetMsg.id]);
     const idsToDelete = allMessages.slice(message_index + 1).map(m => m.id);
-    if (idsToDelete.length > 0) {
-      await runAsync(`DELETE FROM messages WHERE id = ANY($1::int[])`, [idsToDelete]);
-    }
-
+    if (idsToDelete.length) await runAsync(`DELETE FROM messages WHERE id = ANY($1::int[])`, [idsToDelete]);
     const cleanHistory = allMessages.slice(0, message_index + 1).map(m => ({
       role: m.role,
       content: m.id === targetMsg.id ? new_content : m.content,
     }));
-
     const project = projectId ? await getAsync('SELECT memory_mode FROM projects WHERE id = $1', [projectId]).catch(() => null) : null;
     const sysPrompt = await buildSystemPrompt(projectId, project?.memory_mode, userId);
-
-    // Janela de contexto otimizada — system prompt NÃO entra no histórico
     const responseText = await geminiChat(selectContextWindow(cleanHistory), sysPrompt, modelKey);
-
     await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'assistant', responseText]);
     await runAsync('UPDATE chats SET updated_at = NOW() WHERE id = $1', [chat_id]);
-
     if (projectId) extractMemories(projectId, responseText).catch(console.error);
-
     res.json({ response: responseText, model: modelKey });
-  } catch (err) {
-    console.error('Erro ao editar mensagem:', err);
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { next(err); }
 });
 
-// Arquivos
-app.get('/api/files/:projectId', async (req, res) => {
+app.get('/api/files/:projectId', async (req, res, next) => {
   try {
     const rows = await allAsync('SELECT id, original_name, mime_type, size, created_at FROM files WHERE project_id = $1 ORDER BY created_at DESC', [req.params.projectId]);
     res.json(rows);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { next(err); }
 });
 
-app.post('/api/files/:projectId', upload.single('file'), async (req, res) => {
+app.post('/api/files/:projectId', upload.single('file'), async (req, res, next) => {
   if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo enviado' });
   try {
     const ext = path.extname(req.file.originalname).toLowerCase();
@@ -624,58 +459,63 @@ app.post('/api/files/:projectId', upload.single('file'), async (req, res) => {
       } catch { extractedText = '[PDF: não foi possível extrair texto]'; }
     }
     const fileId = randomUUID();
-    await runAsync(
-      'INSERT INTO files (id, project_id, original_name, mime_type, size, extracted_text, path) VALUES ($1,$2,$3,$4,$5,$6,$7)',
-      [fileId, req.params.projectId, req.file.originalname, req.file.mimetype, req.file.size, extractedText, req.file.path]
-    );
+    await runAsync('INSERT INTO files (id, project_id, original_name, mime_type, size, extracted_text, path) VALUES ($1,$2,$3,$4,$5,$6,$7)', [fileId, req.params.projectId, req.file.originalname, req.file.mimetype, req.file.size, extractedText, req.file.path]);
     res.status(201).json({ id: fileId, original_name: req.file.originalname, size: req.file.size });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { next(err); }
 });
 
-app.delete('/api/files/:projectId/:fileId', async (req, res) => {
+app.delete('/api/files/:projectId/:fileId', async (req, res, next) => {
   try {
     const file = await getAsync('SELECT * FROM files WHERE id = $1 AND project_id = $2', [req.params.fileId, req.params.projectId]);
     if (!file) return res.status(404).json({ error: 'Arquivo não encontrado' });
     if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
     await runAsync('DELETE FROM files WHERE id = $1', [req.params.fileId]);
     res.json({ ok: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { next(err); }
 });
 
-// Migração
-app.post('/api/migrate', async (req, res) => {
+app.post('/api/migrate', async (req, res, next) => {
   const { guest_id, user_id } = req.body;
   if (!guest_id || !user_id || guest_id === user_id) return res.json({ ok: true, migrated: 0 });
   try {
     const result = await runAsync('UPDATE projects SET user_id = $1 WHERE user_id = $2', [user_id, guest_id]);
     res.json({ ok: true, migrated: result.changes });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { next(err); }
 });
 
-// Compartilhamento
-app.get('/api/share/:chatId', async (req, res) => {
+app.get('/api/share/:chatId', async (req, res, next) => {
   try {
     const chat = await getAsync('SELECT * FROM chats WHERE id = $1', [req.params.chatId]);
     if (!chat) return res.status(404).json({ error: 'Chat não encontrado' });
     const messages = await allAsync('SELECT role, content, created_at FROM messages WHERE chat_id = $1 ORDER BY created_at ASC', [req.params.chatId]);
     res.json({ chat, messages });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { next(err); }
 });
 
-// Error handler
+// ─── HANDLER CENTRAL DE ERROS ─────────────────────────────────────────────────
+function errorHandler(err, req, res, next) {
+  console.error('❌ Erro capturado:', err);
+  if (err.stack) console.error(err.stack);
+  let status = err.status || 500;
+  let message = 'Erro interno. Tente novamente mais tarde.';
+  if (status === 429) message = 'Muitas requisições, tente novamente em alguns instantes.';
+  else if (status === 504) message = 'Tempo de resposta excedido. Tente novamente.';
+  else if (status === 500) message = 'Erro interno. Tente novamente mais tarde.';
+  res.status(status).json({ error: message });
+}
+app.use(errorHandler);
+
+// ─── Fallback para rotas não encontradas ──────────────────────────────────────
+app.use('*', (req, res) => {
+  res.status(404).json({ error: 'Rota não encontrada' });
+});
+
+// ─── Boot ─────────────────────────────────────────────────────────────────────
 process.on('unhandledRejection', (reason) => console.error('Unhandled rejection:', reason));
-app.use((err, req, res, next) => {
-  console.error('Erro não tratado:', err);
-  res.status(err.status || 500).json({ error: err.message || 'Erro interno' });
-});
-
-// Boot
 (async () => {
   try {
     await initDb();
-    app.listen(PORT, '0.0.0.0', () =>
-      console.log(`✅ Solaris backend na porta ${PORT}`)
-    );
+    app.listen(PORT, '0.0.0.0', () => console.log(`✅ Solaris backend na porta ${PORT}`));
   } catch (err) {
     console.error('❌ Falha ao iniciar:', err);
     process.exit(1);

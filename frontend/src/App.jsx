@@ -367,6 +367,11 @@ export default function App() {
   const [authReady, setAuthReady] = useState(false);
   const [sendError, setSendError] = useState('');
 
+  // Estados para feedback visual
+  const [loadingPhase, setLoadingPhase] = useState(null); // 'sending', 'analyzing', 'reasoning', 'responding'
+  const [uploadStatus, setUploadStatus] = useState(null); // { type: 'uploading'|'success'|'error', message }
+  const loadingIntervalRef = useRef(null);
+
   const [editingChatTitleId, setEditingChatTitleId] = useState(null);
   const [editingChatTitleValue, setEditingChatTitleValue] = useState('');
 
@@ -375,8 +380,33 @@ export default function App() {
   const fileInputRef = useRef(null);
   const moreProjectsRef = useRef(null);
 
+  // Limpa intervalo ao desmontar
+  useEffect(() => {
+    return () => {
+      if (loadingIntervalRef.current) clearInterval(loadingIntervalRef.current);
+    };
+  }, []);
+
+  // Ciclo de fases: 'analyzing' -> 'reasoning' -> 'responding' -> repete
+  const startLoadingCycle = () => {
+    if (loadingIntervalRef.current) clearInterval(loadingIntervalRef.current);
+    let step = 0;
+    const phases = ['analyzing', 'reasoning', 'responding'];
+    setLoadingPhase('analyzing');
+    loadingIntervalRef.current = setInterval(() => {
+      step = (step + 1) % phases.length;
+      setLoadingPhase(phases[step]);
+    }, 1800);
+  };
+
+  const stopLoadingCycle = () => {
+    if (loadingIntervalRef.current) {
+      clearInterval(loadingIntervalRef.current);
+      loadingIntervalRef.current = null;
+    }
+  };
+
   // ─── effectiveUserId calculado de forma estável ───────────────────────────
-  // Usa useRef para não disparar re-renders desnecessários
   const guestIdRef = useRef(getGuestId());
   const effectiveUserId = authUser?.id || guestIdRef.current;
 
@@ -426,7 +456,6 @@ export default function App() {
   }
 
   // ── Headers ─────────────────────────────────────────────────────────────────
-  // FIX: função estável que sempre lê os valores atuais
   const buildHeaders = useCallback((extra = {}) => ({
     'Content-Type': 'application/json',
     'x-user-id': effectiveUserId,
@@ -459,8 +488,6 @@ export default function App() {
   // Ao selecionar projeto, carrega seus chats
   useEffect(() => {
     if (!activeProjectId) {
-      // FIX: NÃO limpa messages nem activeChatId ao sair de projeto —
-      // só limpa se não houver chat ativo fora de projeto
       setChatHistory([]);
       return;
     }
@@ -491,7 +518,6 @@ export default function App() {
   }, [activeChatId]);
 
   // ── Criar chat (helper reutilizável) ─────────────────────────────────────────
-  // FIX: extraído como função separada para reusar em handleSend e handleNewChat
   async function createChat(projectId) {
     const endpoint = projectId
       ? `${API_BASE}/projects/${projectId}/chats`
@@ -511,8 +537,6 @@ export default function App() {
   }
 
   // ── Enviar mensagem ─────────────────────────────────────────────────────────
-  // FIX PRINCIPAL: não usa return em caso de erro na criação do chat — mostra erro
-  // FIX: limpa o input ANTES de qualquer await, evitando mensagem presa no campo
   const handleSend = async () => {
     const text = input.trim();
     if (!text || isLoading) return;
@@ -520,7 +544,7 @@ export default function App() {
     setSendError('');
     setEditingMsgIndex(null);
 
-    // FIX: limpa o input imediatamente — antes de qualquer chamada async
+    // Limpa o input imediatamente
     setInput('');
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
 
@@ -532,7 +556,6 @@ export default function App() {
       try {
         const nc = await createChat(projectId);
         setChatHistory(prev => {
-          // Evita duplicatas
           if (prev.find(c => c.id === nc.id)) return prev;
           return [nc, ...prev];
         });
@@ -541,18 +564,22 @@ export default function App() {
       } catch (err) {
         console.error('Erro ao criar chat:', err);
         setSendError(`Não foi possível iniciar conversa: ${err.message}`);
-        // FIX: restaura o input para o usuário não perder o que digitou
         setInput(text);
         return;
       }
     }
 
-    // Adiciona mensagem do usuário na tela imediatamente
+    // Adiciona mensagem do usuário na tela
     setMessages(prev => [...prev, { role: 'user', content: text }]);
+
+    // Inicia feedback visual: "Enviando..."
     setIsLoading(true);
+    setLoadingPhase('sending');
+    // Não inicia ciclo ainda – só depois que a requisição for de fato enviada
 
     try {
-      const r = await fetch(`${API_BASE}/messages`, {
+      // Inicia requisição
+      const fetchPromise = fetch(`${API_BASE}/messages`, {
         method: 'POST',
         headers: buildHeaders(),
         body: JSON.stringify({
@@ -561,13 +588,25 @@ export default function App() {
           message: text,
         }),
       });
+
+      // Após o envio da requisição (não espera resposta), inicia ciclo de "Analisando..."
+      // Pequeno delay para dar tempo de mostrar "Enviando..." pelo menos 300ms
+      setTimeout(() => {
+        if (isLoading) {
+          startLoadingCycle();
+        }
+      }, 300);
+
+      const r = await fetchPromise;
       const d = await safeJson(r);
       if (!r.ok) throw new Error(d.error || 'Erro no servidor');
       setMessages(prev => [...prev, { role: 'assistant', content: d.response, model: d.model }]);
     } catch (err) {
       setMessages(prev => [...prev, { role: 'assistant', content: `⚠️ ${err.message}` }]);
     } finally {
+      stopLoadingCycle();
       setIsLoading(false);
+      setLoadingPhase(null);
     }
   };
 
@@ -596,6 +635,8 @@ export default function App() {
     setEditingMsgIndex(null);
     setEditValue('');
     setIsLoading(true);
+    setLoadingPhase('sending');
+    setTimeout(() => startLoadingCycle(), 300);
     try {
       const r = await fetch(`${API_BASE}/messages/edit`, {
         method: 'POST',
@@ -606,7 +647,11 @@ export default function App() {
       setMessages(prev => [...prev, { role: 'assistant', content: d.response, model: d.model }]);
     } catch {
       setMessages(prev => [...prev, { role: 'assistant', content: 'Erro ao regerar.' }]);
-    } finally { setIsLoading(false); }
+    } finally {
+      stopLoadingCycle();
+      setIsLoading(false);
+      setLoadingPhase(null);
+    }
   };
 
   // ── Compartilhar ─────────────────────────────────────────────────────────────
@@ -618,7 +663,6 @@ export default function App() {
   };
 
   // ── CRUD projetos ─────────────────────────────────────────────────────────────
-  // FIX: createProject agora mostra erro em vez de falhar silenciosamente
   const createProject = async () => {
     if (!newProjectName.trim()) { setIsCreatingProject(false); return; }
     try {
@@ -663,13 +707,10 @@ export default function App() {
     setItemToDelete(null);
   };
 
-  // FIX: handleNewChat não precisa de projeto — cria chat livre
   const handleNewChat = () => {
     setActiveChatId(null);
     setMessages([]);
     setSendError('');
-    // Se estiver num projeto, cria um chat novo no projeto ao enviar
-    // Se não estiver num projeto, o chat é criado no primeiro envio
   };
 
   // ── Renomear título do chat ───────────────────────────────────────────────────
@@ -708,11 +749,33 @@ export default function App() {
   };
   const onDragEnd = (e) => { e.currentTarget.style.opacity = '1'; setDraggedItemId(null); };
 
+  // ── Upload de arquivos com feedback ─────────────────────────────────────────
   const handleFileUpload = async (e) => {
-    const file = e.target.files?.[0]; if (!file) return; e.target.value = '';
-    if (!activeProjectId) { alert('Selecione um projeto para enviar arquivos.'); return; }
-    const fd = new FormData(); fd.append('file', file);
-    await fetch(`${API_BASE}/files/${activeProjectId}`, { method: 'POST', headers: { 'x-user-id': effectiveUserId }, body: fd }).catch(console.error);
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+    if (!activeProjectId) {
+      setUploadStatus({ type: 'error', message: 'Selecione um projeto para enviar arquivos.' });
+      setTimeout(() => setUploadStatus(null), 3000);
+      return;
+    }
+    const fd = new FormData();
+    fd.append('file', file);
+    setUploadStatus({ type: 'uploading', message: `Enviando ${file.name}...` });
+    try {
+      const res = await fetch(`${API_BASE}/files/${activeProjectId}`, {
+        method: 'POST',
+        headers: { 'x-user-id': effectiveUserId },
+        body: fd,
+      });
+      if (!res.ok) throw new Error('Falha no upload');
+      setUploadStatus({ type: 'success', message: `${file.name} enviado com sucesso!` });
+      setTimeout(() => setUploadStatus(null), 3000);
+    } catch (err) {
+      console.error(err);
+      setUploadStatus({ type: 'error', message: `Erro ao enviar ${file.name}` });
+      setTimeout(() => setUploadStatus(null), 4000);
+    }
   };
 
   // ── Tema ──────────────────────────────────────────────────────────────────────
@@ -766,6 +829,17 @@ export default function App() {
       </div>
     </div>
   );
+
+  // Mapeia fase para texto amigável
+  const getLoadingText = () => {
+    switch (loadingPhase) {
+      case 'sending': return 'Enviando...';
+      case 'analyzing': return 'Analisando...';
+      case 'reasoning': return 'Raciocinando...';
+      case 'responding': return 'Respondendo...';
+      default: return '';
+    }
+  };
 
   return (
     <div className={`flex h-screen ${darkMode ? 'bg-[#050505] text-white' : 'bg-[#fafafa] text-[#1a1a1a]'} font-sans antialiased overflow-hidden transition-colors duration-500`}>
@@ -1020,11 +1094,19 @@ export default function App() {
             </div>
           )}
 
+          {/* Indicador de carregamento com texto dinâmico */}
           {isLoading && (
             <div className="flex items-center gap-3 mt-12">
-              <div className={`w-1.5 h-1.5 ${darkMode ? 'bg-white/40' : 'bg-black/60'} rounded-full animate-bounce [animation-delay:-0.3s]`} />
-              <div className={`w-1.5 h-1.5 ${darkMode ? 'bg-white/40' : 'bg-black/60'} rounded-full animate-bounce [animation-delay:-0.15s]`} />
-              <div className={`w-1.5 h-1.5 ${darkMode ? 'bg-white/40' : 'bg-black/60'} rounded-full animate-bounce`} />
+              <div className="flex gap-1">
+                <div className={`w-1.5 h-1.5 ${darkMode ? 'bg-white/40' : 'bg-black/60'} rounded-full animate-bounce [animation-delay:-0.3s]`} />
+                <div className={`w-1.5 h-1.5 ${darkMode ? 'bg-white/40' : 'bg-black/60'} rounded-full animate-bounce [animation-delay:-0.15s]`} />
+                <div className={`w-1.5 h-1.5 ${darkMode ? 'bg-white/40' : 'bg-black/60'} rounded-full animate-bounce`} />
+              </div>
+              {getLoadingText() && (
+                <span className={`text-xs font-light tracking-wide ${theme.textSecondary} animate-pulse`}>
+                  {getLoadingText()}
+                </span>
+              )}
             </div>
           )}
           <div ref={messagesEndRef} />
@@ -1041,6 +1123,16 @@ export default function App() {
               <p className="text-red-400 text-xs mb-3 flex items-center gap-1.5">
                 <AlertTriangle size={12} />{sendError}
               </p>
+            )}
+
+            {/* Status de upload */}
+            {uploadStatus && (
+              <div className={`mb-3 text-xs flex items-center gap-2 ${uploadStatus.type === 'error' ? 'text-red-400' : uploadStatus.type === 'success' ? 'text-emerald-400' : 'text-amber-400'}`}>
+                {uploadStatus.type === 'uploading' && <Loader2 size={12} className="animate-spin" />}
+                {uploadStatus.type === 'success' && <Check size={12} />}
+                {uploadStatus.type === 'error' && <AlertTriangle size={12} />}
+                <span>{uploadStatus.message}</span>
+              </div>
             )}
 
             <div className={`relative flex items-end border-b ${theme.inputBorder} pb-8 ${theme.inputFocus} transition-all duration-500`}>
