@@ -368,7 +368,7 @@ export default function App() {
   const [sendError, setSendError] = useState('');
 
   // Estados para feedback visual
-  const [loadingPhase, setLoadingPhase] = useState(null); // 'sending', 'analyzing', 'reasoning', 'responding'
+  const [loadingPhase, setLoadingPhase] = useState(null); // 'sending', 'analyzing', 'consulting', 'responding'
   const [uploadStatus, setUploadStatus] = useState(null); // { type: 'uploading'|'success'|'error', message }
   const loadingIntervalRef = useRef(null);
 
@@ -387,11 +387,11 @@ export default function App() {
     };
   }, []);
 
-  // Ciclo de fases: 'analyzing' -> 'reasoning' -> 'responding' -> repete
+  // Ciclo de fases: 'analyzing' -> 'consulting' -> 'responding' -> repete
   const startLoadingCycle = () => {
     if (loadingIntervalRef.current) clearInterval(loadingIntervalRef.current);
     let step = 0;
-    const phases = ['analyzing', 'reasoning', 'responding'];
+    const phases = ['analyzing', 'consulting', 'responding'];
     setLoadingPhase('analyzing');
     loadingIntervalRef.current = setInterval(() => {
       step = (step + 1) % phases.length;
@@ -835,7 +835,7 @@ export default function App() {
     switch (loadingPhase) {
       case 'sending': return 'Enviando...';
       case 'analyzing': return 'Analisando...';
-      case 'reasoning': return 'Raciocinando...';
+      case 'consulting': return 'Consultando...';
       case 'responding': return 'Respondendo...';
       default: return '';
     }
