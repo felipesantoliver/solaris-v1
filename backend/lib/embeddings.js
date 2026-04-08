@@ -1,8 +1,10 @@
 // lib/embeddings.js
 import pLimit from 'p-limit';
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-if (!GEMINI_API_KEY) throw new Error('❌ GEMINI_API_KEY não definida');
+// Embeddings usam o modelo embedding-001 (Gemini 2.5 service)
+// Reutiliza GEMINI_FLASH_API_KEY — chave do serviço Gemini 2.5
+const GEMINI_API_KEY = process.env.GEMINI_FLASH_API_KEY || process.env.GEMINI_PRO_API;
+if (!GEMINI_API_KEY) throw new Error('❌ GEMINI_FLASH_API_KEY não definida');
 
 // ─── Utilitários ──────────────────────────────────────────────
 function splitTextIntoChunks(text, chunkSize = 500, overlap = 100) {
@@ -38,7 +40,7 @@ function cosineSimilarity(vecA, vecB) {
   return dot / (Math.sqrt(magA) * Math.sqrt(magB));
 }
 
-// ─── Embedding (Gemini) ───────────────────────────────────────
+// ─── Embedding (Gemini 2.5 — embedding-001) ───────────────────
 export async function generateEmbedding(text) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/embedding-001:embedContent?key=${GEMINI_API_KEY}`;
   const response = await fetch(url, {
@@ -56,14 +58,12 @@ export async function generateEmbedding(text) {
 
 // ─── Indexação paralela com p-limit ───────────────────────────
 export async function indexFileChunks(fileId, text, db) {
-  // db deve conter os métodos runAsync, allAsync, etc.
-  // Como estamos no módulo embeddings, recebemos o db por injeção
   const chunks = splitTextIntoChunks(text);
   if (!chunks.length) return;
 
   await db.runAsync('DELETE FROM file_chunks WHERE file_id = $1', [fileId]);
 
-  const limit = pLimit(5); // máx. 5 requisições simultâneas
+  const limit = pLimit(5);
   const tasks = chunks.map((chunk, i) =>
     limit(async () => {
       try {
@@ -82,5 +82,4 @@ export async function indexFileChunks(fileId, text, db) {
   console.log(`✅ Indexados ${chunks.length} chunks para arquivo ${fileId} (paralelismo 5)`);
 }
 
-// Exporta utilitários adicionais se necessário
 export { splitTextIntoChunks, cosineSimilarity };
