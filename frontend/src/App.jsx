@@ -805,9 +805,15 @@ export default function App() {
             if (parsed.error) throw new Error(parsed.error);
             if (parsed.chunk) {
               if (assistantMessageIndex === null) {
-                setMessages(prev => { const newMsg = { role: 'assistant', content: parsed.chunk, model: modelKey }; assistantMessageIndex = prev.length; return [...prev, newMsg]; });
+                const cleaned = cleanAssistantMessage(parsed.chunk);
+                setMessages(prev => { const newMsg = { role: 'assistant', content: cleaned, model: modelKey }; assistantMessageIndex = prev.length; return [...prev, newMsg]; });
               } else {
-                setMessages(prev => { const updated = [...prev]; updated[assistantMessageIndex] = { ...updated[assistantMessageIndex], content: updated[assistantMessageIndex].content + parsed.chunk }; return updated; });
+                setMessages(prev => {
+                  const updated = [...prev];
+                  const raw = updated[assistantMessageIndex].content + parsed.chunk;
+                  updated[assistantMessageIndex] = { ...updated[assistantMessageIndex], content: cleanAssistantMessage(raw) };
+                  return updated;
+                });
               }
             }
           } catch (e) { console.warn('Erro ao parsear SSE:', e); }
