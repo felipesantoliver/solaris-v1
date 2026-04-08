@@ -1,5 +1,7 @@
 // ============================================================
 //  server.js — Solaris Backend com Streaming SSE
+//  (versão com edição de projetos, memória global/nenhuma,
+//   fontes externas: links e texto)
 // ============================================================
 
 import { setDefaultResultOrder } from 'dns';
@@ -23,12 +25,12 @@ const PORT = process.env.PORT || 3001;
 const SYSTEM_PROMPT_CACHE_TTL = 60000;
 const systemPromptCache = new Map();
 
-function getCacheKey(userId, projectId) {
-  return `${userId}:${projectId || 'none'}`;
+function getCacheKey(userId, projectId, memoryMode) {
+  return `${userId}:${projectId || 'none'}:${memoryMode}`;
 }
 
-function getCachedSystemPrompt(userId, projectId) {
-  const key = getCacheKey(userId, projectId);
+function getCachedSystemPrompt(userId, projectId, memoryMode) {
+  const key = getCacheKey(userId, projectId, memoryMode);
   const entry = systemPromptCache.get(key);
   if (entry && Date.now() < entry.expiresAt) {
     console.log(`💾 Cache hit para ${key}`);
@@ -38,8 +40,8 @@ function getCachedSystemPrompt(userId, projectId) {
   return null;
 }
 
-function setCachedSystemPrompt(userId, projectId, data) {
-  const key = getCacheKey(userId, projectId);
+function setCachedSystemPrompt(userId, projectId, memoryMode, data) {
+  const key = getCacheKey(userId, projectId, memoryMode);
   systemPromptCache.set(key, {
     data,
     expiresAt: Date.now() + SYSTEM_PROMPT_CACHE_TTL,
@@ -48,9 +50,12 @@ function setCachedSystemPrompt(userId, projectId, data) {
 }
 
 function invalidateSystemPromptCache(userId, projectId) {
-  const key = getCacheKey(userId, projectId);
-  systemPromptCache.delete(key);
-  console.log(`🗑️ Cache invalidado para ${key}`);
+  for (const key of systemPromptCache.keys()) {
+    if (key.startsWith(`${userId}:${projectId || 'none'}:`)) {
+      systemPromptCache.delete(key);
+      console.log(`🗑️ Cache invalidado para ${key}`);
+    }
+  }
 }
 
 setInterval(() => {
@@ -109,7 +114,6 @@ async function withRetry(fn, maxRetries = 3, baseDelay = 3000) {
   }
 }
 
-// Streaming da resposta do Gemini (SSE)
 async function* streamGeminiChat(messages, systemPrompt, modelKey = 'flash') {
   const url = geminiUrl(modelKey, true);
   const body = buildGeminiBody(messages, systemPrompt);
@@ -299,7 +303,7 @@ function resolveModelKey(req) {
   return 'flash';
 }
 
-// ─── Montagem do System Prompt ────────────────────────────────────────
+// ─── Montagem do System Prompt com suporte a memória global/nenhuma ──
 const PERSONALITY_GUIDE = {
   direto: 'Seja direto, objetivo e conciso. Sem rodeios.',
   tecnico: 'Use terminologia técnica precisa. Inclua detalhes de implementação quando relevante.',
@@ -324,7 +328,7 @@ Se o usuário perguntar quem desenvolveu o Solaris, quem é o autor, fundador, o
 - Solaris organiza projetos, automatiza tarefas e agiliza processos.
 `;
 
-function assembleBaseSystemPrompt({ settings, project, memories }) {
+function assembleBaseSystemPrompt({ settings, project, memories, memoryMode }) {
   let personalityText = PERSONALITY_GUIDE.direto;
   let customTraits = '';
   if (settings) {
@@ -344,13 +348,16 @@ function assembleBaseSystemPrompt({ settings, project, memories }) {
 
   prompt = `Você é o Solaris, um assistente de IA pessoal operando dentro de um projeto específico.\n\n`;
   prompt += `=== PROJETO ===\nNome: ${project.name}\n`;
-  if (project.objective) prompt += `Objetivo: ${project.objective}\n`;
+  if (project.summary) prompt += `Resumo: ${project.summary}\n`;
+  if (project.detailed_objective) prompt += `Objetivo detalhado: ${project.detailed_objective}\n`;
+  if (project.tags && project.tags.length) prompt += `Tags: ${project.tags.join(', ')}\n`;
   prompt += `\n=== ESTILO ===\n${personalityText}\n`;
   if (customTraits) prompt += `Traços adicionais: ${customTraits}\n`;
   prompt += `\nEvite respostas genéricas. Nunca invente informações.\n\n`;
   prompt += BASE_IDENTITY_INSTRUCTION;
 
-  if (memories && memories.length > 0) {
+  // Inserção de memórias conforme o modo escolhido
+  if (memoryMode !== 'nenhuma' && memories && memories.length > 0) {
     prompt += `=== MEMÓRIAS ===\n`;
     memories.forEach((m, i) => { prompt += `[${i + 1}] ${m.content}\n`; });
     prompt += '\n';
@@ -358,39 +365,62 @@ function assembleBaseSystemPrompt({ settings, project, memories }) {
   return prompt;
 }
 
-async function getBaseSystemPromptWithCache(userId, projectId) {
+async function getBaseSystemPromptWithCache(userId, projectId, memoryMode) {
   if (!userId) {
     const [settings, project, memories] = await Promise.all([
       null,
       projectId ? getAsync('SELECT * FROM projects WHERE id = $1', [projectId]) : Promise.resolve(null),
-      projectId ? allAsync('SELECT content FROM memories WHERE project_id = $1 ORDER BY created_at DESC LIMIT 5', [projectId]) : Promise.resolve([]),
+      (projectId && memoryMode === 'projeto') ? allAsync('SELECT content FROM memories WHERE project_id = $1 ORDER BY created_at DESC LIMIT 5', [projectId]) : Promise.resolve([]),
     ]);
-    return assembleBaseSystemPrompt({ settings, project, memories });
+    return assembleBaseSystemPrompt({ settings, project, memories, memoryMode });
   }
 
-  const cached = getCachedSystemPrompt(userId, projectId);
+  const cached = getCachedSystemPrompt(userId, projectId, memoryMode);
   if (cached) return cached;
 
   const [settings, project, memories] = await Promise.all([
     getAsync('SELECT personality, custom_traits FROM user_settings WHERE user_id = $1', [userId]),
     projectId ? getAsync('SELECT * FROM projects WHERE id = $1', [projectId]) : Promise.resolve(null),
-    projectId ? allAsync('SELECT content FROM memories WHERE project_id = $1 ORDER BY created_at DESC LIMIT 5', [projectId]) : Promise.resolve([]),
+    (() => {
+      if (!projectId) return Promise.resolve([]);
+      if (memoryMode === 'projeto') {
+        return allAsync('SELECT content FROM memories WHERE project_id = $1 ORDER BY created_at DESC LIMIT 5', [projectId]);
+      } else if (memoryMode === 'global') {
+        return allAsync('SELECT content FROM memories WHERE project_id IS NULL AND user_id = $1 ORDER BY created_at DESC LIMIT 5', [userId]);
+      }
+      return Promise.resolve([]);
+    })(),
   ]);
-  const systemPrompt = assembleBaseSystemPrompt({ settings, project, memories });
-  setCachedSystemPrompt(userId, projectId, systemPrompt);
+
+  const systemPrompt = assembleBaseSystemPrompt({ settings, project, memories, memoryMode });
+  setCachedSystemPrompt(userId, projectId, memoryMode, systemPrompt);
   return systemPrompt;
 }
 
-// ─── Memórias automáticas ─────────────────────────────────────────────
+// ─── Extração de memórias (automática) ───────────────────────────────
 const MEMORY_KEYWORDS = ['importante', 'lembre-se', 'concluímos', 'aprendemos', 'descobrimos', 'fato', 'sabemos que', 'definimos', 'decidimos', 'sempre', 'nunca', 'padrão', 'regra', 'convenção', 'arquitetura', 'estrutura', 'configuração'];
 
-async function extractMemories(projectId, response) {
-  if (!projectId) return;
+async function extractMemories(projectId, userId, response, memoryMode) {
+  if (!projectId && memoryMode !== 'global') return;
   const candidates = response.split(/[.!?]+\s+/).filter(s => s.length > 50 && MEMORY_KEYWORDS.some(k => s.toLowerCase().includes(k))).slice(0, 2);
-  if (candidates.length) {
-    await Promise.all(candidates.map(content => runAsync('INSERT INTO memories (project_id, content, source) VALUES ($1, $2, $3)', [projectId, content.trim(), 'auto']).catch(() => { })));
+  if (!candidates.length) return;
+
+  const insertPromises = candidates.map(content => {
+    if (memoryMode === 'projeto' && projectId) {
+      return runAsync('INSERT INTO memories (project_id, user_id, content, source) VALUES ($1, $2, $3, $4)', [projectId, userId, content.trim(), 'auto']);
+    } else if (memoryMode === 'global' && userId) {
+      return runAsync('INSERT INTO memories (project_id, user_id, content, source) VALUES ($1, $2, $3, $4)', [null, userId, content.trim(), 'auto']);
+    }
+    return Promise.resolve();
+  });
+  await Promise.all(insertPromises);
+
+  // Limitar quantidade de memórias (20 por escopo)
+  if (memoryMode === 'projeto' && projectId) {
+    await runAsync(`DELETE FROM memories WHERE project_id = $1 AND id NOT IN (SELECT id FROM memories WHERE project_id = $1 ORDER BY created_at DESC LIMIT 20)`, [projectId]).catch(() => { });
+  } else if (memoryMode === 'global' && userId) {
+    await runAsync(`DELETE FROM memories WHERE project_id IS NULL AND user_id = $1 AND id NOT IN (SELECT id FROM memories WHERE project_id IS NULL AND user_id = $1 ORDER BY created_at DESC LIMIT 20)`, [userId]).catch(() => { });
   }
-  await runAsync(`DELETE FROM memories WHERE project_id = $1 AND id NOT IN (SELECT id FROM memories WHERE project_id = $1 ORDER BY created_at DESC LIMIT 20)`, [projectId]).catch(() => { });
 }
 
 function generateLocalTitle(firstMessage) {
@@ -430,7 +460,7 @@ app.post('/api/settings', async (req, res, next) => {
   const { personality = 'direto', custom_traits = '' } = req.body;
   try {
     await runAsync(`INSERT INTO user_settings (user_id, personality, custom_traits, updated_at) VALUES ($1, $2, $3, NOW()) ON CONFLICT (user_id) DO UPDATE SET personality = $2, custom_traits = $3, updated_at = NOW()`, [userId, personality, custom_traits]);
-    for (const key of systemPromptCache.keys()) if (key.startsWith(`${userId}:`)) systemPromptCache.delete(key);
+    invalidateSystemPromptCache(userId, null);
     res.json({ ok: true });
   } catch (err) { next(err); }
 });
@@ -457,22 +487,37 @@ app.get('/api/projects/:id', async (req, res, next) => {
 app.post('/api/projects', async (req, res, next) => {
   const userId = req.headers['x-user-id'];
   if (!userId) return res.status(400).json({ error: 'x-user-id obrigatório' });
-  const { name, objective, response_style = 'direto', memory_mode = 'isolado' } = req.body;
+  const { name, summary, detailed_objective, tags = [], response_style = 'direto', memory_mode = 'projeto' } = req.body;
   if (!name) return res.status(400).json({ error: 'name obrigatório' });
   try {
     const id = randomUUID();
-    await runAsync('INSERT INTO projects (id, user_id, name, objective, response_style, memory_mode) VALUES ($1,$2,$3,$4,$5,$6)', [id, userId, name, objective || null, response_style, memory_mode]);
+    await runAsync(
+      'INSERT INTO projects (id, user_id, name, summary, detailed_objective, tags, response_style, memory_mode) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
+      [id, userId, name, summary || null, detailed_objective || null, JSON.stringify(tags), response_style, memory_mode]
+    );
     res.status(201).json(await getAsync('SELECT * FROM projects WHERE id = $1', [id]));
   } catch (err) { next(err); }
 });
 
 app.patch('/api/projects/:id', async (req, res, next) => {
   const userId = req.headers['x-user-id'];
-  const { name, objective, response_style, memory_mode } = req.body;
+  const { name, summary, detailed_objective, tags, response_style, memory_mode } = req.body;
   try {
-    const project = await getAsync('SELECT id FROM projects WHERE id = $1 AND user_id = $2', [req.params.id, userId]);
+    const project = await getAsync('SELECT id, memory_mode FROM projects WHERE id = $1 AND user_id = $2', [req.params.id, userId]);
     if (!project) return res.status(404).json({ error: 'Projeto não encontrado' });
-    await runAsync(`UPDATE projects SET name=COALESCE($1,name), objective=COALESCE($2,objective), response_style=COALESCE($3,response_style), memory_mode=COALESCE($4,memory_mode), updated_at=NOW() WHERE id=$5`, [name ?? null, objective ?? null, response_style ?? null, memory_mode ?? null, req.params.id]);
+    const newMemoryMode = memory_mode ?? project.memory_mode;
+    await runAsync(
+      `UPDATE projects SET 
+        name = COALESCE($1, name),
+        summary = COALESCE($2, summary),
+        detailed_objective = COALESCE($3, detailed_objective),
+        tags = COALESCE($4, tags),
+        response_style = COALESCE($5, response_style),
+        memory_mode = COALESCE($6, memory_mode),
+        updated_at = NOW()
+      WHERE id = $7`,
+      [name ?? null, summary ?? null, detailed_objective ?? null, tags ? JSON.stringify(tags) : null, response_style ?? null, newMemoryMode, req.params.id]
+    );
     invalidateSystemPromptCache(userId, req.params.id);
     res.json(await getAsync('SELECT * FROM projects WHERE id = $1', [req.params.id]));
   } catch (err) { next(err); }
@@ -537,7 +582,13 @@ app.post('/api/messages/stream', async (req, res, next) => {
   }
   const projectId = (project_id && project_id !== 'none') ? project_id : null;
 
-  // Configura headers SSE
+  // Buscar modo de memória do projeto (se existir)
+  let memoryMode = 'projeto'; // padrão
+  if (projectId) {
+    const proj = await getAsync('SELECT memory_mode FROM projects WHERE id = $1', [projectId]);
+    if (proj && proj.memory_mode) memoryMode = proj.memory_mode;
+  }
+
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
@@ -550,17 +601,15 @@ app.post('/api/messages/stream', async (req, res, next) => {
   };
 
   try {
-    // Salva mensagem do usuário
     await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'user', message]);
 
-    // Busca chunks relevantes
     let relevantChunks = [];
     if (projectId) {
       relevantChunks = await searchRelevantChunks(projectId, message, 3);
     }
 
     const history = await allAsync('SELECT role, content FROM messages WHERE chat_id = $1 ORDER BY created_at ASC', [chat_id]);
-    const baseSystemPrompt = await getBaseSystemPromptWithCache(userId, projectId);
+    const baseSystemPrompt = await getBaseSystemPromptWithCache(userId, projectId, memoryMode);
 
     let finalSystemPrompt = baseSystemPrompt;
     if (relevantChunks.length > 0) {
@@ -574,20 +623,18 @@ app.post('/api/messages/stream', async (req, res, next) => {
     const apiHistory = selectContextWindow(history);
     let fullResponse = '';
 
-    // Itera sobre os chunks do streaming
     for await (const chunk of streamGeminiChat(apiHistory, finalSystemPrompt, modelKey)) {
       fullResponse += chunk;
       sendEvent({ chunk });
     }
 
-    // Salva a resposta completa no banco
     await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'assistant', fullResponse]);
     await runAsync('UPDATE chats SET updated_at = NOW() WHERE id = $1', [chat_id]);
 
     const isFirst = history.length === 1;
     if (isFirst) autoTitle(chat_id, message).catch(console.error);
-    if (projectId) {
-      extractMemories(projectId, fullResponse).catch(console.error);
+    if (projectId || memoryMode === 'global') {
+      extractMemories(projectId, userId, fullResponse, memoryMode).catch(console.error);
       invalidateSystemPromptCache(userId, projectId);
     }
 
@@ -610,6 +657,12 @@ app.post('/api/messages', async (req, res, next) => {
 
   const projectId = (project_id && project_id !== 'none') ? project_id : null;
 
+  let memoryMode = 'projeto';
+  if (projectId) {
+    const proj = await getAsync('SELECT memory_mode FROM projects WHERE id = $1', [projectId]);
+    if (proj && proj.memory_mode) memoryMode = proj.memory_mode;
+  }
+
   try {
     await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'user', message]);
 
@@ -619,7 +672,7 @@ app.post('/api/messages', async (req, res, next) => {
     }
 
     const history = await allAsync('SELECT role, content FROM messages WHERE chat_id = $1 ORDER BY created_at ASC', [chat_id]);
-    const baseSystemPrompt = await getBaseSystemPromptWithCache(userId, projectId);
+    const baseSystemPrompt = await getBaseSystemPromptWithCache(userId, projectId, memoryMode);
 
     let finalSystemPrompt = baseSystemPrompt;
     if (relevantChunks.length > 0) {
@@ -631,15 +684,15 @@ app.post('/api/messages', async (req, res, next) => {
     }
 
     const apiHistory = selectContextWindow(history);
-    const responseText = await geminiChat(apiHistory, finalSystemPrompt, modelKey); // função não-streaming
+    const responseText = await geminiChat(apiHistory, finalSystemPrompt, modelKey);
 
     await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'assistant', responseText]);
     await runAsync('UPDATE chats SET updated_at = NOW() WHERE id = $1', [chat_id]);
 
     const isFirst = history.length === 1;
     if (isFirst) autoTitle(chat_id, message).catch(console.error);
-    if (projectId) {
-      extractMemories(projectId, responseText).catch(console.error);
+    if (projectId || memoryMode === 'global') {
+      extractMemories(projectId, userId, responseText, memoryMode).catch(console.error);
       invalidateSystemPromptCache(userId, projectId);
     }
 
@@ -647,7 +700,74 @@ app.post('/api/messages', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ─── Outras rotas (arquivos, migrate, share) ─────────────────────────
+// ─── Rotas para fontes externas (links e texto) ───────────────────────
+// Obter todas as fontes externas de um projeto
+app.get('/api/projects/:projectId/sources', async (req, res, next) => {
+  try {
+    const rows = await allAsync('SELECT id, type, title, url, content, created_at FROM external_sources WHERE project_id = $1 ORDER BY created_at DESC', [req.params.projectId]);
+    res.json(rows);
+  } catch (err) { next(err); }
+});
+
+// Adicionar fonte via URL
+app.post('/api/projects/:projectId/sources/url', async (req, res, next) => {
+  const { url, title } = req.body;
+  if (!url) return res.status(400).json({ error: 'URL é obrigatória' });
+  const projectId = req.params.projectId;
+  try {
+    // Baixar conteúdo da URL (simples, sem JS)
+    const fetchRes = await fetch(url, { headers: { 'User-Agent': 'SolarisBot/1.0' } });
+    if (!fetchRes.ok) throw new Error(`Erro ao acessar URL: ${fetchRes.status}`);
+    let html = await fetchRes.text();
+    // Extração muito simples de texto (remove tags)
+    const text = html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, ' ')
+      .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .substring(0, 50000);
+    if (!text) throw new Error('Não foi possível extrair texto da URL');
+
+    const sourceId = randomUUID();
+    await runAsync(
+      'INSERT INTO external_sources (id, project_id, type, title, url, content) VALUES ($1, $2, $3, $4, $5, $6)',
+      [sourceId, projectId, 'url', title || url, url, text]
+    );
+    // Indexar como chunks (reaproveitar lógica de arquivos)
+    await indexFileChunks(sourceId, text); // reutiliza a mesma tabela file_chunks com file_id = sourceId
+    res.status(201).json({ id: sourceId, type: 'url', title: title || url });
+  } catch (err) { next(err); }
+});
+
+// Adicionar fonte via texto livre
+app.post('/api/projects/:projectId/sources/text', async (req, res, next) => {
+  const { title, content } = req.body;
+  if (!content) return res.status(400).json({ error: 'Conteúdo de texto é obrigatório' });
+  const projectId = req.params.projectId;
+  try {
+    const sourceId = randomUUID();
+    const trimmedContent = content.substring(0, 50000);
+    await runAsync(
+      'INSERT INTO external_sources (id, project_id, type, title, content) VALUES ($1, $2, $3, $4, $5)',
+      [sourceId, projectId, 'text', title || 'Texto adicionado', trimmedContent]
+    );
+    await indexFileChunks(sourceId, trimmedContent);
+    res.status(201).json({ id: sourceId, type: 'text', title: title || 'Texto adicionado' });
+  } catch (err) { next(err); }
+});
+
+// Remover fonte externa
+app.delete('/api/projects/:projectId/sources/:sourceId', async (req, res, next) => {
+  const userId = req.headers['x-user-id'];
+  try {
+    await runAsync('DELETE FROM external_sources WHERE id = $1 AND project_id = $2', [req.params.sourceId, req.params.projectId]);
+    await runAsync('DELETE FROM file_chunks WHERE file_id = $1', [req.params.sourceId]);
+    if (userId) invalidateSystemPromptCache(userId, req.params.projectId);
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
+// ─── Rotas existentes para arquivos ───────────────────────────────────
 app.get('/api/files/:projectId', async (req, res, next) => {
   try {
     const rows = await allAsync('SELECT id, original_name, mime_type, size, created_at FROM files WHERE project_id = $1 ORDER BY created_at DESC', [req.params.projectId]);
@@ -717,17 +837,6 @@ app.use(errorHandler);
 
 process.on('unhandledRejection', (reason) => console.error('Unhandled rejection:', reason));
 
-(async () => {
-  try {
-    await initDb();
-    app.listen(PORT, '0.0.0.0', () => console.log(`✅ Solaris backend na porta ${PORT}`));
-  } catch (err) {
-    console.error('❌ Falha ao iniciar:', err);
-    process.exit(1);
-  }
-})();
-
-// Função auxiliar para chamada não-streaming (usada no fallback)
 async function geminiChat(messages, systemPrompt, modelKey = 'flash') {
   const url = geminiUrl(modelKey, false);
   const body = buildGeminiBody(messages, systemPrompt);
@@ -760,3 +869,33 @@ async function geminiChat(messages, systemPrompt, modelKey = 'flash') {
     clearTimeout(timeout);
   }
 }
+
+(async () => {
+  try {
+    await initDb();
+    // Adicionar colunas novas se não existirem
+    const pool = (await import('./database.js')).pool;
+    const client = await pool.connect();
+    await client.query(`
+      ALTER TABLE projects ADD COLUMN IF NOT EXISTS summary TEXT;
+      ALTER TABLE projects ADD COLUMN IF NOT EXISTS detailed_objective TEXT;
+      ALTER TABLE projects ADD COLUMN IF NOT EXISTS tags JSONB DEFAULT '[]';
+      ALTER TABLE projects ADD COLUMN IF NOT EXISTS memory_mode TEXT DEFAULT 'projeto';
+      CREATE TABLE IF NOT EXISTS external_sources (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        type TEXT NOT NULL CHECK (type IN ('url','text')),
+        title TEXT,
+        url TEXT,
+        content TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+      ALTER TABLE memories ADD COLUMN IF NOT EXISTS user_id TEXT;
+    `).catch(e => console.warn('Migração de esquema (ignorável):', e.message));
+    client.release();
+    app.listen(PORT, '0.0.0.0', () => console.log(`✅ Solaris backend na porta ${PORT}`));
+  } catch (err) {
+    console.error('❌ Falha ao iniciar:', err);
+    process.exit(1);
+  }
+})();
