@@ -12,3 +12,7 @@ services:
         sync: false
       - key: FRONTEND_URL
         sync: false
+      - key: GEMINI_FLASH_API_KEY
+        sync: false
+      - key: GEMINI_PRO_API_KEY
+        sync: false
