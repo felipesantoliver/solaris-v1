@@ -413,7 +413,7 @@ function CodeBlock({ language, children }) {
 }
 
 // ─── MessageBubble com suporte a Modo Programador ─────────────────────
-function MessageBubble({ msg, index, darkMode, theme, onEdit, isEditing, editValue, setEditValue, onEditSave, onEditCancel, isLoading, programmingMode }) {
+function MessageBubble_base({ msg, index, darkMode, theme, onEdit, isEditing, editValue, setEditValue, onEditSave, onEditCancel, isLoading, programmingMode }) {
   const [showHistory, setShowHistory] = useState(false);
   const editRef = useRef(null);
   useEffect(() => { if (isEditing && editRef.current) { editRef.current.focus(); editRef.current.style.height = 'auto'; editRef.current.style.height = editRef.current.scrollHeight + 'px'; } }, [isEditing]);
@@ -496,6 +496,19 @@ function MessageBubble({ msg, index, darkMode, theme, onEdit, isEditing, editVal
     </div>
   );
 }
+
+// ─── React.memo: evita re-render de mensagens antigas durante o streaming ──
+const MessageBubble = React.memo(MessageBubble_base, (prev, next) => {
+  return (
+    prev.msg.content === next.msg.content &&
+    prev.msg.edited === next.msg.edited &&
+    prev.isEditing === next.isEditing &&
+    prev.isLoading === next.isLoading &&
+    prev.darkMode === next.darkMode &&
+    prev.programmingMode === next.programmingMode &&
+    prev.editValue === next.editValue
+  );
+});
 
 // ─── Project Settings Modal (edição e fontes) ──────────────────────────────
 function ProjectSettingsModal({ project, onClose, onUpdate, darkMode, effectiveUserId }) {
@@ -931,7 +944,7 @@ export default function App() {
         </header>
         <div className="flex-1 relative overflow-y-auto px-6 md:px-20 py-10 custom-scrollbar transition-colors duration-500">
           {hasUserStartedChat && (<div className="sticky top-0 z-30 flex justify-end pointer-events-none mb-[-40px]"><button onClick={handleShare} className={`pointer-events-auto flex items-center gap-2 px-4 py-2 rounded-full border ${theme.border} ${darkMode ? 'bg-white/5 hover:bg-white/10' : 'bg-black/5 hover:bg-black/10'} backdrop-blur-md transition-all group shadow-sm`}><Share2 size={14} className={`${theme.textSecondary} group-hover:text-current`} /><span className={`text-[10px] font-bold uppercase tracking-widest ${theme.textSecondary} group-hover:text-current`}>Compartilhar</span></button></div>)}
-          {messages.length === 0 ? <WelcomeScreen /> : (<div className="space-y-12">{messages.map((msg, i) => (<MessageBubble key={i} msg={msg} index={i} darkMode={darkMode} theme={theme} onEdit={handleEdit} isEditing={editingMsgIndex === i} editValue={editValue} setEditValue={setEditValue} onEditSave={handleEditSave} onEditCancel={handleEditCancel} isLoading={isLoading || isStreaming} programmingMode={programmingMode} />))}</div>)}
+          {messages.length === 0 ? <WelcomeScreen /> : (<div className="space-y-12">{messages.map((msg, i) => (<MessageBubble key={msg.id || i} msg={msg} index={i} darkMode={darkMode} theme={theme} onEdit={handleEdit} isEditing={editingMsgIndex === i} editValue={editValue} setEditValue={setEditValue} onEditSave={handleEditSave} onEditCancel={handleEditCancel} isLoading={isLoading || isStreaming} programmingMode={programmingMode} />))}</div>)}
           {(isLoading || isStreaming) && (<div className="flex items-center gap-3 mt-12"><div className="flex gap-1"><div className={`w-1.5 h-1.5 ${darkMode ? 'bg-white/40' : 'bg-black/60'} rounded-full animate-bounce [animation-delay:-0.3s]`} /><div className={`w-1.5 h-1.5 ${darkMode ? 'bg-white/40' : 'bg-black/60'} rounded-full animate-bounce [animation-delay:-0.15s]`} /><div className={`w-1.5 h-1.5 ${darkMode ? 'bg-white/40' : 'bg-black/60'} rounded-full animate-bounce`} /></div>{statusMessage && (<span className={`text-xs font-light tracking-wide ${theme.textSecondary} animate-pulse`}>{statusMessage}</span>)}{isStreaming && !statusMessage && (<span className={`text-xs font-light tracking-wide ${theme.textSecondary} animate-pulse`}>Gerando resposta...</span>)}</div>)}
           <div ref={messagesEndRef} />
         </div>
