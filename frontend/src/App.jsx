@@ -60,22 +60,44 @@ function PlanetDot({ size, duration, color, glow, dotSize = 'w-1.5 h-1.5', hasRi
   );
 }
 
-// ─── Model Toggle ──────────────────────────────────────────────────────────
-function ModelToggle({ model, onChange, authUser, darkMode }) {
+// ─── Model Toggle (Flash/Pro) + Code Mode ─────────────────────────────────
+function ModelAndCodeToggle({ model, onChange, authUser, darkMode, programmingMode, onProgrammingModeChange }) {
   const isPro = model === 'pro';
+  const isCodeActive = programmingMode;
+
   if (!authUser) {
     return (
-      <div className="mb-3" title="Faça login para usar o modo Pro">
+      <div className="mb-3 flex items-center gap-2" title="Faça login para usar o modo Pro">
         <button disabled className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[10px] font-medium uppercase tracking-widest opacity-30 cursor-not-allowed ${darkMode ? 'border-white/10 text-white/40' : 'border-black/10 text-black/40'}`}>
           <Zap size={10} />Flash
+        </button>
+        <button disabled className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[10px] font-medium uppercase tracking-widest opacity-30 cursor-not-allowed ${darkMode ? 'border-white/10 text-white/40' : 'border-black/10 text-black/40'}`}>
+          <Star size={10} />Pro
+        </button>
+        <button
+          onClick={() => onProgrammingModeChange(!isCodeActive)}
+          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[10px] font-medium uppercase tracking-widest transition-all ${isCodeActive ? 'border-amber-400/80 text-amber-400 bg-amber-400/10' : (darkMode ? 'border-white/10 text-white/30 hover:text-amber-400/60 hover:border-amber-400/30' : 'border-black/10 text-black/30 hover:text-amber-500/60 hover:border-amber-400/30')}`}
+        >
+          <Code size={10} />code
         </button>
       </div>
     );
   }
+
   return (
-    <div className="mb-3 flex items-center gap-1">
-      <button onClick={() => onChange('flash')} className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[10px] font-medium uppercase tracking-widest transition-all ${!isPro ? (darkMode ? 'border-white/60 text-white bg-white/10' : 'border-black/60 text-black bg-black/8') : (darkMode ? 'border-white/10 text-white/30 hover:text-white/60' : 'border-black/10 text-black/30 hover:text-black/60')}`}><Zap size={10} />Flash</button>
-      <button onClick={() => onChange('pro')} className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[10px] font-medium uppercase tracking-widest transition-all ${isPro ? 'border-amber-400/80 text-amber-400 bg-amber-400/10' : (darkMode ? 'border-white/10 text-white/30 hover:text-amber-400/60 hover:border-amber-400/30' : 'border-black/10 text-black/30 hover:text-amber-500/60 hover:border-amber-400/30')}`}><Star size={10} />Pro</button>
+    <div className="mb-3 flex items-center gap-2">
+      <button onClick={() => onChange('flash')} className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[10px] font-medium uppercase tracking-widest transition-all ${!isPro ? (darkMode ? 'border-white/60 text-white bg-white/10' : 'border-black/60 text-black bg-black/8') : (darkMode ? 'border-white/10 text-white/30 hover:text-white/60' : 'border-black/10 text-black/30 hover:text-black/60')}`}>
+        <Zap size={10} />Flash
+      </button>
+      <button onClick={() => onChange('pro')} className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[10px] font-medium uppercase tracking-widest transition-all ${isPro ? 'border-amber-400/80 text-amber-400 bg-amber-400/10' : (darkMode ? 'border-white/10 text-white/30 hover:text-amber-400/60 hover:border-amber-400/30' : 'border-black/10 text-black/30 hover:text-amber-500/60 hover:border-amber-400/30')}`}>
+        <Star size={10} />Pro
+      </button>
+      <button
+        onClick={() => onProgrammingModeChange(!isCodeActive)}
+        className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[10px] font-medium uppercase tracking-widest transition-all ${isCodeActive ? 'border-amber-400/80 text-amber-400 bg-amber-400/10' : (darkMode ? 'border-white/10 text-white/30 hover:text-amber-400/60 hover:border-amber-400/30' : 'border-black/10 text-black/30 hover:text-amber-500/60 hover:border-amber-400/30')}`}
+      >
+        <Code size={10} />code
+      </button>
     </div>
   );
 }
@@ -867,7 +889,6 @@ export default function App() {
   );
   const WelcomeScreen = () => (<div className="flex flex-col items-center justify-center h-full gap-6 px-8 text-center animate-in fade-in duration-700"><div className={`text-3xl font-extralight ${darkMode ? 'text-white/10' : 'text-black/10'}`}>✦</div><div><p className={`text-base font-light ${theme.textSecondary}`}>Olá{displayName ? `, ${displayName}` : ''}.</p><p className={`text-sm font-light mt-1 ${theme.textMuted}`}>{activeProjectId ? 'Nenhuma conversa ainda. Comece digitando.' : 'Como posso ajudar hoje?'}</p></div></div>);
 
-  // Função para atualizar o authUser após mudança no perfil
   const handleAuthUpdate = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
     setAuthUser(user);
@@ -904,13 +925,6 @@ export default function App() {
           <div className="flex items-center gap-4"><button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className={`p-2 rounded-lg transition-all ${darkMode ? 'text-white/60 hover:text-white hover:bg-white/5' : 'text-black/40 hover:text-black hover:bg-black/5'}`}><PanelLeft size={20} strokeWidth={1.5} /></button><div className="flex items-baseline gap-1 select-none"><span className="text-base font-medium tracking-tight">SOLARIS</span><span className={`text-[10px] font-bold ${theme.textMuted} tracking-tighter`}>V1</span></div>{activeProjectId && (<div className={`hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-lg ${darkMode ? 'bg-white/5' : 'bg-black/5'}`}><Folder size={12} className={theme.textMuted} /><span className={`text-xs font-light ${theme.textSecondary}`}>{projects.find(p => p.id === activeProjectId)?.name}</span><button onClick={() => setActiveProjectId(null)} className={`ml-1 ${theme.textMuted} hover:text-red-400 transition-colors`} title="Sair do projeto"><X size={10} /></button></div>)}</div>
           <div className="flex items-center gap-3">
             {authUser && (<button onClick={() => setShowSettingsModal(true)} className={`p-2 rounded-lg transition-all ${darkMode ? 'text-white/40 hover:text-white hover:bg-white/5' : 'text-black/40 hover:text-black hover:bg-black/5'}`} title="Configurações"><Settings size={18} strokeWidth={1.5} /></button>)}
-            <button
-              onClick={() => setProgrammingMode(!programmingMode)}
-              className={`p-2 rounded-lg transition-all ${programmingMode ? 'text-amber-400 bg-amber-400/10' : (darkMode ? 'text-white/40 hover:text-white hover:bg-white/5' : 'text-black/40 hover:text-black hover:bg-black/5')}`}
-              title="Modo Programador (blocos de código copiáveis)"
-            >
-              <Code size={18} strokeWidth={1.5} />
-            </button>
             <button onClick={() => setDarkMode(d => !d)} className={`transition-all ${darkMode ? 'text-yellow-400 hover:text-yellow-200' : 'text-slate-400 hover:text-slate-600'}`}>{darkMode ? <Sun size={18} strokeWidth={1.5} /> : <Moon size={18} strokeWidth={1.5} />}</button>
             {authUser ? (<button onClick={handleLogout} className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border ${theme.border} text-xs font-light transition-all ${theme.textSecondary} hover:text-red-400 hover:border-red-400/20`}><LogOut size={14} strokeWidth={1.5} /><span className="hidden sm:inline">Sair</span></button>) : (<button onClick={() => setShowAuthModal(true)} className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border ${theme.border} text-xs font-light transition-all ${theme.textSecondary} hover:text-current hover:border-current`}><LogIn size={14} strokeWidth={1.5} /><span className="hidden sm:inline">Entrar</span></button>)}
           </div>
@@ -921,7 +935,29 @@ export default function App() {
           {(isLoading || isStreaming) && (<div className="flex items-center gap-3 mt-12"><div className="flex gap-1"><div className={`w-1.5 h-1.5 ${darkMode ? 'bg-white/40' : 'bg-black/60'} rounded-full animate-bounce [animation-delay:-0.3s]`} /><div className={`w-1.5 h-1.5 ${darkMode ? 'bg-white/40' : 'bg-black/60'} rounded-full animate-bounce [animation-delay:-0.15s]`} /><div className={`w-1.5 h-1.5 ${darkMode ? 'bg-white/40' : 'bg-black/60'} rounded-full animate-bounce`} /></div>{statusMessage && (<span className={`text-xs font-light tracking-wide ${theme.textSecondary} animate-pulse`}>{statusMessage}</span>)}{isStreaming && !statusMessage && (<span className={`text-xs font-light tracking-wide ${theme.textSecondary} animate-pulse`}>Gerando resposta...</span>)}</div>)}
           <div ref={messagesEndRef} />
         </div>
-        <footer className="p-10 pt-4"><div className="max-w-3xl mx-auto"><ModelToggle model={model} onChange={setModel} authUser={authUser} darkMode={darkMode} />{sendError && (<p className="text-red-400 text-xs mb-3 flex items-center gap-1.5"><AlertTriangle size={12} />{sendError}</p>)}{uploadStatus && (<div className={`mb-3 text-xs flex items-center gap-2 ${uploadStatus.type === 'error' ? 'text-red-400' : uploadStatus.type === 'success' ? 'text-emerald-400' : 'text-amber-400'}`}>{uploadStatus.type === 'uploading' && <Loader2 size={12} className="animate-spin" />}{uploadStatus.type === 'success' && <Check size={12} />}{uploadStatus.type === 'error' && <AlertTriangle size={12} />}<span>{uploadStatus.message}</span></div>)}<div className={`relative flex items-end border-b ${theme.inputBorder} pb-8 ${theme.inputFocus} transition-all duration-500`}><textarea ref={textareaRef} value={input} onChange={handleInput} onKeyDown={handleKeyDown} rows={1} placeholder="O que deseja perguntar?" className={`flex-1 bg-transparent border-none text-lg ${darkMode ? 'text-white placeholder-white/20' : 'text-black placeholder-black/30'} resize-none focus:outline-none py-2 font-light`} /><button onClick={handleSend} disabled={isLoading || isStreaming || !input.trim()} className={`p-2 mb-3 transition-all ${(isLoading || isStreaming || !input.trim()) ? theme.textMuted : (darkMode ? 'text-white hover:scale-110' : 'text-black hover:scale-110')}`}>{(isLoading || isStreaming) ? <Loader2 size={20} className="animate-spin" /> : input.trim() ? <Send size={20} strokeWidth={1.5} /> : <Mic size={20} strokeWidth={1.5} />}</button></div><div className={`mt-5 flex justify-between items-center text-[9px] ${theme.textMuted} font-bold tracking-[0.2em] uppercase`}><span>enter para enviar · shift+enter nova linha</span><div className="flex items-center gap-4">{!authUser && (<span onClick={() => setShowAuthModal(true)} className="flex items-center gap-1.5 cursor-pointer text-amber-400/60 hover:text-amber-400 transition-colors mb-2"><Star size={10} /> Entrar para usar Pro</span>)}<span onClick={() => fileInputRef.current?.click()} className={`flex items-center gap-3 cursor-pointer ${darkMode ? 'hover:text-white' : 'hover:text-black'} transition-colors mb-2`}><Plus size={10} /> Anexo</span></div></div></div></footer>
+        <footer className="p-10 pt-4"><div className="max-w-3xl mx-auto">
+          <ModelAndCodeToggle
+            model={model}
+            onChange={setModel}
+            authUser={authUser}
+            darkMode={darkMode}
+            programmingMode={programmingMode}
+            onProgrammingModeChange={setProgrammingMode}
+          />
+          {sendError && (<p className="text-red-400 text-xs mb-3 flex items-center gap-1.5"><AlertTriangle size={12} />{sendError}</p>)}
+          {uploadStatus && (<div className={`mb-3 text-xs flex items-center gap-2 ${uploadStatus.type === 'error' ? 'text-red-400' : uploadStatus.type === 'success' ? 'text-emerald-400' : 'text-amber-400'}`}>{uploadStatus.type === 'uploading' && <Loader2 size={12} className="animate-spin" />}{uploadStatus.type === 'success' && <Check size={12} />}{uploadStatus.type === 'error' && <AlertTriangle size={12} />}<span>{uploadStatus.message}</span></div>)}
+          <div className={`relative flex items-end border-b ${theme.inputBorder} pb-8 ${theme.inputFocus} transition-all duration-500`}>
+            <textarea ref={textareaRef} value={input} onChange={handleInput} onKeyDown={handleKeyDown} rows={1} placeholder="O que deseja perguntar?" className={`flex-1 bg-transparent border-none text-lg ${darkMode ? 'text-white placeholder-white/20' : 'text-black placeholder-black/30'} resize-none focus:outline-none py-2 font-light`} />
+            <button onClick={handleSend} disabled={isLoading || isStreaming || !input.trim()} className={`p-2 mb-3 transition-all ${(isLoading || isStreaming || !input.trim()) ? theme.textMuted : (darkMode ? 'text-white hover:scale-110' : 'text-black hover:scale-110')}`}>{(isLoading || isStreaming) ? <Loader2 size={20} className="animate-spin" /> : input.trim() ? <Send size={20} strokeWidth={1.5} /> : <Mic size={20} strokeWidth={1.5} />}</button>
+          </div>
+          <div className={`mt-5 flex justify-between items-center text-[9px] ${theme.textMuted} font-bold tracking-[0.2em] uppercase`}>
+            <span>enter para enviar · shift+enter nova linha</span>
+            <div className="flex items-center gap-4">
+              {!authUser && (<span onClick={() => setShowAuthModal(true)} className="flex items-center gap-1.5 cursor-pointer text-amber-400/60 hover:text-amber-400 transition-colors mb-2"><Star size={10} /> Entrar para usar Pro</span>)}
+              <span onClick={() => fileInputRef.current?.click()} className={`flex items-center gap-3 cursor-pointer ${darkMode ? 'hover:text-white' : 'hover:text-black'} transition-colors mb-2`}><Plus size={10} /> Anexo</span>
+            </div>
+          </div>
+        </div></footer>
       </main>
       <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileUpload} accept=".pdf,.txt,.md,.json,.js,.ts,.py,.css,.html,.csv" />
       <style dangerouslySetInnerHTML={{ __html: `@keyframes rotate-slow { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }.orbit-rotate { animation: rotate-slow linear infinite; }.custom-scrollbar::-webkit-scrollbar { width: 3px; }.custom-scrollbar::-webkit-scrollbar-track { background: transparent; }.custom-scrollbar::-webkit-scrollbar-thumb { background: ${theme.scrollbar}; border-radius: 10px; }` }} />
