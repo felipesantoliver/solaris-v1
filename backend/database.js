@@ -137,10 +137,12 @@ export async function initDb() {
       );
     `);
 
+    // Tabela chats com suporte a user_id (para chats avulsos)
     await client.query(`
       CREATE TABLE IF NOT EXISTS chats (
         id         TEXT PRIMARY KEY,
         project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+        user_id    TEXT,
         title      TEXT DEFAULT 'Nova conversa',
         created_at TIMESTAMPTZ DEFAULT NOW(),
         updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -234,7 +236,7 @@ export async function initDb() {
       );
     `);
 
-    // Migrações para adicionar colunas que podem faltar em projetos existentes
+    // Migrações para adicionar colunas que podem faltar em tabelas existentes
     const migrations = [
       `ALTER TABLE chats ALTER COLUMN project_id DROP NOT NULL`,
       `ALTER TABLE messages ADD COLUMN IF NOT EXISTS edited BOOLEAN DEFAULT FALSE`,
@@ -247,6 +249,9 @@ export async function initDb() {
       `ALTER TABLE projects ADD COLUMN IF NOT EXISTS gemini_version TEXT DEFAULT 'flash'`,
       `ALTER TABLE memories ADD COLUMN IF NOT EXISTS user_id TEXT`,
       `ALTER TABLE memories ALTER COLUMN project_id DROP NOT NULL`,
+      // Nova migração: adicionar user_id na tabela chats e criar índice
+      `ALTER TABLE chats ADD COLUMN IF NOT EXISTS user_id TEXT`,
+      `CREATE INDEX IF NOT EXISTS idx_chats_user_id ON chats(user_id)`,
     ];
     for (const sql of migrations) {
       await client.query(sql).catch((err) => {

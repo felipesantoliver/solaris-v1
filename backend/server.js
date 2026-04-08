@@ -4,6 +4,7 @@
 //   fontes externas: links e texto, fila de jobs assíncrona)
 //  + Separação Gemini 2.5 (Flash) e Gemini 3 (Pro) por projeto
 //  + Limpeza automática de repetições "Solaris" nas respostas
+//  + Correção: exclusão de todos os chats (com e sem projeto)
 // ============================================================
 
 import { setDefaultResultOrder } from 'dns';
@@ -512,13 +513,18 @@ app.delete('/api/projects/:id', async (req, res, next) => {
 app.post('/api/projects/:id/chats', async (req, res, next) => {
   const userId = req.headers['x-user-id'];
   const projectId = req.params.id === 'none' ? null : req.params.id;
+  if (!userId) return res.status(400).json({ error: 'x-user-id obrigatório' });
   try {
     if (projectId) {
       const project = await getAsync('SELECT id FROM projects WHERE id = $1 AND user_id = $2', [projectId, userId]);
       if (!project) return res.status(404).json({ error: 'Projeto não encontrado' });
     }
     const chatId = randomUUID();
-    await runAsync('INSERT INTO chats (id, project_id, title) VALUES ($1,$2,$3)', [chatId, projectId, 'Nova conversa']);
+    // Inserir com user_id para permitir exclusão posterior
+    await runAsync(
+      'INSERT INTO chats (id, project_id, user_id, title) VALUES ($1, $2, $3, $4)',
+      [chatId, projectId, userId, 'Nova conversa']
+    );
     res.status(201).json(await getAsync('SELECT * FROM chats WHERE id = $1', [chatId]));
   } catch (err) { next(err); }
 });
@@ -770,9 +776,9 @@ app.delete('/api/files/:projectId/:fileId', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ─── Outros endpoints ─────────────────────────────────────────────────
+// ─── Outros endpoints (corrigidos) ───────────────────────────────────
 
-// GET: busca chats sem projeto para exibir na sidebar
+// GET: busca chats sem projeto do usuário logado
 app.get('/api/user/chats', async (req, res, next) => {
   const userId = req.headers['x-user-id'];
   if (!userId) return res.status(400).json({ error: 'x-user-id obrigatório' });
@@ -780,26 +786,23 @@ app.get('/api/user/chats', async (req, res, next) => {
     const rows = await allAsync(
       `SELECT id, title, created_at, updated_at
        FROM chats
-       WHERE project_id IS NULL
+       WHERE user_id = $1 AND project_id IS NULL
          AND id IN (SELECT DISTINCT chat_id FROM messages)
        ORDER BY updated_at DESC
        LIMIT 50`,
-      []
+      [userId]
     );
     res.json(rows);
   } catch (err) { next(err); }
 });
 
+// DELETE: exclui TODOS os chats do usuário (com ou sem projeto)
 app.delete('/api/user/chats', async (req, res, next) => {
   const userId = req.headers['x-user-id'];
   if (!userId) return res.status(400).json({ error: 'x-user-id obrigatório' });
   try {
-    const projects = await allAsync('SELECT id FROM projects WHERE user_id = $1', [userId]);
-    const projectIds = projects.map(p => p.id);
-    if (projectIds.length === 0) return res.json({ deleted: 0 });
-    const placeholders = projectIds.map((_, i) => `$${i + 1}`).join(',');
-    await runAsync(`DELETE FROM messages WHERE chat_id IN (SELECT id FROM chats WHERE project_id IN (${placeholders}))`, projectIds);
-    const result = await runAsync(`DELETE FROM chats WHERE project_id IN (${placeholders})`, projectIds);
+    // As mensagens são automaticamente deletadas por ON DELETE CASCADE
+    const result = await runAsync('DELETE FROM chats WHERE user_id = $1', [userId]);
     res.json({ deleted: result.changes });
   } catch (err) { next(err); }
 });
