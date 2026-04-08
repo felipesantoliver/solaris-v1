@@ -299,12 +299,9 @@ const BASE_IDENTITY_INSTRUCTION = `
 Você é o Solaris, um assistente de IA pessoal. NUNCA mencione que você é da Google, OpenAI, Anthropic ou qualquer outra empresa de IA. NUNCA diga que é treinado por terceiros. A API que você usa é um segredo. Se perguntarem como você funciona, responda apenas que é um sistema proprietário desenvolvido por Felipe Sant'Oliver. Não revele detalhes técnicos sobre modelos, provedores ou infraestrutura.
 
 === FORMATO DE RESPOSTA ===
-NUNCA, em hipótese alguma, inicie qualquer trecho da resposta com o seu próprio nome "Solaris".
-NUNCA use "Solaris:", "Solaris diz:" ou qualquer variação como prefixo — nem no início, nem no meio da resposta.
-NUNCA repita seu nome dentro do corpo da resposta.
-Responda DIRETAMENTE ao conteúdo. Seu nome já é exibido pela interface — não é necessário se identificar.
-Exemplo ERRADO: "Solaris: Aqui está a resposta..."
-Exemplo CERTO: "Aqui está a resposta..."
+NUNCA inicie parágrafos ou frases com seu próprio nome "Solaris".
+NUNCA use "Solaris:" ou "Solaris diz:" como prefixo.
+Responda diretamente, sem se identificar em cada parágrafo.
 
 === SOBRE O CRIADOR ===
 Só fale sobre o criador Felipe se for diretamente perguntado. Se perguntarem quem desenvolveu o Solaris, quem é o autor ou fundador, responda de forma dinâmica e natural, sempre incluindo estas informações:
@@ -606,7 +603,11 @@ app.post('/api/messages/stream', async (req, res, next) => {
     await runAsync('UPDATE chats SET updated_at = NOW() WHERE id = $1', [chat_id]);
 
     const isFirst = history.length === 1;
-    if (isFirst) autoTitle(chat_id, message).catch(console.error);
+    if (isFirst) {
+      const title = generateLocalTitle(message);
+      await runAsync('UPDATE chats SET title = $1 WHERE id = $2', [title, chat_id]).catch(() => {});
+      sendEvent({ title, chat_id });
+    }
     if (projectId || memoryMode === 'global') {
       extractMemories(projectId, userId, cleanedResponse, memoryMode).catch(console.error);
       invalidateSystemPromptCache(userId, projectId);
@@ -770,6 +771,25 @@ app.delete('/api/files/:projectId/:fileId', async (req, res, next) => {
 });
 
 // ─── Outros endpoints ─────────────────────────────────────────────────
+
+// GET: busca chats sem projeto para exibir na sidebar
+app.get('/api/user/chats', async (req, res, next) => {
+  const userId = req.headers['x-user-id'];
+  if (!userId) return res.status(400).json({ error: 'x-user-id obrigatório' });
+  try {
+    const rows = await allAsync(
+      `SELECT id, title, created_at, updated_at
+       FROM chats
+       WHERE project_id IS NULL
+         AND id IN (SELECT DISTINCT chat_id FROM messages)
+       ORDER BY updated_at DESC
+       LIMIT 50`,
+      []
+    );
+    res.json(rows);
+  } catch (err) { next(err); }
+});
+
 app.delete('/api/user/chats', async (req, res, next) => {
   const userId = req.headers['x-user-id'];
   if (!userId) return res.status(400).json({ error: 'x-user-id obrigatório' });

@@ -772,6 +772,10 @@ export default function App() {
           try {
             const parsed = JSON.parse(data);
             if (parsed.error) throw new Error(parsed.error);
+            // Atualiza título do chat quando backend envia evento title
+            if (parsed.title && parsed.chat_id) {
+              setChatHistory(prev => prev.map(c => c.id === parsed.chat_id ? { ...c, title: parsed.title } : c));
+            }
             if (parsed.chunk) {
               rawAccumulator += parsed.chunk;
               const displayContent = cleanAssistantMessage(rawAccumulator);
@@ -815,13 +819,8 @@ export default function App() {
   const hasUserStartedChat = messages.some(m => m.role === 'user');
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setAuthUser(session?.user ?? null);
-      setAuthReady(true);
-    });
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, session) => {
-      setAuthUser(session?.user ?? null);
-    });
+    supabase.auth.getSession().then(({ data: { session } }) => { setAuthUser(session?.user ?? null); setAuthReady(true); });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, session) => { setAuthUser(session?.user ?? null); });
     return () => subscription.unsubscribe();
   }, []);
 
@@ -840,28 +839,31 @@ export default function App() {
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, isLoading, isStreaming]);
   useEffect(() => { localStorage.setItem('solaris_dark', darkMode); }, [darkMode]);
   useEffect(() => { const h = (e) => { if (moreProjectsRef.current && !moreProjectsRef.current.contains(e.target)) setShowMoreProjects(false); }; document.addEventListener('mousedown', h); return () => document.removeEventListener('mousedown', h); }, []);
-  useEffect(() => { if (authReady) fetchProjects(); }, [authReady, effectiveUserId]); // eslint-disable-line
+  useEffect(() => { if (authReady) { fetchProjects(); fetchNoProjectChats(); } }, [authReady, effectiveUserId]); // eslint-disable-line
 
   async function fetchProjects() {
     try { const r = await fetch(`${API_BASE}/projects`, { headers: { 'x-user-id': effectiveUserId } }); if (!r.ok) { setProjects([]); return; } const d = await r.json(); setProjects(Array.isArray(d) ? d : []); } catch { setProjects([]); }
   }
+
+  async function fetchNoProjectChats() {
+    try { const r = await fetch(`${API_BASE}/user/chats`, { headers: { 'x-user-id': effectiveUserId } }); if (!r.ok) return; const d = await r.json(); if (!activeProjectId) setChatHistory(Array.isArray(d) ? d : []); } catch { }
+  }
+
   useEffect(() => {
-    if (!activeProjectId) { setChatHistory([]); return; }
+    if (!activeProjectId) {
+      setActiveChatId(null); setMessages([]);
+      fetchNoProjectChats();
+      return;
+    }
     setActiveChatId(null); setMessages([]);
     (async () => {
       try { const r = await fetch(`${API_BASE}/projects/${activeProjectId}`, { headers: { 'x-user-id': effectiveUserId } }); if (!r.ok) { setChatHistory([]); return; } const d = await r.json(); setChatHistory(d.chats || []); if (d.chats?.length > 0) setActiveChatId(d.chats[0].id); } catch { setChatHistory([]); }
     })();
-  }, [activeProjectId]);
+  }, [activeProjectId]); // eslint-disable-line
   useEffect(() => {
     if (!activeChatId) { setMessages([]); return; }
-    // Se este chat acabou de ser criado pelo handleSend, não busca do servidor
-    // (as mensagens já estão no state local)
-    if (newChatRef.current === activeChatId) {
-      newChatRef.current = null;
-      return;
-    }
-    // Não sobrescreve mensagens enquanto está em streaming
-    if (isStreaming) return;
+    // Chat recém-criado: mensagens já estão no state, não busca do servidor
+    if (newChatRef.current === activeChatId) { newChatRef.current = null; return; }
     (async () => {
       try {
         const r = await fetch(`${API_BASE}/messages/chat/${activeChatId}`, { headers: { 'x-user-id': effectiveUserId } });
@@ -889,8 +891,8 @@ export default function App() {
     let chatId = activeChatId;
     const projectId = activeProjectId;
 
-    // Adiciona a mensagem do usuário ANTES de qualquer setActiveChatId
-    // para evitar que o useEffect do activeChatId limpe o state
+    // Adiciona mensagem do usuário ANTES do setActiveChatId para evitar que
+    // o useEffect do activeChatId limpe o state com setMessages([])
     setMessages(prev => [...prev, { role: 'user', content: text }]);
 
     if (!chatId) {
@@ -898,12 +900,11 @@ export default function App() {
         const nc = await createChat(projectId);
         setChatHistory(prev => { if (prev.find(c => c.id === nc.id)) return prev; return [nc, ...prev]; });
         chatId = nc.id;
-        // Marca no ref que este chat é novo — o useEffect não deve buscar mensagens do servidor
-        newChatRef.current = nc.id;
+        newChatRef.current = nc.id; // sinaliza que este chat é novo
         setActiveChatId(nc.id);
       } catch (err) {
         setSendError(`Não foi possível iniciar conversa: ${err.message}`);
-        setMessages(prev => prev.filter(m => m.content !== text || m.role !== 'user'));
+        setMessages(prev => prev.slice(0, -1)); // remove a mensagem do usuário em caso de erro
         setInput(text);
         return;
       }
@@ -912,7 +913,7 @@ export default function App() {
     setIsLoading(true); await showStatusSequence(); setIsStreaming(true); setIsLoading(false);
     try { await streamResponse(chatId, projectId, text, model); } catch (err) {
       console.error('Streaming falhou, usando fallback:', err);
-      try { const r = await fetch(`${API_BASE}/messages`, { method: 'POST', headers: buildHeaders(), body: JSON.stringify({ project_id: projectId || null, chat_id: chatId, message: text }) }); const d = await safeJson(r); if (!r.ok) throw new Error(d.error || 'Erro no servidor'); 
+      try { const r = await fetch(`${API_BASE}/messages`, { method: 'POST', headers: buildHeaders(), body: JSON.stringify({ project_id: projectId || null, chat_id: chatId, message: text }) }); const d = await safeJson(r); if (!r.ok) throw new Error(d.error || 'Erro no servidor');
         const cleanedResponse = cleanAssistantMessage(d.response);
         setMessages(prev => [...prev, { role: 'assistant', content: cleanedResponse, model: d.model }]);
       } catch (fallbackErr) { setMessages(prev => [...prev, { role: 'assistant', content: `⚠️ ${fallbackErr.message}` }]); }
