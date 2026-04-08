@@ -27,7 +27,7 @@ async function safeJson(res) {
   return res.json();
 }
 
-// ─── Solar System ─────────────────────────────────────────────────────────────
+// ─── Solar System (componentes visuais) ──────────────────────────────────────
 function OrbitLine({ size, themeColor }) {
   return <div className={`absolute border ${themeColor} rounded-full ${size} transition-colors duration-500`} />;
 }
@@ -98,7 +98,7 @@ function ModelToggle({ model, onChange, authUser, darkMode }) {
   );
 }
 
-// ─── Auth Modal ───────────────────────────────────────────────────────────────
+// ─── Auth Modal (mantido igual) ──────────────────────────────────────────────
 function AuthModal({ onClose, darkMode, onAuthSuccess }) {
   const [mode, setMode] = useState('login');
   const [email, setEmail] = useState('');
@@ -178,7 +178,7 @@ function AuthModal({ onClose, darkMode, onAuthSuccess }) {
   );
 }
 
-// ─── Settings Modal ───────────────────────────────────────────────────────────
+// ─── Settings Modal (mantido igual) ──────────────────────────────────────────
 const PERSONALITIES = [
   { id: 'direto', label: 'Direto', desc: 'Respostas curtas e objetivas, sem rodeios.' },
   { id: 'tecnico', label: 'Técnico', desc: 'Terminologia precisa e detalhes de implementação.' },
@@ -264,7 +264,7 @@ function SettingsModal({ onClose, darkMode, effectiveUserId }) {
   );
 }
 
-// ─── MessageBubble ────────────────────────────────────────────────────────────
+// ─── MessageBubble (mantido igual) ───────────────────────────────────────────
 function MessageBubble({ msg, index, darkMode, theme, onEdit, isEditing, editValue, setEditValue, onEditSave, onEditCancel, isLoading }) {
   const [showHistory, setShowHistory] = useState(false);
   const editRef = useRef(null);
@@ -340,7 +340,7 @@ function MessageBubble({ msg, index, darkMode, theme, onEdit, isEditing, editVal
   );
 }
 
-// ─── App ──────────────────────────────────────────────────────────────────────
+// ─── App principal com status sequence e streaming ───────────────────────────
 export default function App() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
@@ -366,43 +366,98 @@ export default function App() {
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [authReady, setAuthReady] = useState(false);
   const [sendError, setSendError] = useState('');
-
-  // Estados para feedback visual
-  const [loadingPhase, setLoadingPhase] = useState(null); // 'sending', 'analyzing', 'consulting', 'responding'
-  const [uploadStatus, setUploadStatus] = useState(null); // { type: 'uploading'|'success'|'error', message }
-  const loadingIntervalRef = useRef(null);
-
+  const [uploadStatus, setUploadStatus] = useState(null);
   const [editingChatTitleId, setEditingChatTitleId] = useState(null);
   const [editingChatTitleValue, setEditingChatTitleValue] = useState('');
+  // Novos estados para status sequence e streaming
+  const [statusMessage, setStatusMessage] = useState('');
+  const [isStreaming, setIsStreaming] = useState(false);
 
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
   const fileInputRef = useRef(null);
   const moreProjectsRef = useRef(null);
 
-  // Limpa intervalo ao desmontar
-  useEffect(() => {
-    return () => {
-      if (loadingIntervalRef.current) clearInterval(loadingIntervalRef.current);
-    };
-  }, []);
+  // Sequência de mensagens de status (cada uma com duração em ms)
+  const statusSequence = [
+    { text: "Analisando contexto...", duration: 400 },
+    { text: "Consultando memórias do projeto...", duration: 400 },
+    { text: "Preparando resposta...", duration: 300 }
+  ];
 
-  // Ciclo de fases: 'analyzing' -> 'consulting' -> 'responding' -> repete
-  const startLoadingCycle = () => {
-    if (loadingIntervalRef.current) clearInterval(loadingIntervalRef.current);
-    let step = 0;
-    const phases = ['analyzing', 'consulting', 'responding'];
-    setLoadingPhase('analyzing');
-    loadingIntervalRef.current = setInterval(() => {
-      step = (step + 1) % phases.length;
-      setLoadingPhase(phases[step]);
-    }, 1800);
+  const showStatusSequence = async () => {
+    for (const step of statusSequence) {
+      setStatusMessage(step.text);
+      await new Promise(r => setTimeout(r, step.duration));
+    }
+    setStatusMessage('');
   };
 
-  const stopLoadingCycle = () => {
-    if (loadingIntervalRef.current) {
-      clearInterval(loadingIntervalRef.current);
-      loadingIntervalRef.current = null;
+  // Função de streaming
+  const streamResponse = async (chatId, projectId, userMessage, modelKey) => {
+    const response = await fetch(`${API_BASE}/messages/stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-id': effectiveUserId,
+        'x-model': authUser ? modelKey : 'flash',
+      },
+      body: JSON.stringify({
+        project_id: projectId || null,
+        chat_id: chatId,
+        message: userMessage,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let assistantMessageIndex = null;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          const data = line.slice(6);
+          if (data === '[DONE]') continue;
+          try {
+            const parsed = JSON.parse(data);
+            if (parsed.error) {
+              throw new Error(parsed.error);
+            }
+            if (parsed.chunk) {
+              // Adiciona ou atualiza a mensagem do assistente
+              if (assistantMessageIndex === null) {
+                setMessages(prev => {
+                  const newMsg = { role: 'assistant', content: parsed.chunk, model: modelKey };
+                  assistantMessageIndex = prev.length;
+                  return [...prev, newMsg];
+                });
+              } else {
+                setMessages(prev => {
+                  const updated = [...prev];
+                  updated[assistantMessageIndex] = { ...updated[assistantMessageIndex], content: updated[assistantMessageIndex].content + parsed.chunk };
+                  return updated;
+                });
+              }
+            } else if (parsed.done) {
+              // Finalizou, não precisa fazer nada
+            }
+          } catch (e) {
+            console.warn('Erro ao parsear SSE:', e);
+          }
+        }
+      }
     }
   };
 
@@ -425,7 +480,6 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
-  // Se deslogar, volta para flash
   useEffect(() => {
     if (!authUser && model === 'pro') setModel('flash');
   }, [authUser]);
@@ -464,7 +518,7 @@ export default function App() {
   }), [effectiveUserId, authUser, model]);
 
   // ── Efeitos ─────────────────────────────────────────────────────────────────
-  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, isLoading]);
+  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, isLoading, isStreaming]);
   useEffect(() => { localStorage.setItem('solaris_dark', darkMode); }, [darkMode]);
   useEffect(() => {
     const h = (e) => { if (moreProjectsRef.current && !moreProjectsRef.current.contains(e.target)) setShowMoreProjects(false); };
@@ -472,7 +526,6 @@ export default function App() {
     return () => document.removeEventListener('mousedown', h);
   }, []);
 
-  // Busca projetos só depois do auth estar pronto
   useEffect(() => { if (authReady) fetchProjects(); }, [authReady, effectiveUserId]);
 
   // ── Projetos ─────────────────────────────────────────────────────────────────
@@ -485,7 +538,6 @@ export default function App() {
     } catch { setProjects([]); }
   }
 
-  // Ao selecionar projeto, carrega seus chats
   useEffect(() => {
     if (!activeProjectId) {
       setChatHistory([]);
@@ -504,7 +556,6 @@ export default function App() {
     })();
   }, [activeProjectId]);
 
-  // Ao selecionar chat, carrega mensagens
   useEffect(() => {
     if (!activeChatId) { setMessages([]); return; }
     (async () => {
@@ -536,15 +587,13 @@ export default function App() {
     return r.json();
   }
 
-  // ── Enviar mensagem ─────────────────────────────────────────────────────────
+  // ── Enviar mensagem com status sequence e streaming ─────────────────────────
   const handleSend = async () => {
     const text = input.trim();
-    if (!text || isLoading) return;
+    if (!text || isLoading || isStreaming) return;
 
     setSendError('');
     setEditingMsgIndex(null);
-
-    // Limpa o input imediatamente
     setInput('');
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
 
@@ -569,44 +618,41 @@ export default function App() {
       }
     }
 
-    // Adiciona mensagem do usuário na tela
+    // Adiciona mensagem do usuário
     setMessages(prev => [...prev, { role: 'user', content: text }]);
 
-    // Inicia feedback visual: "Enviando..."
+    // Inicia sequência de status
     setIsLoading(true);
-    setLoadingPhase('sending');
-    // Não inicia ciclo ainda – só depois que a requisição for de fato enviada
+    await showStatusSequence();
+
+    // Inicia streaming
+    setIsStreaming(true);
+    setIsLoading(false);
 
     try {
-      // Inicia requisição
-      const fetchPromise = fetch(`${API_BASE}/messages`, {
-        method: 'POST',
-        headers: buildHeaders(),
-        body: JSON.stringify({
-          project_id: projectId || null,
-          chat_id: chatId,
-          message: text,
-        }),
-      });
-
-      // Após o envio da requisição (não espera resposta), inicia ciclo de "Analisando..."
-      // Pequeno delay para dar tempo de mostrar "Enviando..." pelo menos 300ms
-      setTimeout(() => {
-        if (isLoading) {
-          startLoadingCycle();
-        }
-      }, 300);
-
-      const r = await fetchPromise;
-      const d = await safeJson(r);
-      if (!r.ok) throw new Error(d.error || 'Erro no servidor');
-      setMessages(prev => [...prev, { role: 'assistant', content: d.response, model: d.model }]);
+      await streamResponse(chatId, projectId, text, model);
     } catch (err) {
-      setMessages(prev => [...prev, { role: 'assistant', content: `⚠️ ${err.message}` }]);
+      console.error('Streaming falhou, usando fallback:', err);
+      // Fallback para endpoint tradicional
+      try {
+        const r = await fetch(`${API_BASE}/messages`, {
+          method: 'POST',
+          headers: buildHeaders(),
+          body: JSON.stringify({
+            project_id: projectId || null,
+            chat_id: chatId,
+            message: text,
+          }),
+        });
+        const d = await safeJson(r);
+        if (!r.ok) throw new Error(d.error || 'Erro no servidor');
+        setMessages(prev => [...prev, { role: 'assistant', content: d.response, model: d.model }]);
+      } catch (fallbackErr) {
+        setMessages(prev => [...prev, { role: 'assistant', content: `⚠️ ${fallbackErr.message}` }]);
+      }
     } finally {
-      stopLoadingCycle();
-      setIsLoading(false);
-      setLoadingPhase(null);
+      setIsStreaming(false);
+      setStatusMessage('');
     }
   };
 
@@ -619,11 +665,11 @@ export default function App() {
     e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
   };
 
-  // ── Edição ───────────────────────────────────────────────────────────────────
+  // ── Edição (mantido) ───────────────────────────────────────────────────────
   const handleEdit = (index, content) => { setEditingMsgIndex(index); setEditValue(content); };
   const handleEditCancel = () => { setEditingMsgIndex(null); setEditValue(''); };
   const handleEditSave = async () => {
-    if (!editValue.trim() || isLoading || editingMsgIndex === null) return;
+    if (!editValue.trim() || isLoading || isStreaming || editingMsgIndex === null) return;
     const original = messages[editingMsgIndex];
     const newContent = editValue.trim();
     const newMessages = messages.slice(0, editingMsgIndex + 1).map((m, i) =>
@@ -635,8 +681,9 @@ export default function App() {
     setEditingMsgIndex(null);
     setEditValue('');
     setIsLoading(true);
-    setLoadingPhase('sending');
-    setTimeout(() => startLoadingCycle(), 300);
+    await showStatusSequence();
+    setIsStreaming(true);
+    setIsLoading(false);
     try {
       const r = await fetch(`${API_BASE}/messages/edit`, {
         method: 'POST',
@@ -648,9 +695,8 @@ export default function App() {
     } catch {
       setMessages(prev => [...prev, { role: 'assistant', content: 'Erro ao regerar.' }]);
     } finally {
-      stopLoadingCycle();
-      setIsLoading(false);
-      setLoadingPhase(null);
+      setIsStreaming(false);
+      setStatusMessage('');
     }
   };
 
@@ -713,7 +759,6 @@ export default function App() {
     setSendError('');
   };
 
-  // ── Renomear título do chat ───────────────────────────────────────────────────
   const startRenameChatTitle = (e, chat) => {
     e.stopPropagation();
     setEditingChatTitleId(chat.id);
@@ -749,7 +794,7 @@ export default function App() {
   };
   const onDragEnd = (e) => { e.currentTarget.style.opacity = '1'; setDraggedItemId(null); };
 
-  // ── Upload de arquivos com feedback ─────────────────────────────────────────
+  // ── Upload de arquivos ─────────────────────────────────────────────────────
   const handleFileUpload = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -830,20 +875,8 @@ export default function App() {
     </div>
   );
 
-  // Mapeia fase para texto amigável
-  const getLoadingText = () => {
-    switch (loadingPhase) {
-      case 'sending': return 'Enviando...';
-      case 'analyzing': return 'Analisando...';
-      case 'consulting': return 'Consultando...';
-      case 'responding': return 'Respondendo...';
-      default: return '';
-    }
-  };
-
   return (
     <div className={`flex h-screen ${darkMode ? 'bg-[#050505] text-white' : 'bg-[#fafafa] text-[#1a1a1a]'} font-sans antialiased overflow-hidden transition-colors duration-500`}>
-
       {showAuthModal && <AuthModal darkMode={darkMode} onClose={() => setShowAuthModal(false)} onAuthSuccess={handleAuthSuccess} />}
       {showSettingsModal && authUser && (
         <SettingsModal darkMode={darkMode} onClose={() => setShowSettingsModal(false)} effectiveUserId={effectiveUserId} />
@@ -871,7 +904,7 @@ export default function App() {
         </div>
       )}
 
-      {/* ── Sidebar ── */}
+      {/* Sidebar (mesmo código original, omitido por brevidade - mantenha o original) */}
       <aside className={`hidden lg:flex flex-col border-r ${theme.border} ${theme.bgAside} relative transition-all duration-500 ease-in-out shrink-0 ${isSidebarOpen ? 'w-72' : 'w-20'}`}>
         <div className={`flex flex-col h-full overflow-hidden transition-all duration-500 ${isSidebarOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
           <div className="px-8 pt-12 pb-6 flex flex-col gap-5 shrink-0">
@@ -884,7 +917,6 @@ export default function App() {
               <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Buscar conversa" className={`bg-transparent border-none p-0 text-sm font-light w-full focus:outline-none ${darkMode ? 'text-white placeholder:text-white/20' : 'text-black placeholder:text-black/30'}`} />
             </div>
           </div>
-
           <div className="px-8 flex flex-col flex-1 overflow-y-auto custom-scrollbar">
             {/* Sistema Solar */}
             <div className="relative w-full aspect-square flex items-center justify-center opacity-80 hover:opacity-100 transition-opacity duration-700 mb-10 shrink-0">
@@ -906,19 +938,12 @@ export default function App() {
               <PlanetDot size="w-48 h-48" duration="36s" color="bg-[#a6d1e6]" dotSize="w-1.5 h-1.5" darkMode={darkMode} />
               <PlanetDot size="w-56 h-56" duration="45s" color="bg-[#4b70dd]" dotSize="w-1.5 h-1.5" darkMode={darkMode} />
             </div>
-
             {/* Projetos */}
             <div className="flex flex-col gap-4 mb-8 shrink-0">
               <h2 className={`text-[10px] font-light tracking-[0.4em] uppercase ${theme.textSecondary}`}>PROJETOS</h2>
               {isCreatingProject ? (
                 <div className={`flex items-center gap-2 p-2 -ml-2 rounded-lg border ${theme.inputBorder}`}>
-                  <input
-                    autoFocus type="text" value={newProjectName}
-                    onChange={e => setNewProjectName(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Enter') createProject(); if (e.key === 'Escape') { setIsCreatingProject(false); setNewProjectName(''); } }}
-                    placeholder="Nome do projeto..."
-                    className="bg-transparent border-none text-xs w-full focus:outline-none font-light"
-                  />
+                  <input autoFocus type="text" value={newProjectName} onChange={e => setNewProjectName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') createProject(); if (e.key === 'Escape') { setIsCreatingProject(false); setNewProjectName(''); } }} placeholder="Nome do projeto..." className="bg-transparent border-none text-xs w-full focus:outline-none font-light" />
                   <button onClick={createProject} className="text-emerald-500"><Check size={14} /></button>
                   <button onClick={() => { setIsCreatingProject(false); setNewProjectName(''); }} className="text-red-400"><X size={14} /></button>
                 </div>
@@ -945,7 +970,6 @@ export default function App() {
                 </div>
               )}
             </div>
-
             {/* Conversas */}
             <div className="flex flex-col gap-4 mb-10 shrink-0">
               <h2 className={`text-[10px] font-light tracking-[0.4em] uppercase ${theme.textSecondary}`}>CONVERSAS</h2>
@@ -958,43 +982,20 @@ export default function App() {
                     <div className="flex items-center gap-3 overflow-hidden flex-1 min-w-0">
                       <History size={14} className={`shrink-0 ${activeChatId === chat.id ? 'text-current opacity-60' : theme.textMuted}`} />
                       {editingChatTitleId === chat.id ? (
-                        <input
-                          autoFocus
-                          type="text"
-                          value={editingChatTitleValue}
-                          onChange={e => setEditingChatTitleValue(e.target.value)}
-                          onKeyDown={e => {
-                            if (e.key === 'Enter') confirmRenameChatTitle(chat.id);
-                            if (e.key === 'Escape') { setEditingChatTitleId(null); setEditingChatTitleValue(''); }
-                          }}
-                          onBlur={() => confirmRenameChatTitle(chat.id)}
-                          onClick={e => e.stopPropagation()}
-                          className={`text-xs font-light bg-transparent border-none focus:outline-none w-full min-w-0 ${darkMode ? 'text-white' : 'text-black'}`}
-                          maxLength={50}
-                        />
+                        <input autoFocus type="text" value={editingChatTitleValue} onChange={e => setEditingChatTitleValue(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') confirmRenameChatTitle(chat.id); if (e.key === 'Escape') { setEditingChatTitleId(null); setEditingChatTitleValue(''); } }} onBlur={() => confirmRenameChatTitle(chat.id)} onClick={e => e.stopPropagation()} className={`text-xs font-light bg-transparent border-none focus:outline-none w-full min-w-0 ${darkMode ? 'text-white' : 'text-black'}`} maxLength={50} />
                       ) : (
                         <span className={`text-xs font-light truncate max-w-[100px] ${activeChatId === chat.id ? 'font-normal' : theme.textSecondary}`}>{chat.title}</span>
                       )}
                     </div>
                     <div className="flex items-center gap-0.5 opacity-0 group-hover/chat:opacity-100 transition-all duration-200 shrink-0">
-                      <button
-                        onClick={e => startRenameChatTitle(e, chat)}
-                        title="Renomear"
-                        className={`p-1 hover:text-current transition-colors ${theme.textMuted}`}
-                      >
-                        <Pencil size={11} />
-                      </button>
-                      <button onClick={e => { e.stopPropagation(); setItemToDelete({ type: 'chat', data: chat }); }} className="p-1 hover:text-red-500 transition-all duration-200">
-                        <Trash2 size={12} />
-                      </button>
+                      <button onClick={e => startRenameChatTitle(e, chat)} title="Renomear" className={`p-1 hover:text-current transition-colors ${theme.textMuted}`}><Pencil size={11} /></button>
+                      <button onClick={e => { e.stopPropagation(); setItemToDelete({ type: 'chat', data: chat }); }} className="p-1 hover:text-red-500 transition-all duration-200"><Trash2 size={12} /></button>
                     </div>
                   </div>
                 ))}
               </div>
             </div>
           </div>
-
-          {/* Footer */}
           <div className={`px-8 shrink-0 border-t ${theme.border}`}>
             {displayName && (
               <div className={`pt-4 pb-2 flex items-center gap-2 ${theme.textSecondary}`}>
@@ -1008,8 +1009,6 @@ export default function App() {
             </div>
           </div>
         </div>
-
-        {/* Rail mode - completamente removido */}
         {!isSidebarOpen && null}
       </aside>
 
@@ -1071,23 +1070,28 @@ export default function App() {
                   key={i} msg={msg} index={i} darkMode={darkMode} theme={theme}
                   onEdit={handleEdit} isEditing={editingMsgIndex === i}
                   editValue={editValue} setEditValue={setEditValue}
-                  onEditSave={handleEditSave} onEditCancel={handleEditCancel} isLoading={isLoading}
+                  onEditSave={handleEditSave} onEditCancel={handleEditCancel} isLoading={isLoading || isStreaming}
                 />
               ))}
             </div>
           )}
 
-          {/* Indicador de carregamento com texto dinâmico */}
-          {isLoading && (
+          {/* Indicador de status sequence ou streaming */}
+          {(isLoading || isStreaming) && (
             <div className="flex items-center gap-3 mt-12">
               <div className="flex gap-1">
                 <div className={`w-1.5 h-1.5 ${darkMode ? 'bg-white/40' : 'bg-black/60'} rounded-full animate-bounce [animation-delay:-0.3s]`} />
                 <div className={`w-1.5 h-1.5 ${darkMode ? 'bg-white/40' : 'bg-black/60'} rounded-full animate-bounce [animation-delay:-0.15s]`} />
                 <div className={`w-1.5 h-1.5 ${darkMode ? 'bg-white/40' : 'bg-black/60'} rounded-full animate-bounce`} />
               </div>
-              {getLoadingText() && (
+              {statusMessage && (
                 <span className={`text-xs font-light tracking-wide ${theme.textSecondary} animate-pulse`}>
-                  {getLoadingText()}
+                  {statusMessage}
+                </span>
+              )}
+              {isStreaming && !statusMessage && (
+                <span className={`text-xs font-light tracking-wide ${theme.textSecondary} animate-pulse`}>
+                  Gerando resposta...
                 </span>
               )}
             </div>
@@ -1098,17 +1102,12 @@ export default function App() {
         {/* Input */}
         <footer className="p-10 pt-4">
           <div className="max-w-3xl mx-auto">
-
             <ModelToggle model={model} onChange={setModel} authUser={authUser} darkMode={darkMode} />
-
-            {/* Erro visível ao usuário */}
             {sendError && (
               <p className="text-red-400 text-xs mb-3 flex items-center gap-1.5">
                 <AlertTriangle size={12} />{sendError}
               </p>
             )}
-
-            {/* Status de upload */}
             {uploadStatus && (
               <div className={`mb-3 text-xs flex items-center gap-2 ${uploadStatus.type === 'error' ? 'text-red-400' : uploadStatus.type === 'success' ? 'text-emerald-400' : 'text-amber-400'}`}>
                 {uploadStatus.type === 'uploading' && <Loader2 size={12} className="animate-spin" />}
@@ -1117,7 +1116,6 @@ export default function App() {
                 <span>{uploadStatus.message}</span>
               </div>
             )}
-
             <div className={`relative flex items-end border-b ${theme.inputBorder} pb-8 ${theme.inputFocus} transition-all duration-500`}>
               <textarea
                 ref={textareaRef} value={input} onChange={handleInput} onKeyDown={handleKeyDown} rows={1}
@@ -1126,13 +1124,12 @@ export default function App() {
               />
               <button
                 onClick={handleSend}
-                disabled={isLoading || !input.trim()}
-                className={`p-2 mb-3 transition-all ${(isLoading || !input.trim()) ? theme.textMuted : (darkMode ? 'text-white hover:scale-110' : 'text-black hover:scale-110')}`}
+                disabled={isLoading || isStreaming || !input.trim()}
+                className={`p-2 mb-3 transition-all ${(isLoading || isStreaming || !input.trim()) ? theme.textMuted : (darkMode ? 'text-white hover:scale-110' : 'text-black hover:scale-110')}`}
               >
-                {isLoading ? <Loader2 size={20} className="animate-spin" /> : input.trim() ? <Send size={20} strokeWidth={1.5} /> : <Mic size={20} strokeWidth={1.5} />}
+                {(isLoading || isStreaming) ? <Loader2 size={20} className="animate-spin" /> : input.trim() ? <Send size={20} strokeWidth={1.5} /> : <Mic size={20} strokeWidth={1.5} />}
               </button>
             </div>
-
             <div className={`mt-5 flex justify-between items-center text-[9px] ${theme.textMuted} font-bold tracking-[0.2em] uppercase`}>
               <span>enter para enviar · shift+enter nova linha</span>
               <div className="flex items-center gap-4">

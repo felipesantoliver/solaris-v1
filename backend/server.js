@@ -1,6 +1,5 @@
 // ============================================================
-//  server.js — Solaris Backend 
-//  Agora com busca semântica por chunks de arquivos (embedding)
+//  server.js — Solaris Backend com Streaming SSE
 // ============================================================
 
 import { setDefaultResultOrder } from 'dns';
@@ -20,7 +19,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// ─── Cache do System Prompt (apenas parte estática) ──────────────────────────
+// ─── Cache do System Prompt ──────────────────────────────────────────
 const SYSTEM_PROMPT_CACHE_TTL = 60000;
 const systemPromptCache = new Map();
 
@@ -66,7 +65,7 @@ setInterval(() => {
   if (deleted) console.log(`🧹 Cache limpo: ${deleted} entradas`);
 }, 5 * 60 * 1000);
 
-// ─── Gemini (Chat + Embedding) ───────────────────────────────────────────────
+// ─── Gemini (Chat + Embedding + Streaming) ───────────────────────────────
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 if (!GEMINI_API_KEY) throw new Error('❌ GEMINI_API_KEY não definida');
 
@@ -75,13 +74,10 @@ const MODELS = {
   pro: 'gemini-3-flash-preview',
 };
 
-function geminiUrl(modelKey) {
+function geminiUrl(modelKey, stream = false) {
   const model = MODELS[modelKey] || MODELS.flash;
-  return `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
-}
-
-function geminiEmbeddingUrl() {
-  return `https://generativelanguage.googleapis.com/v1beta/models/embedding-001:embedContent?key=${GEMINI_API_KEY}`;
+  const base = `https://generativelanguage.googleapis.com/v1beta/models/${model}`;
+  return stream ? `${base}:streamGenerateContent?key=${GEMINI_API_KEY}&alt=sse` : `${base}:generateContent?key=${GEMINI_API_KEY}`;
 }
 
 function buildGeminiBody(messages, systemPrompt) {
@@ -113,60 +109,73 @@ async function withRetry(fn, maxRetries = 3, baseDelay = 3000) {
   }
 }
 
-async function geminiChat(messages, systemPrompt, modelKey = 'flash') {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 30000);
-  try {
-    const res = await withRetry(() =>
-      fetch(geminiUrl(modelKey), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(buildGeminiBody(messages, systemPrompt)),
-        signal: controller.signal,
-      })
-    );
-    if (!res.ok) {
-      const err = new Error(`Erro na IA: ${res.status}`);
-      err.status = res.status;
-      throw err;
+// Streaming da resposta do Gemini (SSE)
+async function* streamGeminiChat(messages, systemPrompt, modelKey = 'flash') {
+  const url = geminiUrl(modelKey, true);
+  const body = buildGeminiBody(messages, systemPrompt);
+
+  const response = await withRetry(() =>
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  );
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Gemini streaming error: ${response.status} - ${errorText}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const data = line.slice(6);
+        if (data === '[DONE]') return;
+        try {
+          const parsed = JSON.parse(data);
+          const chunk = parsed.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (chunk) yield chunk;
+        } catch (e) {
+          // ignora linhas inválidas
+        }
+      }
     }
-    const data = await res.json();
-    return data.candidates[0].content.parts[0].text;
-  } catch (err) {
-    if (err.name === 'AbortError') {
-      const timeoutErr = new Error('Timeout ao chamar IA');
-      timeoutErr.status = 504;
-      throw timeoutErr;
-    }
-    throw err;
-  } finally {
-    clearTimeout(timeout);
   }
 }
 
+// ─── Embedding e busca semântica ──────────────────────────────────────
 async function generateEmbedding(text) {
-  const response = await fetch(geminiEmbeddingUrl(), {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/embedding-001:embedContent?key=${GEMINI_API_KEY}`;
+  const response = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ model: 'models/embedding-001', content: { parts: [{ text }] } }),
   });
-  if (!response.ok) {
-    throw new Error(`Erro ao gerar embedding: ${response.status}`);
-  }
+  if (!response.ok) throw new Error(`Erro ao gerar embedding: ${response.status}`);
   const data = await response.json();
-  return data.embedding.values; // array de floats
+  return data.embedding.values;
 }
 
-// ─── Chunking e busca semântica ──────────────────────────────────────────────
 function splitTextIntoChunks(text, chunkSize = 500, overlap = 100) {
-  if (!text || text.length === 0) return [];
+  if (!text) return [];
   const chunks = [];
   let start = 0;
   while (start < text.length) {
     let end = start + chunkSize;
     if (end > text.length) end = text.length;
     let chunk = text.slice(start, end);
-    // tenta quebrar em final de frase
     const lastPeriod = chunk.lastIndexOf('.');
     if (lastPeriod > chunkSize * 0.7 && end < text.length) {
       chunk = text.slice(start, start + lastPeriod + 1);
@@ -182,8 +191,7 @@ function splitTextIntoChunks(text, chunkSize = 500, overlap = 100) {
 
 async function indexFileChunks(fileId, text) {
   const chunks = splitTextIntoChunks(text);
-  if (chunks.length === 0) return;
-  // Remove chunks antigos
+  if (!chunks.length) return;
   await runAsync('DELETE FROM file_chunks WHERE file_id = $1', [fileId]);
   for (let i = 0; i < chunks.length; i++) {
     try {
@@ -199,7 +207,6 @@ async function indexFileChunks(fileId, text) {
   console.log(`✅ Indexados ${chunks.length} chunks para arquivo ${fileId}`);
 }
 
-// Cálculo de similaridade de cosseno entre dois vetores
 function cosineSimilarity(vecA, vecB) {
   if (!vecA || !vecB || vecA.length !== vecB.length) return 0;
   let dot = 0, magA = 0, magB = 0;
@@ -214,15 +221,7 @@ function cosineSimilarity(vecA, vecB) {
 
 async function searchRelevantChunks(projectId, query, limit = 3) {
   if (!projectId) return [];
-  // Gera embedding da consulta
-  let queryEmbedding;
-  try {
-    queryEmbedding = await generateEmbedding(query);
-  } catch (err) {
-    console.error('Erro ao gerar embedding da query:', err.message);
-    return [];
-  }
-  // Busca todos os chunks dos arquivos do projeto
+  const queryEmbedding = await generateEmbedding(query);
   const chunks = await allAsync(
     `SELECT fc.chunk_text, fc.embedding 
      FROM file_chunks fc
@@ -231,7 +230,6 @@ async function searchRelevantChunks(projectId, query, limit = 3) {
     [projectId]
   );
   if (!chunks.length) return [];
-  // Calcula similaridade
   const withScores = chunks.map(c => ({
     text: c.chunk_text,
     score: cosineSimilarity(queryEmbedding, JSON.parse(c.embedding)),
@@ -240,26 +238,21 @@ async function searchRelevantChunks(projectId, query, limit = 3) {
   return withScores.slice(0, limit).map(c => c.text);
 }
 
-// ─── Otimização de contexto (histórico) ──────────────────────────────────────
+// ─── Otimização de contexto ───────────────────────────────────────────
 const MAX_CONTEXT_MESSAGES = 6;
 
 function selectContextWindow(history) {
   if (!Array.isArray(history) || history.length === 0) return [];
-  const valid = history.filter(m =>
-    m && typeof m.role === 'string' && typeof m.content === 'string' && m.content.trim().length > 0
-  );
+  const valid = history.filter(m => m?.role && m?.content?.trim());
   if (valid.length === 0) return [];
   const deduped = valid.filter((m, i) => {
     if (i === 0) return true;
     const prev = valid[i - 1];
     return !(prev.role === m.role && prev.content.trim() === m.content.trim());
   });
-  if (deduped.length <= MAX_CONTEXT_MESSAGES) {
-    console.log(`📦 Context window: ${deduped.length} msgs`);
-    return deduped;
-  }
-  const lastUserIdx = [...deduped].map((m, i) => ({ m, i })).filter(x => x.m.role === 'user').at(-1)?.i ?? -1;
-  const lastModelIdx = [...deduped].map((m, i) => ({ m, i })).filter(x => x.m.role === 'assistant').at(-1)?.i ?? -1;
+  if (deduped.length <= MAX_CONTEXT_MESSAGES) return deduped;
+  const lastUserIdx = deduped.map((m, i) => ({ m, i })).filter(x => x.m.role === 'user').at(-1)?.i ?? -1;
+  const lastModelIdx = deduped.map((m, i) => ({ m, i })).filter(x => x.m.role === 'assistant').at(-1)?.i ?? -1;
   const anchorIndices = new Set();
   if (lastUserIdx >= 0) anchorIndices.add(lastUserIdx);
   if (lastModelIdx >= 0) anchorIndices.add(lastModelIdx);
@@ -267,15 +260,10 @@ function selectContextWindow(history) {
   const windowIndices = new Set();
   for (let i = windowStart; i < deduped.length; i++) windowIndices.add(i);
   for (const idx of anchorIndices) windowIndices.add(idx);
-  const selected = [...windowIndices].sort((a, b) => a - b).map(i => ({
-    role: deduped[i].role,
-    content: deduped[i].content
-  }));
-  console.log(`📦 Context window: ${selected.length}/${deduped.length} msgs`);
-  return selected;
+  return [...windowIndices].sort((a, b) => a - b).map(i => ({ role: deduped[i].role, content: deduped[i].content }));
 }
 
-// ─── CORS ────────────────────────────────────────────────────────────────────
+// ─── CORS ──────────────────────────────────────────────────────────────
 const corsOptions = {
   origin: process.env.FRONTEND_URL || '*',
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
@@ -288,7 +276,7 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-// ─── Upload ──────────────────────────────────────────────────────────────────
+// ─── Upload ───────────────────────────────────────────────────────────
 const uploadsDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 const upload = multer({
@@ -303,7 +291,7 @@ const upload = multer({
   },
 });
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────
 function resolveModelKey(req) {
   const requested = req.headers['x-model'];
   const userId = req.headers['x-user-id'];
@@ -311,7 +299,7 @@ function resolveModelKey(req) {
   return 'flash';
 }
 
-// ─── Montagem do System Prompt (parte estática, sem arquivos) ─────────────────
+// ─── Montagem do System Prompt ────────────────────────────────────────
 const PERSONALITY_GUIDE = {
   direto: 'Seja direto, objetivo e conciso. Sem rodeios.',
   tecnico: 'Use terminologia técnica precisa. Inclua detalhes de implementação quando relevante.',
@@ -370,7 +358,6 @@ function assembleBaseSystemPrompt({ settings, project, memories }) {
   return prompt;
 }
 
-// Busca a parte estática do system prompt com cache
 async function getBaseSystemPromptWithCache(userId, projectId) {
   if (!userId) {
     const [settings, project, memories] = await Promise.all([
@@ -394,31 +381,16 @@ async function getBaseSystemPromptWithCache(userId, projectId) {
   return systemPrompt;
 }
 
-// ─── Memórias automáticas ────────────────────────────────────────────────────
-const MEMORY_KEYWORDS = [
-  'importante', 'lembre-se', 'concluímos', 'aprendemos', 'descobrimos',
-  'fato', 'sabemos que', 'definimos', 'decidimos', 'sempre', 'nunca',
-  'padrão', 'regra', 'convenção', 'arquitetura', 'estrutura', 'configuração',
-];
+// ─── Memórias automáticas ─────────────────────────────────────────────
+const MEMORY_KEYWORDS = ['importante', 'lembre-se', 'concluímos', 'aprendemos', 'descobrimos', 'fato', 'sabemos que', 'definimos', 'decidimos', 'sempre', 'nunca', 'padrão', 'regra', 'convenção', 'arquitetura', 'estrutura', 'configuração'];
 
 async function extractMemories(projectId, response) {
   if (!projectId) return;
-  const candidates = response
-    .split(/[.!?]+\s+/)
-    .filter(s => s.length > 50 && MEMORY_KEYWORDS.some(k => s.toLowerCase().includes(k)))
-    .slice(0, 2);
+  const candidates = response.split(/[.!?]+\s+/).filter(s => s.length > 50 && MEMORY_KEYWORDS.some(k => s.toLowerCase().includes(k))).slice(0, 2);
   if (candidates.length) {
-    await Promise.all(
-      candidates.map(content =>
-        runAsync('INSERT INTO memories (project_id, content, source) VALUES ($1, $2, $3)', [projectId, content.trim(), 'auto'])
-          .catch(() => { })
-      )
-    );
+    await Promise.all(candidates.map(content => runAsync('INSERT INTO memories (project_id, content, source) VALUES ($1, $2, $3)', [projectId, content.trim(), 'auto']).catch(() => { })));
   }
-  await runAsync(
-    `DELETE FROM memories WHERE project_id = $1 AND id NOT IN (SELECT id FROM memories WHERE project_id = $1 ORDER BY created_at DESC LIMIT 20)`,
-    [projectId]
-  ).catch(() => { });
+  await runAsync(`DELETE FROM memories WHERE project_id = $1 AND id NOT IN (SELECT id FROM memories WHERE project_id = $1 ORDER BY created_at DESC LIMIT 20)`, [projectId]).catch(() => { });
 }
 
 function generateLocalTitle(firstMessage) {
@@ -440,7 +412,7 @@ async function autoTitle(chatId, firstMessage) {
   } catch { }
 }
 
-// ─── ROTAS ───────────────────────────────────────────────────────────────────
+// ─── ROTAS ──────────────────────────────────────────────────────────────
 app.get('/api/health', (_, res) => res.json({ status: 'ok' }));
 
 app.get('/api/settings', async (req, res, next) => {
@@ -457,14 +429,8 @@ app.post('/api/settings', async (req, res, next) => {
   if (!userId) return res.status(400).json({ error: 'x-user-id obrigatório' });
   const { personality = 'direto', custom_traits = '' } = req.body;
   try {
-    await runAsync(`
-      INSERT INTO user_settings (user_id, personality, custom_traits, updated_at)
-      VALUES ($1, $2, $3, NOW())
-      ON CONFLICT (user_id) DO UPDATE SET personality = $2, custom_traits = $3, updated_at = NOW()
-    `, [userId, personality, custom_traits]);
-    for (const key of systemPromptCache.keys()) {
-      if (key.startsWith(`${userId}:`)) systemPromptCache.delete(key);
-    }
+    await runAsync(`INSERT INTO user_settings (user_id, personality, custom_traits, updated_at) VALUES ($1, $2, $3, NOW()) ON CONFLICT (user_id) DO UPDATE SET personality = $2, custom_traits = $3, updated_at = NOW()`, [userId, personality, custom_traits]);
+    for (const key of systemPromptCache.keys()) if (key.startsWith(`${userId}:`)) systemPromptCache.delete(key);
     res.json({ ok: true });
   } catch (err) { next(err); }
 });
@@ -495,10 +461,7 @@ app.post('/api/projects', async (req, res, next) => {
   if (!name) return res.status(400).json({ error: 'name obrigatório' });
   try {
     const id = randomUUID();
-    await runAsync(
-      'INSERT INTO projects (id, user_id, name, objective, response_style, memory_mode) VALUES ($1,$2,$3,$4,$5,$6)',
-      [id, userId, name, objective || null, response_style, memory_mode]
-    );
+    await runAsync('INSERT INTO projects (id, user_id, name, objective, response_style, memory_mode) VALUES ($1,$2,$3,$4,$5,$6)', [id, userId, name, objective || null, response_style, memory_mode]);
     res.status(201).json(await getAsync('SELECT * FROM projects WHERE id = $1', [id]));
   } catch (err) { next(err); }
 });
@@ -509,11 +472,7 @@ app.patch('/api/projects/:id', async (req, res, next) => {
   try {
     const project = await getAsync('SELECT id FROM projects WHERE id = $1 AND user_id = $2', [req.params.id, userId]);
     if (!project) return res.status(404).json({ error: 'Projeto não encontrado' });
-    await runAsync(`
-      UPDATE projects SET name=COALESCE($1,name), objective=COALESCE($2,objective),
-        response_style=COALESCE($3,response_style), memory_mode=COALESCE($4,memory_mode), updated_at=NOW()
-      WHERE id=$5
-    `, [name ?? null, objective ?? null, response_style ?? null, memory_mode ?? null, req.params.id]);
+    await runAsync(`UPDATE projects SET name=COALESCE($1,name), objective=COALESCE($2,objective), response_style=COALESCE($3,response_style), memory_mode=COALESCE($4,memory_mode), updated_at=NOW() WHERE id=$5`, [name ?? null, objective ?? null, response_style ?? null, memory_mode ?? null, req.params.id]);
     invalidateSystemPromptCache(userId, req.params.id);
     res.json(await getAsync('SELECT * FROM projects WHERE id = $1', [req.params.id]));
   } catch (err) { next(err); }
@@ -563,14 +522,86 @@ app.patch('/api/chats/:chatId/title', async (req, res, next) => {
 
 app.get('/api/messages/chat/:chatId', async (req, res, next) => {
   try {
-    const rows = await allAsync(
-      'SELECT id, role, content, edited, edit_history, created_at FROM messages WHERE chat_id = $1 ORDER BY created_at ASC',
-      [req.params.chatId]
-    );
+    const rows = await allAsync('SELECT id, role, content, edited, edit_history, created_at FROM messages WHERE chat_id = $1 ORDER BY created_at ASC', [req.params.chatId]);
     res.json(rows);
   } catch (err) { next(err); }
 });
 
+// ─── Endpoint com streaming (SSE) ──────────────────────────────────────
+app.post('/api/messages/stream', async (req, res, next) => {
+  const userId = req.headers['x-user-id'];
+  const modelKey = resolveModelKey(req);
+  const { project_id, chat_id, message } = req.body;
+  if (!chat_id || !message) {
+    return res.status(400).json({ error: 'chat_id e message obrigatórios' });
+  }
+  const projectId = (project_id && project_id !== 'none') ? project_id : null;
+
+  // Configura headers SSE
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'Access-Control-Allow-Origin': process.env.FRONTEND_URL || '*',
+  });
+
+  const sendEvent = (data) => {
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
+
+  try {
+    // Salva mensagem do usuário
+    await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'user', message]);
+
+    // Busca chunks relevantes
+    let relevantChunks = [];
+    if (projectId) {
+      relevantChunks = await searchRelevantChunks(projectId, message, 3);
+    }
+
+    const history = await allAsync('SELECT role, content FROM messages WHERE chat_id = $1 ORDER BY created_at ASC', [chat_id]);
+    const baseSystemPrompt = await getBaseSystemPromptWithCache(userId, projectId);
+
+    let finalSystemPrompt = baseSystemPrompt;
+    if (relevantChunks.length > 0) {
+      finalSystemPrompt += `\n=== CONTEXTO DOS ARQUIVOS ===\nOs seguintes trechos dos seus documentos podem ser relevantes para a pergunta atual:\n\n`;
+      relevantChunks.forEach((chunk, idx) => {
+        finalSystemPrompt += `[Trecho ${idx + 1}]\n${chunk}\n\n`;
+      });
+      finalSystemPrompt += `Utilize essas informações sempre que pertinente. Se não forem úteis, ignore-as.\n`;
+    }
+
+    const apiHistory = selectContextWindow(history);
+    let fullResponse = '';
+
+    // Itera sobre os chunks do streaming
+    for await (const chunk of streamGeminiChat(apiHistory, finalSystemPrompt, modelKey)) {
+      fullResponse += chunk;
+      sendEvent({ chunk });
+    }
+
+    // Salva a resposta completa no banco
+    await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'assistant', fullResponse]);
+    await runAsync('UPDATE chats SET updated_at = NOW() WHERE id = $1', [chat_id]);
+
+    const isFirst = history.length === 1;
+    if (isFirst) autoTitle(chat_id, message).catch(console.error);
+    if (projectId) {
+      extractMemories(projectId, fullResponse).catch(console.error);
+      invalidateSystemPromptCache(userId, projectId);
+    }
+
+    sendEvent({ done: true });
+    res.end();
+  } catch (err) {
+    console.error('Erro no streaming:', err);
+    sendEvent({ error: err.message || 'Erro interno' });
+    res.end();
+    next(err);
+  }
+});
+
+// ─── Endpoint tradicional (fallback) ──────────────────────────────────
 app.post('/api/messages', async (req, res, next) => {
   const userId = req.headers['x-user-id'];
   const modelKey = resolveModelKey(req);
@@ -582,7 +613,6 @@ app.post('/api/messages', async (req, res, next) => {
   try {
     await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'user', message]);
 
-    // Busca chunks relevantes (apenas se houver projeto)
     let relevantChunks = [];
     if (projectId) {
       relevantChunks = await searchRelevantChunks(projectId, message, 3);
@@ -591,18 +621,17 @@ app.post('/api/messages', async (req, res, next) => {
     const history = await allAsync('SELECT role, content FROM messages WHERE chat_id = $1 ORDER BY created_at ASC', [chat_id]);
     const baseSystemPrompt = await getBaseSystemPromptWithCache(userId, projectId);
 
-    // Monta prompt final com contexto dos arquivos
     let finalSystemPrompt = baseSystemPrompt;
     if (relevantChunks.length > 0) {
-      finalSystemPrompt += `\n=== CONTEXTO DOS ARQUIVOS ===\nOs seguintes trechos dos seus documentos podem ser relevantes para a pergunta atual:\n\n`;
+      finalSystemPrompt += `\n=== CONTEXTO DOS ARQUIVOS ===\n`;
       relevantChunks.forEach((chunk, idx) => {
         finalSystemPrompt += `[Trecho ${idx + 1}]\n${chunk}\n\n`;
       });
-      finalSystemPrompt += `Utilize essas informações sempre que pertinente. Se não forem úteis, ignore-as.\n`;
+      finalSystemPrompt += `Utilize essas informações sempre que pertinente.\n`;
     }
 
     const apiHistory = selectContextWindow(history);
-    const responseText = await geminiChat(apiHistory, finalSystemPrompt, modelKey);
+    const responseText = await geminiChat(apiHistory, finalSystemPrompt, modelKey); // função não-streaming
 
     await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'assistant', responseText]);
     await runAsync('UPDATE chats SET updated_at = NOW() WHERE id = $1', [chat_id]);
@@ -618,74 +647,7 @@ app.post('/api/messages', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-app.post('/api/messages/edit', async (req, res, next) => {
-  const userId = req.headers['x-user-id'];
-  const modelKey = resolveModelKey(req);
-  const { chat_id, project_id, message_index, new_content, original_content } = req.body;
-  if (!chat_id || !new_content || message_index === undefined)
-    return res.status(400).json({ error: 'chat_id, new_content e message_index obrigatórios' });
-
-  const projectId = (project_id && project_id !== 'none') ? project_id : null;
-
-  try {
-    const allMessages = await allAsync(
-      'SELECT id, role, content, edit_history FROM messages WHERE chat_id = $1 ORDER BY created_at ASC',
-      [chat_id]
-    );
-    if (message_index >= allMessages.length) return res.status(400).json({ error: 'Índice inválido' });
-
-    const targetMsg = allMessages[message_index];
-    if (targetMsg.role !== 'user') return res.status(400).json({ error: 'Só é possível editar mensagens do usuário' });
-
-    const editHistory = Array.isArray(targetMsg.edit_history) ? targetMsg.edit_history : [];
-    editHistory.push({ content: original_content || targetMsg.content, edited_at: new Date().toISOString() });
-
-    await runAsync(
-      'UPDATE messages SET content=$1, edited=TRUE, edit_history=$2, updated_at=NOW() WHERE id=$3',
-      [new_content, JSON.stringify(editHistory), targetMsg.id]
-    );
-
-    const idsToDelete = allMessages.slice(message_index + 1).map(m => m.id);
-    if (idsToDelete.length) {
-      await runAsync(`DELETE FROM messages WHERE id = ANY($1::int[])`, [idsToDelete]);
-    }
-
-    const cleanHistory = allMessages.slice(0, message_index + 1).map(m => ({
-      role: m.role,
-      content: m.id === targetMsg.id ? new_content : m.content,
-    }));
-
-    // Busca chunks relevantes para a nova pergunta editada
-    let relevantChunks = [];
-    if (projectId) {
-      relevantChunks = await searchRelevantChunks(projectId, new_content, 3);
-    }
-
-    const baseSystemPrompt = await getBaseSystemPromptWithCache(userId, projectId);
-    let finalSystemPrompt = baseSystemPrompt;
-    if (relevantChunks.length) {
-      finalSystemPrompt += `\n=== CONTEXTO DOS ARQUIVOS ===\n`;
-      relevantChunks.forEach((chunk, idx) => {
-        finalSystemPrompt += `[Trecho ${idx + 1}]\n${chunk}\n\n`;
-      });
-      finalSystemPrompt += `Utilize essas informações sempre que pertinente.\n`;
-    }
-
-    const apiHistory = selectContextWindow(cleanHistory);
-    const responseText = await geminiChat(apiHistory, finalSystemPrompt, modelKey);
-
-    await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'assistant', responseText]);
-    await runAsync('UPDATE chats SET updated_at = NOW() WHERE id = $1', [chat_id]);
-
-    if (projectId) {
-      extractMemories(projectId, responseText).catch(console.error);
-      invalidateSystemPromptCache(userId, projectId);
-    }
-
-    res.json({ response: responseText, model: modelKey });
-  } catch (err) { next(err); }
-});
-
+// ─── Outras rotas (arquivos, migrate, share) ─────────────────────────
 app.get('/api/files/:projectId', async (req, res, next) => {
   try {
     const rows = await allAsync('SELECT id, original_name, mime_type, size, created_at FROM files WHERE project_id = $1 ORDER BY created_at DESC', [req.params.projectId]);
@@ -712,11 +674,7 @@ app.post('/api/files/:projectId', upload.single('file'), async (req, res, next) 
       }
     }
     const fileId = randomUUID();
-    await runAsync(
-      'INSERT INTO files (id, project_id, original_name, mime_type, size, extracted_text, path) VALUES ($1,$2,$3,$4,$5,$6,$7)',
-      [fileId, req.params.projectId, req.file.originalname, req.file.mimetype, req.file.size, extractedText, req.file.path]
-    );
-    // Indexa os chunks do arquivo
+    await runAsync('INSERT INTO files (id, project_id, original_name, mime_type, size, extracted_text, path) VALUES ($1,$2,$3,$4,$5,$6,$7)', [fileId, req.params.projectId, req.file.originalname, req.file.mimetype, req.file.size, extractedText, req.file.path]);
     if (extractedText && extractedText.length > 0) {
       await indexFileChunks(fileId, extractedText);
     }
@@ -768,3 +726,37 @@ process.on('unhandledRejection', (reason) => console.error('Unhandled rejection:
     process.exit(1);
   }
 })();
+
+// Função auxiliar para chamada não-streaming (usada no fallback)
+async function geminiChat(messages, systemPrompt, modelKey = 'flash') {
+  const url = geminiUrl(modelKey, false);
+  const body = buildGeminiBody(messages, systemPrompt);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+  try {
+    const res = await withRetry(() =>
+      fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      })
+    );
+    if (!res.ok) {
+      const err = new Error(`Erro na IA: ${res.status}`);
+      err.status = res.status;
+      throw err;
+    }
+    const data = await res.json();
+    return data.candidates[0].content.parts[0].text;
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      const timeoutErr = new Error('Timeout ao chamar IA');
+      timeoutErr.status = 504;
+      throw timeoutErr;
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
