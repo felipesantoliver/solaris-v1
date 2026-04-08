@@ -31,53 +31,26 @@ async function safeJson(res) {
   return res.json();
 }
 
-// ================== UTILITÁRIO DE LIMPEZA (CORRIGIDO) ==================
-// Remove repetições do nome "Solaris" no início de parágrafos,
-// mantendo APENAS a primeira ocorrência como identificador do assistente.
+// ================== UTILITÁRIO DE LIMPEZA ==================
+// Remove TODAS as ocorrências do prefixo "Solaris" do conteúdo da mensagem.
+// O label "Solaris" já é exibido pelo cabeçalho do MessageBubble — não deve
+// aparecer dentro do texto em si.
 function cleanAssistantMessage(text) {
   if (!text) return text;
 
-  // Divide em linhas (respeitando \n, \r\n)
-  const lines = text.split(/\r?\n/);
-  const cleanedLines = [];
-  let firstSolarisFound = false;
-
-  // Padrão para detectar "Solaris" no início da linha (com ou sem espaços, dois pontos, "diz")
+  // Padrão para detectar "Solaris" no início de uma linha (com variações de pontuação)
   const solarisPrefixRegex = /^\s*Solaris\s*[:：]?\s*(diz\s*)?[:：]?\s*/i;
 
-  for (let i = 0; i < lines.length; i++) {
-    let line = lines[i];
-
-    // Se a linha começa com o padrão "Solaris"
+  const lines = text.split(/\r?\n/);
+  const cleanedLines = lines.map(line => {
     if (solarisPrefixRegex.test(line)) {
-      // Remove o prefixo "Solaris" da linha, mantendo o resto do conteúdo
-      const rest = line.replace(solarisPrefixRegex, "");
-
-      if (!firstSolarisFound) {
-        // Primeira ocorrência: adiciona "Solaris" como identificador e depois o restante (se houver)
-        cleanedLines.push("Solaris");
-        firstSolarisFound = true;
-        if (rest.trim()) {
-          cleanedLines.push(rest);
-        }
-      } else {
-        // Já temos o identificador, então só adicionamos o restante (sem "Solaris")
-        if (rest.trim()) {
-          cleanedLines.push(rest);
-        }
-      }
-    } else {
-      // Linha normal sem prefixo
-      cleanedLines.push(line);
+      return line.replace(solarisPrefixRegex, "");
     }
-  }
+    return line;
+  });
 
-  // Junta novamente e normaliza quebras de linha excessivas
-  let result = cleanedLines.join("\n");
-  result = result.replace(/\n{3,}/g, "\n\n");
-  
-  // Remove espaços extras no início e fim
-  return result.trim();
+  // Normaliza quebras de linha excessivas e remove espaços no início/fim
+  return cleanedLines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 // ─── Solar System ──────────────────────────────────────────────────────────
