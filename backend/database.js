@@ -119,7 +119,7 @@ export async function initDb() {
   const p = await getPool();
   const client = await p.connect();
   try {
-    // Tabela projects (com todas as colunas atuais)
+    // Tabela projects (com todas as colunas atuais + gemini_version)
     await client.query(`
       CREATE TABLE IF NOT EXISTS projects (
         id                 TEXT PRIMARY KEY,
@@ -131,6 +131,7 @@ export async function initDb() {
         tags               JSONB DEFAULT '[]',
         response_style     TEXT DEFAULT 'direto',
         memory_mode        TEXT DEFAULT 'projeto',
+        gemini_version     TEXT DEFAULT 'flash',
         created_at         TIMESTAMPTZ DEFAULT NOW(),
         updated_at         TIMESTAMPTZ DEFAULT NOW()
       );
@@ -243,12 +244,12 @@ export async function initDb() {
       `ALTER TABLE projects ADD COLUMN IF NOT EXISTS detailed_objective TEXT`,
       `ALTER TABLE projects ADD COLUMN IF NOT EXISTS tags JSONB DEFAULT '[]'`,
       `ALTER TABLE projects ADD COLUMN IF NOT EXISTS memory_mode TEXT DEFAULT 'projeto'`,
+      `ALTER TABLE projects ADD COLUMN IF NOT EXISTS gemini_version TEXT DEFAULT 'flash'`,
       `ALTER TABLE memories ADD COLUMN IF NOT EXISTS user_id TEXT`,
-      `ALTER TABLE memories ALTER COLUMN project_id DROP NOT NULL`,  // permite memória global
+      `ALTER TABLE memories ALTER COLUMN project_id DROP NOT NULL`,
     ];
     for (const sql of migrations) {
       await client.query(sql).catch((err) => {
-        // Ignora erros de coluna já existente ou outros inofensivos
         if (!err.message?.includes('already exists') && !err.message?.includes('duplicate column')) {
           console.warn(`⚠️ Migração ignorada: ${err.message}`);
         }

@@ -2,6 +2,7 @@
 //  server.js — Solaris Backend com Streaming SSE
 //  (versão com edição de projetos, memória global/nenhuma,
 //   fontes externas: links e texto, fila de jobs assíncrona)
+//  + Separação Gemini 2.5 (Flash) e Gemini 3 (Pro) por projeto
 // ============================================================
 
 import { setDefaultResultOrder } from 'dns';
@@ -74,19 +75,24 @@ setInterval(() => {
   if (deleted) console.log(`🧹 Cache limpo: ${deleted} entradas`);
 }, 5 * 60 * 1000);
 
-// ─── Gemini (Chat + Streaming) ───────────────────────────────────────
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-if (!GEMINI_API_KEY) throw new Error('❌ GEMINI_API_KEY não definida');
+// ─── Gemini (Chat + Streaming) com chaves separadas ───────────────────
+const GEMINI_FLASH_API_KEY = process.env.GEMINI_FLASH_API_KEY;
+const GEMINI_PRO_API_KEY = process.env.GEMINI_PRO_API_KEY;
 
-const MODELS = {
-  flash: 'gemini-2.5-flash',
-  pro: 'gemini-3-flash-preview',
-};
+if (!GEMINI_FLASH_API_KEY) throw new Error('❌ GEMINI_FLASH_API_KEY não definida');
+// GEMINI_PRO_API_KEY pode ser opcional, mas será validada ao tentar usar o modelo Pro
+
+function getGeminiConfig(modelKey) {
+  const key = modelKey === 'pro' ? GEMINI_PRO_API_KEY : GEMINI_FLASH_API_KEY;
+  if (!key) throw new Error(`Chave API não configurada para o modelo ${modelKey}`);
+  const modelName = modelKey === 'pro' ? 'gemini-3-flash-preview' : 'gemini-2.5-flash';
+  const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}`;
+  return { key, modelName, baseUrl };
+}
 
 function geminiUrl(modelKey, stream = false) {
-  const model = MODELS[modelKey] || MODELS.flash;
-  const base = `https://generativelanguage.googleapis.com/v1beta/models/${model}`;
-  return stream ? `${base}:streamGenerateContent?key=${GEMINI_API_KEY}&alt=sse` : `${base}:generateContent?key=${GEMINI_API_KEY}`;
+  const { baseUrl, key } = getGeminiConfig(modelKey);
+  return stream ? `${baseUrl}:streamGenerateContent?key=${key}&alt=sse` : `${baseUrl}:generateContent?key=${key}`;
 }
 
 function buildGeminiBody(messages, systemPrompt) {
@@ -236,11 +242,17 @@ const upload = multer({
   },
 });
 
-// ─── Helpers ──────────────────────────────────────────────────────────
-function resolveModelKey(req) {
-  const requested = req.headers['x-model'];
-  const userId = req.headers['x-user-id'];
-  if (requested === 'pro' && userId) return 'pro';
+// ─── Helper para resolver modelo baseado no projeto (prioridade) ──────
+async function resolveModelForRequest(userId, projectId, headerModel) {
+  if (projectId) {
+    const project = await getAsync('SELECT gemini_version FROM projects WHERE id = $1', [projectId]);
+    if (project && project.gemini_version) {
+      return project.gemini_version; // 'flash' ou 'pro'
+    }
+    return 'flash'; // fallback
+  }
+  // Sem projeto: usa o cabeçalho do frontend (respeitando login para Pro)
+  if (headerModel === 'pro' && userId) return 'pro';
   return 'flash';
 }
 
@@ -428,13 +440,13 @@ app.get('/api/projects/:id', async (req, res, next) => {
 app.post('/api/projects', async (req, res, next) => {
   const userId = req.headers['x-user-id'];
   if (!userId) return res.status(400).json({ error: 'x-user-id obrigatório' });
-  const { name, summary, detailed_objective, tags = [], response_style = 'direto', memory_mode = 'projeto' } = req.body;
+  const { name, summary, detailed_objective, tags = [], response_style = 'direto', memory_mode = 'projeto', gemini_version = 'flash' } = req.body;
   if (!name) return res.status(400).json({ error: 'name obrigatório' });
   try {
     const id = randomUUID();
     await runAsync(
-      'INSERT INTO projects (id, user_id, name, summary, detailed_objective, tags, response_style, memory_mode) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
-      [id, userId, name, summary || null, detailed_objective || null, JSON.stringify(tags), response_style, memory_mode]
+      'INSERT INTO projects (id, user_id, name, summary, detailed_objective, tags, response_style, memory_mode, gemini_version) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)',
+      [id, userId, name, summary || null, detailed_objective || null, JSON.stringify(tags), response_style, memory_mode, gemini_version]
     );
     res.status(201).json(await getAsync('SELECT * FROM projects WHERE id = $1', [id]));
   } catch (err) { next(err); }
@@ -442,7 +454,7 @@ app.post('/api/projects', async (req, res, next) => {
 
 app.patch('/api/projects/:id', async (req, res, next) => {
   const userId = req.headers['x-user-id'];
-  const { name, summary, detailed_objective, tags, response_style, memory_mode } = req.body;
+  const { name, summary, detailed_objective, tags, response_style, memory_mode, gemini_version } = req.body;
   try {
     const project = await getAsync('SELECT id, memory_mode FROM projects WHERE id = $1 AND user_id = $2', [req.params.id, userId]);
     if (!project) return res.status(404).json({ error: 'Projeto não encontrado' });
@@ -455,9 +467,10 @@ app.patch('/api/projects/:id', async (req, res, next) => {
         tags = COALESCE($4, tags),
         response_style = COALESCE($5, response_style),
         memory_mode = COALESCE($6, memory_mode),
+        gemini_version = COALESCE($7, gemini_version),
         updated_at = NOW()
-      WHERE id = $7`,
-      [name ?? null, summary ?? null, detailed_objective ?? null, tags ? JSON.stringify(tags) : null, response_style ?? null, newMemoryMode, req.params.id]
+      WHERE id = $8`,
+      [name ?? null, summary ?? null, detailed_objective ?? null, tags ? JSON.stringify(tags) : null, response_style ?? null, newMemoryMode, gemini_version ?? null, req.params.id]
     );
     invalidateSystemPromptCache(userId, req.params.id);
     res.json(await getAsync('SELECT * FROM projects WHERE id = $1', [req.params.id]));
@@ -516,12 +529,14 @@ app.get('/api/messages/chat/:chatId', async (req, res, next) => {
 // ─── Endpoint com streaming (SSE) ──────────────────────────────────────
 app.post('/api/messages/stream', async (req, res, next) => {
   const userId = req.headers['x-user-id'];
-  const modelKey = resolveModelKey(req);
   const { project_id, chat_id, message } = req.body;
   if (!chat_id || !message) {
     return res.status(400).json({ error: 'chat_id e message obrigatórios' });
   }
   const projectId = (project_id && project_id !== 'none') ? project_id : null;
+
+  // Determina o modelo com base no projeto (prioridade) ou no cabeçalho
+  const modelKey = await resolveModelForRequest(userId, projectId, req.headers['x-model']);
 
   // Buscar modo de memória do projeto (se existir)
   let memoryMode = 'projeto'; // padrão
@@ -592,11 +607,13 @@ app.post('/api/messages/stream', async (req, res, next) => {
 // ─── Endpoint tradicional (fallback) ──────────────────────────────────
 app.post('/api/messages', async (req, res, next) => {
   const userId = req.headers['x-user-id'];
-  const modelKey = resolveModelKey(req);
   const { project_id, chat_id, message } = req.body;
   if (!chat_id || !message) return res.status(400).json({ error: 'chat_id e message obrigatórios' });
 
   const projectId = (project_id && project_id !== 'none') ? project_id : null;
+
+  // Determina o modelo com base no projeto (prioridade) ou no cabeçalho
+  const modelKey = await resolveModelForRequest(userId, projectId, req.headers['x-model']);
 
   let memoryMode = 'projeto';
   if (projectId) {
