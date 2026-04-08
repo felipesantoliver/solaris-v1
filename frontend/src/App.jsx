@@ -31,17 +31,18 @@ async function safeJson(res) {
   return res.json();
 }
 
-// ================== UTILITÁRIO DE LIMPEZA (CORRIGIDO) ==================
-// Remove TODAS as ocorrências do prefixo "Solaris" do conteúdo da mensagem.
-// O label "Solaris" já é exibido pelo cabeçalho do MessageBubble.
+// ================== UTILITÁRIO DE LIMPEZA ==================
+// Remove TODAS as ocorrências do prefixo "Solaris" do conteúdo.
+// O cabeçalho "SOLARIS" já é exibido pelo MessageBubble — não deve aparecer no texto.
 function cleanAssistantMessage(text) {
   if (!text) return text;
   const solarisPrefixRegex = /^\s*Solaris\s*[:：]?\s*(diz\s*)?[:：]?\s*/i;
-  const lines = text.split(/\r?\n/);
-  const cleanedLines = lines.map(line =>
-    solarisPrefixRegex.test(line) ? line.replace(solarisPrefixRegex, "") : line
-  );
-  return cleanedLines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  return text
+    .split(/\r?\n/)
+    .map(line => solarisPrefixRegex.test(line) ? line.replace(solarisPrefixRegex, '') : line)
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 // ─── Solar System ──────────────────────────────────────────────────────────
@@ -725,6 +726,7 @@ export default function App() {
   const textareaRef = useRef(null);
   const fileInputRef = useRef(null);
   const moreProjectsRef = useRef(null);
+  const assistantMsgIdxRef = useRef(-1);
 
   useEffect(() => {
     localStorage.setItem('solaris_programming_mode', programmingMode);
@@ -753,8 +755,10 @@ export default function App() {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
-    let assistantMessageIndex = -1; // -1 = ainda não criado
     let rawAccumulator = '';
+    // Reseta o ref antes de começar
+    assistantMsgIdxRef.current = -1;
+
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -771,19 +775,24 @@ export default function App() {
             if (parsed.chunk) {
               rawAccumulator += parsed.chunk;
               const displayContent = cleanAssistantMessage(rawAccumulator);
-              if (assistantMessageIndex === -1) {
-                // Cria a mensagem e registra o índice fora do setMessages para evitar closure bug
+
+              if (assistantMsgIdxRef.current === -1) {
+                // Primeira vez: adiciona a mensagem e salva o índice no ref (fora do setMessages)
                 setMessages(prev => {
-                  assistantMessageIndex = prev.length;
+                  // Só cria se ainda não existe (guard contra double-invoke do StrictMode)
+                  if (assistantMsgIdxRef.current !== -1) {
+                    const updated = [...prev];
+                    updated[assistantMsgIdxRef.current] = { ...updated[assistantMsgIdxRef.current], content: displayContent };
+                    return updated;
+                  }
+                  assistantMsgIdxRef.current = prev.length;
                   return [...prev, { role: 'assistant', content: displayContent, model: modelKey }];
                 });
               } else {
-                const idx = assistantMessageIndex;
+                const idx = assistantMsgIdxRef.current;
                 setMessages(prev => {
                   const updated = [...prev];
-                  if (updated[idx]) {
-                    updated[idx] = { ...updated[idx], content: displayContent };
-                  }
+                  if (updated[idx]) updated[idx] = { ...updated[idx], content: displayContent };
                   return updated;
                 });
               }
@@ -792,14 +801,13 @@ export default function App() {
         }
       }
     }
-    // Limpeza final garantida
-    if (assistantMessageIndex !== -1) {
-      const idx = assistantMessageIndex;
+
+    // Limpeza final com texto completo acumulado
+    const idx = assistantMsgIdxRef.current;
+    if (idx !== -1) {
       setMessages(prev => {
         const updated = [...prev];
-        if (updated[idx]) {
-          updated[idx] = { ...updated[idx], content: cleanAssistantMessage(rawAccumulator) };
-        }
+        if (updated[idx]) updated[idx] = { ...updated[idx], content: cleanAssistantMessage(rawAccumulator) };
         return updated;
       });
     }
