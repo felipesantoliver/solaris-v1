@@ -33,7 +33,7 @@ async function safeJson(res) {
 
 // ================== UTILITÁRIO DE LIMPEZA ==================
 // Remove TODAS as ocorrências do prefixo "Solaris" do conteúdo.
-// O cabeçalho "SOLARIS" já é exibido pelo MessageBubble — não deve aparecer no texto.
+// O cabeçalho já é exibido pelo MessageBubble — não deve aparecer no texto.
 function cleanAssistantMessage(text) {
   if (!text) return text;
   const solarisPrefixRegex = /^\s*Solaris\s*[:：]?\s*(diz\s*)?[:：]?\s*/i;
@@ -727,6 +727,7 @@ export default function App() {
   const fileInputRef = useRef(null);
   const moreProjectsRef = useRef(null);
   const assistantMsgIdxRef = useRef(-1);
+  const newChatRef = useRef(null);
 
   useEffect(() => {
     localStorage.setItem('solaris_programming_mode', programmingMode);
@@ -756,7 +757,6 @@ export default function App() {
     const decoder = new TextDecoder();
     let buffer = '';
     let rawAccumulator = '';
-    // Reseta o ref antes de começar
     assistantMsgIdxRef.current = -1;
 
     while (true) {
@@ -775,11 +775,8 @@ export default function App() {
             if (parsed.chunk) {
               rawAccumulator += parsed.chunk;
               const displayContent = cleanAssistantMessage(rawAccumulator);
-
               if (assistantMsgIdxRef.current === -1) {
-                // Primeira vez: adiciona a mensagem e salva o índice no ref (fora do setMessages)
                 setMessages(prev => {
-                  // Só cria se ainda não existe (guard contra double-invoke do StrictMode)
                   if (assistantMsgIdxRef.current !== -1) {
                     const updated = [...prev];
                     updated[assistantMsgIdxRef.current] = { ...updated[assistantMsgIdxRef.current], content: displayContent };
@@ -801,8 +798,7 @@ export default function App() {
         }
       }
     }
-
-    // Limpeza final com texto completo acumulado
+    // Limpeza final
     const idx = assistantMsgIdxRef.current;
     if (idx !== -1) {
       setMessages(prev => {
@@ -819,8 +815,13 @@ export default function App() {
   const hasUserStartedChat = messages.some(m => m.role === 'user');
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => { setAuthUser(session?.user ?? null); setAuthReady(true); });
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, session) => { setAuthUser(session?.user ?? null); });
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setAuthUser(session?.user ?? null);
+      setAuthReady(true);
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, session) => {
+      setAuthUser(session?.user ?? null);
+    });
     return () => subscription.unsubscribe();
   }, []);
 
@@ -839,7 +840,7 @@ export default function App() {
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, isLoading, isStreaming]);
   useEffect(() => { localStorage.setItem('solaris_dark', darkMode); }, [darkMode]);
   useEffect(() => { const h = (e) => { if (moreProjectsRef.current && !moreProjectsRef.current.contains(e.target)) setShowMoreProjects(false); }; document.addEventListener('mousedown', h); return () => document.removeEventListener('mousedown', h); }, []);
-  useEffect(() => { if (authReady) fetchProjects(); }, [authReady, effectiveUserId]);
+  useEffect(() => { if (authReady) fetchProjects(); }, [authReady, effectiveUserId]); // eslint-disable-line
 
   async function fetchProjects() {
     try { const r = await fetch(`${API_BASE}/projects`, { headers: { 'x-user-id': effectiveUserId } }); if (!r.ok) { setProjects([]); return; } const d = await r.json(); setProjects(Array.isArray(d) ? d : []); } catch { setProjects([]); }
@@ -853,16 +854,26 @@ export default function App() {
   }, [activeProjectId]);
   useEffect(() => {
     if (!activeChatId) { setMessages([]); return; }
+    // Se este chat acabou de ser criado pelo handleSend, não busca do servidor
+    // (as mensagens já estão no state local)
+    if (newChatRef.current === activeChatId) {
+      newChatRef.current = null;
+      return;
+    }
+    // Não sobrescreve mensagens enquanto está em streaming
+    if (isStreaming) return;
     (async () => {
-      try { const r = await fetch(`${API_BASE}/messages/chat/${activeChatId}`, { headers: { 'x-user-id': effectiveUserId } }); if (!r.ok) return; const msgs = await r.json(); 
-        // Limpa as mensagens do assistente ao carregar do histórico
-        const cleanedMsgs = msgs.map(msg => 
+      try {
+        const r = await fetch(`${API_BASE}/messages/chat/${activeChatId}`, { headers: { 'x-user-id': effectiveUserId } });
+        if (!r.ok) return;
+        const msgs = await r.json();
+        const cleanedMsgs = msgs.map(msg =>
           msg.role === 'assistant' ? { ...msg, content: cleanAssistantMessage(msg.content) } : msg
         );
         setMessages(cleanedMsgs);
       } catch { }
     })();
-  }, [activeChatId]);
+  }, [activeChatId]); // eslint-disable-line
 
   async function createChat(projectId) {
     const endpoint = projectId ? `${API_BASE}/projects/${projectId}/chats` : `${API_BASE}/projects/none/chats`;
@@ -877,10 +888,27 @@ export default function App() {
     setSendError(''); setEditingMsgIndex(null); setInput(''); if (textareaRef.current) textareaRef.current.style.height = 'auto';
     let chatId = activeChatId;
     const projectId = activeProjectId;
-    if (!chatId) {
-      try { const nc = await createChat(projectId); setChatHistory(prev => { if (prev.find(c => c.id === nc.id)) return prev; return [nc, ...prev]; }); setActiveChatId(nc.id); chatId = nc.id; } catch (err) { setSendError(`Não foi possível iniciar conversa: ${err.message}`); setInput(text); return; }
-    }
+
+    // Adiciona a mensagem do usuário ANTES de qualquer setActiveChatId
+    // para evitar que o useEffect do activeChatId limpe o state
     setMessages(prev => [...prev, { role: 'user', content: text }]);
+
+    if (!chatId) {
+      try {
+        const nc = await createChat(projectId);
+        setChatHistory(prev => { if (prev.find(c => c.id === nc.id)) return prev; return [nc, ...prev]; });
+        chatId = nc.id;
+        // Marca no ref que este chat é novo — o useEffect não deve buscar mensagens do servidor
+        newChatRef.current = nc.id;
+        setActiveChatId(nc.id);
+      } catch (err) {
+        setSendError(`Não foi possível iniciar conversa: ${err.message}`);
+        setMessages(prev => prev.filter(m => m.content !== text || m.role !== 'user'));
+        setInput(text);
+        return;
+      }
+    }
+
     setIsLoading(true); await showStatusSequence(); setIsStreaming(true); setIsLoading(false);
     try { await streamResponse(chatId, projectId, text, model); } catch (err) {
       console.error('Streaming falhou, usando fallback:', err);
