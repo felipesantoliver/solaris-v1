@@ -1009,25 +1009,8 @@ export default function App() {
           </div>
         </div>
 
-        {/* Rail mode */}
-        {!isSidebarOpen && (
-          <div className="flex-1 flex flex-col items-center pt-12 gap-8 animate-in fade-in duration-700">
-            <div className={`w-8 h-8 rounded-full border ${theme.orbit} flex items-center justify-center animate-pulse`}>
-              <div className={`w-1.5 h-1.5 rounded-full ${darkMode ? 'bg-white/40' : 'bg-black/30'}`} />
-            </div>
-            <div className="flex flex-col gap-6 items-center">
-              <button onClick={handleNewChat} title="Novo chat" className={`p-2 rounded-lg transition-all ${darkMode ? 'text-white/30 hover:text-white hover:bg-white/5' : 'text-black/30 hover:text-black hover:bg-black/5'}`}>
-                <PencilLine size={18} strokeWidth={1.5} />
-              </button>
-              <button onClick={() => setIsSidebarOpen(true)} title="Ver histórico" className={`p-2 rounded-lg transition-all ${darkMode ? 'text-white/30 hover:text-white hover:bg-white/5' : 'text-black/30 hover:text-black hover:bg-black/5'}`}>
-                <History size={18} strokeWidth={1.5} />
-              </button>
-              <button onClick={() => { setIsSidebarOpen(true); setIsCreatingProject(true); }} title="Novo projeto" className={`p-2 rounded-lg transition-all ${darkMode ? 'text-white/30 hover:text-white hover:bg-white/5' : 'text-black/30 hover:text-black hover:bg-black/5'}`}>
-                <Folder size={18} strokeWidth={1.5} />
-              </button>
-            </div>
-          </div>
-        )}
+        {/* Rail mode - completamente removido */}
+        {!isSidebarOpen && null}
       </aside>
 
       {/* ── Main ── */}
