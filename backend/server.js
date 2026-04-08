@@ -898,40 +898,6 @@ async function geminiChat(messages, systemPrompt, modelKey = 'flash') {
 (async () => {
   try {
     await initDb();
-    // Adicionar colunas novas se não existirem (garantia extra)
-    const pool = (await import('./database.js')).pool;
-    const client = await pool.connect();
-    await client.query(`
-      ALTER TABLE projects ADD COLUMN IF NOT EXISTS summary TEXT;
-      ALTER TABLE projects ADD COLUMN IF NOT EXISTS detailed_objective TEXT;
-      ALTER TABLE projects ADD COLUMN IF NOT EXISTS tags JSONB DEFAULT '[]';
-      ALTER TABLE projects ADD COLUMN IF NOT EXISTS memory_mode TEXT DEFAULT 'projeto';
-      CREATE TABLE IF NOT EXISTS external_sources (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-        type TEXT NOT NULL CHECK (type IN ('url','text')),
-        title TEXT,
-        url TEXT,
-        content TEXT,
-        created_at TIMESTAMPTZ DEFAULT NOW()
-      );
-      ALTER TABLE memories ADD COLUMN IF NOT EXISTS user_id TEXT;
-      CREATE TABLE IF NOT EXISTS jobs (
-        id TEXT PRIMARY KEY,
-        type TEXT NOT NULL,
-        status TEXT DEFAULT 'pending',
-        payload JSONB NOT NULL,
-        result JSONB,
-        error TEXT,
-        retry_count INTEGER DEFAULT 0,
-        max_retries INTEGER DEFAULT 3,
-        priority INTEGER DEFAULT 0,
-        created_at TIMESTAMPTZ DEFAULT NOW(),
-        updated_at TIMESTAMPTZ DEFAULT NOW()
-      );
-    `).catch(e => console.warn('Migração de esquema (ignorável):', e.message));
-    client.release();
-
     // Inicia a fila de jobs
     const jobQueue = getJobQueue();
     console.log('📋 JobQueue inicializada e rodando');

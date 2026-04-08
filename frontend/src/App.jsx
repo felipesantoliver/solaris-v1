@@ -497,16 +497,11 @@ function MessageBubble_base({ msg, index, darkMode, theme, onEdit, isEditing, ed
   );
 }
 
-// ─── React.memo: evita re-render de mensagens antigas durante o streaming ──
+// React.memo com comparação simplificada para evitar re-renderizações durante streaming
 const MessageBubble = React.memo(MessageBubble_base, (prev, next) => {
   return (
     prev.msg.content === next.msg.content &&
-    prev.msg.edited === next.msg.edited &&
-    prev.isEditing === next.isEditing &&
-    prev.isLoading === next.isLoading &&
-    prev.darkMode === next.darkMode &&
-    prev.programmingMode === next.programmingMode &&
-    prev.editValue === next.editValue
+    prev.isEditing === next.isEditing
   );
 });
 
