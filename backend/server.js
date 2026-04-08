@@ -1,7 +1,7 @@
 // ============================================================
 //  server.js — Solaris Backend
 //  Modelos: gemini-2.5-flash (padrão) e gemini-3-flash-preview (pro)
-//  v1.5.0 — Cache do system prompt com invalidação automática
+//  v1.5.1 — Paralelização de inserts em extractMemories
 // ============================================================
 
 import { setDefaultResultOrder } from 'dns';
@@ -301,11 +301,10 @@ function assembleSystemPrompt({ settings, project, memories, files }) {
   return prompt;
 }
 
-// Função para obter o system prompt com cache
+// Função para obter o system prompt com cache (já paralelizado com Promise.all)
 async function getSystemPromptWithCache(userId, projectId) {
-  // Se não há userId (guest), não usar cache (cada guest é único, mas podemos cachear também)
+  // Se não há userId (guest), fallback sem cache
   if (!userId) {
-    // fallback: construir sem cache
     const [settings, project, memories, files] = await Promise.all([
       null,
       projectId ? getAsync('SELECT * FROM projects WHERE id = $1', [projectId]) : Promise.resolve(null),
@@ -318,7 +317,7 @@ async function getSystemPromptWithCache(userId, projectId) {
   const cached = getCachedSystemPrompt(userId, projectId);
   if (cached) return cached;
 
-  // Construir novo
+  // Paraleliza todas as consultas independentes
   const [settings, project, memories, files] = await Promise.all([
     getAsync('SELECT personality, custom_traits FROM user_settings WHERE user_id = $1', [userId]),
     projectId ? getAsync('SELECT * FROM projects WHERE id = $1', [projectId]) : Promise.resolve(null),
@@ -337,15 +336,25 @@ const MEMORY_KEYWORDS = [
   'padrão', 'regra', 'convenção', 'arquitetura', 'estrutura', 'configuração',
 ];
 
+// OTIMIZAÇÃO: paraleliza os inserts de memórias candidatas
 async function extractMemories(projectId, response) {
   if (!projectId) return;
   const candidates = response
     .split(/[.!?]+\s+/)
     .filter(s => s.length > 50 && MEMORY_KEYWORDS.some(k => s.toLowerCase().includes(k)))
     .slice(0, 2);
-  for (const content of candidates) {
-    await runAsync('INSERT INTO memories (project_id, content, source) VALUES ($1, $2, $3)', [projectId, content.trim(), 'auto']).catch(() => { });
+
+  // Executa todos os inserts em paralelo (Promise.all)
+  if (candidates.length > 0) {
+    await Promise.all(
+      candidates.map(content =>
+        runAsync('INSERT INTO memories (project_id, content, source) VALUES ($1, $2, $3)', [projectId, content.trim(), 'auto'])
+          .catch(() => { }) // silencia erros individuais
+      )
+    );
   }
+
+  // Mantém apenas as 20 memórias mais recentes
   await runAsync(
     `DELETE FROM memories WHERE project_id = $1 AND id NOT IN (SELECT id FROM memories WHERE project_id = $1 ORDER BY created_at DESC LIMIT 20)`,
     [projectId]
@@ -404,8 +413,7 @@ app.post('/api/settings', async (req, res, next) => {
       VALUES ($1, $2, $3, NOW())
       ON CONFLICT (user_id) DO UPDATE SET personality = $2, custom_traits = $3, updated_at = NOW()
     `, [userId, personality, custom_traits]);
-    // Invalida cache para todos os projetos deste usuário (pois settings são globais)
-    // Como não sabemos quais projectIds, invalidamos todos os caches com prefixo userId:
+    // Invalida cache para todos os projetos deste usuário
     for (const key of systemPromptCache.keys()) {
       if (key.startsWith(`${userId}:`)) systemPromptCache.delete(key);
     }
@@ -458,7 +466,6 @@ app.patch('/api/projects/:id', async (req, res, next) => {
         response_style=COALESCE($3,response_style), memory_mode=COALESCE($4,memory_mode), updated_at=NOW()
       WHERE id=$5
     `, [name ?? null, objective ?? null, response_style ?? null, memory_mode ?? null, req.params.id]);
-    // Invalida cache deste projeto
     invalidateSystemPromptCache(userId, req.params.id);
     res.json(await getAsync('SELECT * FROM projects WHERE id = $1', [req.params.id]));
   } catch (err) { next(err); }
@@ -529,7 +536,6 @@ app.post('/api/messages', async (req, res, next) => {
 
     const history = await allAsync('SELECT role, content FROM messages WHERE chat_id = $1 ORDER BY created_at ASC', [chat_id]);
 
-    // Usa cache do system prompt
     const systemPrompt = await getSystemPromptWithCache(userId, projectId);
 
     const apiHistory = selectContextWindow(history);
@@ -542,7 +548,6 @@ app.post('/api/messages', async (req, res, next) => {
     if (isFirst) autoTitle(chat_id, message).catch(console.error);
     if (projectId) {
       extractMemories(projectId, responseText).catch(console.error);
-      // Invalida cache após inserir memória (para próxima requisição)
       invalidateSystemPromptCache(userId, projectId);
     }
 
@@ -587,7 +592,6 @@ app.post('/api/messages/edit', async (req, res, next) => {
       content: m.id === targetMsg.id ? new_content : m.content,
     }));
 
-    // Usa cache do system prompt
     const systemPrompt = await getSystemPromptWithCache(userId, projectId);
 
     const apiHistory = selectContextWindow(cleanHistory);
@@ -633,7 +637,6 @@ app.post('/api/files/:projectId', upload.single('file'), async (req, res, next) 
       'INSERT INTO files (id, project_id, original_name, mime_type, size, extracted_text, path) VALUES ($1,$2,$3,$4,$5,$6,$7)',
       [fileId, req.params.projectId, req.file.originalname, req.file.mimetype, req.file.size, extractedText, req.file.path]
     );
-    // Invalida cache do projeto (novo arquivo adicionado)
     if (userId) invalidateSystemPromptCache(userId, req.params.projectId);
     res.status(201).json({ id: fileId, original_name: req.file.originalname, size: req.file.size });
   } catch (err) { next(err); }
