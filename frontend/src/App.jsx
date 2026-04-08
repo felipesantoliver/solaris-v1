@@ -790,6 +790,7 @@ export default function App() {
     const decoder = new TextDecoder();
     let buffer = '';
     let assistantMessageIndex = null;
+    let rawAccumulator = ''; // acumula texto bruto separado do exibido
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -804,14 +805,18 @@ export default function App() {
             const parsed = JSON.parse(data);
             if (parsed.error) throw new Error(parsed.error);
             if (parsed.chunk) {
+              rawAccumulator += parsed.chunk;
+              const displayContent = cleanAssistantMessage(rawAccumulator);
               if (assistantMessageIndex === null) {
-                const cleaned = cleanAssistantMessage(parsed.chunk);
-                setMessages(prev => { const newMsg = { role: 'assistant', content: cleaned, model: modelKey }; assistantMessageIndex = prev.length; return [...prev, newMsg]; });
+                setMessages(prev => {
+                  const newMsg = { role: 'assistant', content: displayContent, model: modelKey };
+                  assistantMessageIndex = prev.length;
+                  return [...prev, newMsg];
+                });
               } else {
                 setMessages(prev => {
                   const updated = [...prev];
-                  const raw = updated[assistantMessageIndex].content + parsed.chunk;
-                  updated[assistantMessageIndex] = { ...updated[assistantMessageIndex], content: cleanAssistantMessage(raw) };
+                  updated[assistantMessageIndex] = { ...updated[assistantMessageIndex], content: displayContent };
                   return updated;
                 });
               }
@@ -820,12 +825,11 @@ export default function App() {
         }
       }
     }
-    // Após o término do streaming, limpar o conteúdo final da mensagem do assistente
+    // Garante limpeza final com texto completo
     if (assistantMessageIndex !== null) {
       setMessages(prev => {
         const updated = [...prev];
-        const finalContent = cleanAssistantMessage(updated[assistantMessageIndex].content);
-        updated[assistantMessageIndex] = { ...updated[assistantMessageIndex], content: finalContent };
+        updated[assistantMessageIndex] = { ...updated[assistantMessageIndex], content: cleanAssistantMessage(rawAccumulator) };
         return updated;
       });
     }
@@ -1010,13 +1014,23 @@ export default function App() {
         <header className={`h-20 flex items-center justify-between px-6 md:px-10 border-b ${theme.border} transition-colors duration-500`}>
           <div className="flex items-center gap-4"><button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className={`p-2 rounded-lg transition-all ${darkMode ? 'text-white/60 hover:text-white hover:bg-white/5' : 'text-black/40 hover:text-black hover:bg-black/5'}`}><PanelLeft size={20} strokeWidth={1.5} /></button><div className="flex items-baseline gap-1 select-none"><span className="text-base font-medium tracking-tight">SOLARIS</span><span className={`text-[10px] font-bold ${theme.textMuted} tracking-tighter`}>V1</span></div>{activeProjectId && (<div className={`hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-lg ${darkMode ? 'bg-white/5' : 'bg-black/5'}`}><Folder size={12} className={theme.textMuted} /><span className={`text-xs font-light ${theme.textSecondary}`}>{projects.find(p => p.id === activeProjectId)?.name}</span><button onClick={() => setActiveProjectId(null)} className={`ml-1 ${theme.textMuted} hover:text-red-400 transition-colors`} title="Sair do projeto"><X size={10} /></button></div>)}</div>
           <div className="flex items-center gap-3">
+            {hasUserStartedChat && (
+              <button
+                onClick={handleShare}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border transition-all duration-200 ${theme.border} ${theme.textSecondary} hover:text-current hover:border-current opacity-60 hover:opacity-100`}
+                title="Copiar conversa"
+              >
+                <Share2 size={13} strokeWidth={1.5} />
+                <span className={`hidden sm:inline text-[10px] font-light tracking-widest uppercase`}>Compartilhar</span>
+              </button>
+            )}
             {authUser && (<button onClick={() => setShowSettingsModal(true)} className={`p-2 rounded-lg transition-all ${darkMode ? 'text-white/40 hover:text-white hover:bg-white/5' : 'text-black/40 hover:text-black hover:bg-black/5'}`} title="Configurações"><Settings size={18} strokeWidth={1.5} /></button>)}
             <button onClick={() => setDarkMode(d => !d)} className={`transition-all ${darkMode ? 'text-yellow-400 hover:text-yellow-200' : 'text-slate-400 hover:text-slate-600'}`}>{darkMode ? <Sun size={18} strokeWidth={1.5} /> : <Moon size={18} strokeWidth={1.5} />}</button>
             {authUser ? (<button onClick={handleLogout} className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border ${theme.border} text-xs font-light transition-all ${theme.textSecondary} hover:text-red-400 hover:border-red-400/20`}><LogOut size={14} strokeWidth={1.5} /><span className="hidden sm:inline">Sair</span></button>) : (<button onClick={() => setShowAuthModal(true)} className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border ${theme.border} text-xs font-light transition-all ${theme.textSecondary} hover:text-current hover:border-current`}><LogIn size={14} strokeWidth={1.5} /><span className="hidden sm:inline">Entrar</span></button>)}
           </div>
         </header>
         <div className="flex-1 relative overflow-y-auto px-6 md:px-20 py-10 custom-scrollbar transition-colors duration-500">
-          {hasUserStartedChat && (<div className="sticky top-0 z-30 flex justify-end pointer-events-none mb-[-40px]"><button onClick={handleShare} className={`pointer-events-auto flex items-center gap-2 px-4 py-2 rounded-full border ${theme.border} ${darkMode ? 'bg-white/5 hover:bg-white/10' : 'bg-black/5 hover:bg-black/10'} backdrop-blur-md transition-all group shadow-sm`}><Share2 size={14} className={`${theme.textSecondary} group-hover:text-current`} /><span className={`text-[10px] font-bold uppercase tracking-widest ${theme.textSecondary} group-hover:text-current`}>Compartilhar</span></button></div>)}
+          
           {messages.length === 0 ? <WelcomeScreen /> : (<div className="space-y-12">{messages.map((msg, i) => (<MessageBubble key={msg.id || i} msg={msg} index={i} darkMode={darkMode} theme={theme} onEdit={handleEdit} isEditing={editingMsgIndex === i} editValue={editValue} setEditValue={setEditValue} onEditSave={handleEditSave} onEditCancel={handleEditCancel} isLoading={isLoading || isStreaming} programmingMode={programmingMode} />))}</div>)}
           {(isLoading || isStreaming) && (<div className="flex items-center gap-3 mt-12"><div className="flex gap-1"><div className={`w-1.5 h-1.5 ${darkMode ? 'bg-white/40' : 'bg-black/60'} rounded-full animate-bounce [animation-delay:-0.3s]`} /><div className={`w-1.5 h-1.5 ${darkMode ? 'bg-white/40' : 'bg-black/60'} rounded-full animate-bounce [animation-delay:-0.15s]`} /><div className={`w-1.5 h-1.5 ${darkMode ? 'bg-white/40' : 'bg-black/60'} rounded-full animate-bounce`} /></div>{statusMessage && (<span className={`text-xs font-light tracking-wide ${theme.textSecondary} animate-pulse`}>{statusMessage}</span>)}{isStreaming && !statusMessage && (<span className={`text-xs font-light tracking-wide ${theme.textSecondary} animate-pulse`}>Gerando resposta...</span>)}</div>)}
           <div ref={messagesEndRef} />
