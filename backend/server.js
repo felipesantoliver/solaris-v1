@@ -1,7 +1,7 @@
 // ============================================================
 //  server.js — Solaris Backend
 //  Modelos: gemini-2.5-flash (padrão) e gemini-3-flash-preview (pro)
-//  v1.4.0 — Normalização de erros e logging seguro
+//  v1.5.0 — Cache do system prompt com invalidação automática
 // ============================================================
 
 import { setDefaultResultOrder } from 'dns';
@@ -20,6 +20,56 @@ import { errorHandler } from './utils/errorHandler.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3001;
+
+// ─── Cache do System Prompt (in-memory) ──────────────────────────────────────
+const SYSTEM_PROMPT_CACHE_TTL = 60000; // 60 segundos
+const systemPromptCache = new Map(); // chave: `${userId}:${projectId}`
+
+function getCacheKey(userId, projectId) {
+  return `${userId}:${projectId || 'none'}`;
+}
+
+function getCachedSystemPrompt(userId, projectId) {
+  const key = getCacheKey(userId, projectId);
+  const entry = systemPromptCache.get(key);
+  if (entry && Date.now() < entry.expiresAt) {
+    console.log(`💾 Cache hit para ${key}`);
+    return entry.data;
+  }
+  if (entry) {
+    // entrada expirada, remover
+    systemPromptCache.delete(key);
+  }
+  return null;
+}
+
+function setCachedSystemPrompt(userId, projectId, data) {
+  const key = getCacheKey(userId, projectId);
+  systemPromptCache.set(key, {
+    data,
+    expiresAt: Date.now() + SYSTEM_PROMPT_CACHE_TTL,
+  });
+  console.log(`💾 Cache set para ${key}, expira em ${SYSTEM_PROMPT_CACHE_TTL / 1000}s`);
+}
+
+function invalidateSystemPromptCache(userId, projectId) {
+  const key = getCacheKey(userId, projectId);
+  systemPromptCache.delete(key);
+  console.log(`🗑️ Cache invalidado para ${key}`);
+}
+
+// Limpeza periódica de entradas expiradas (a cada 5 minutos)
+setInterval(() => {
+  const now = Date.now();
+  let deleted = 0;
+  for (const [key, entry] of systemPromptCache.entries()) {
+    if (now >= entry.expiresAt) {
+      systemPromptCache.delete(key);
+      deleted++;
+    }
+  }
+  if (deleted > 0) console.log(`🧹 Limpeza de cache: ${deleted} entradas removidas`);
+}, 5 * 60 * 1000);
 
 // ─── Gemini ───────────────────────────────────────────────────────────────────
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
@@ -251,6 +301,36 @@ function assembleSystemPrompt({ settings, project, memories, files }) {
   return prompt;
 }
 
+// Função para obter o system prompt com cache
+async function getSystemPromptWithCache(userId, projectId) {
+  // Se não há userId (guest), não usar cache (cada guest é único, mas podemos cachear também)
+  if (!userId) {
+    // fallback: construir sem cache
+    const [settings, project, memories, files] = await Promise.all([
+      null,
+      projectId ? getAsync('SELECT * FROM projects WHERE id = $1', [projectId]) : Promise.resolve(null),
+      projectId ? allAsync('SELECT content FROM memories WHERE project_id = $1 ORDER BY created_at DESC LIMIT 5', [projectId]) : Promise.resolve([]),
+      projectId ? allAsync('SELECT original_name, extracted_text FROM files WHERE project_id = $1', [projectId]) : Promise.resolve([])
+    ]);
+    return assembleSystemPrompt({ settings, project, memories, files });
+  }
+
+  const cached = getCachedSystemPrompt(userId, projectId);
+  if (cached) return cached;
+
+  // Construir novo
+  const [settings, project, memories, files] = await Promise.all([
+    getAsync('SELECT personality, custom_traits FROM user_settings WHERE user_id = $1', [userId]),
+    projectId ? getAsync('SELECT * FROM projects WHERE id = $1', [projectId]) : Promise.resolve(null),
+    projectId ? allAsync('SELECT content FROM memories WHERE project_id = $1 ORDER BY created_at DESC LIMIT 5', [projectId]) : Promise.resolve([]),
+    projectId ? allAsync('SELECT original_name, extracted_text FROM files WHERE project_id = $1', [projectId]) : Promise.resolve([])
+  ]);
+
+  const systemPrompt = assembleSystemPrompt({ settings, project, memories, files });
+  setCachedSystemPrompt(userId, projectId, systemPrompt);
+  return systemPrompt;
+}
+
 const MEMORY_KEYWORDS = [
   'importante', 'lembre-se', 'concluímos', 'aprendemos', 'descobrimos',
   'fato', 'sabemos que', 'definimos', 'decidimos', 'sempre', 'nunca',
@@ -324,6 +404,11 @@ app.post('/api/settings', async (req, res, next) => {
       VALUES ($1, $2, $3, NOW())
       ON CONFLICT (user_id) DO UPDATE SET personality = $2, custom_traits = $3, updated_at = NOW()
     `, [userId, personality, custom_traits]);
+    // Invalida cache para todos os projetos deste usuário (pois settings são globais)
+    // Como não sabemos quais projectIds, invalidamos todos os caches com prefixo userId:
+    for (const key of systemPromptCache.keys()) {
+      if (key.startsWith(`${userId}:`)) systemPromptCache.delete(key);
+    }
     res.json({ ok: true, personality, custom_traits });
   } catch (err) { next(err); }
 });
@@ -373,6 +458,8 @@ app.patch('/api/projects/:id', async (req, res, next) => {
         response_style=COALESCE($3,response_style), memory_mode=COALESCE($4,memory_mode), updated_at=NOW()
       WHERE id=$5
     `, [name ?? null, objective ?? null, response_style ?? null, memory_mode ?? null, req.params.id]);
+    // Invalida cache deste projeto
+    invalidateSystemPromptCache(userId, req.params.id);
     res.json(await getAsync('SELECT * FROM projects WHERE id = $1', [req.params.id]));
   } catch (err) { next(err); }
 });
@@ -383,6 +470,7 @@ app.delete('/api/projects/:id', async (req, res, next) => {
     const project = await getAsync('SELECT id FROM projects WHERE id = $1 AND user_id = $2', [req.params.id, userId]);
     if (!project) return res.status(404).json({ error: 'Projeto não encontrado' });
     await runAsync('DELETE FROM projects WHERE id = $1', [req.params.id]);
+    invalidateSystemPromptCache(userId, req.params.id);
     res.json({ ok: true });
   } catch (err) { next(err); }
 });
@@ -439,33 +527,24 @@ app.post('/api/messages', async (req, res, next) => {
   try {
     await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'user', message]);
 
-    const [history, settings, project] = await Promise.all([
-      allAsync('SELECT role, content FROM messages WHERE chat_id = $1 ORDER BY created_at ASC', [chat_id]),
-      userId ? getAsync('SELECT personality, custom_traits FROM user_settings WHERE user_id = $1', [userId]) : Promise.resolve(null),
-      projectId ? getAsync('SELECT * FROM projects WHERE id = $1', [projectId]) : Promise.resolve(null)
-    ]);
+    const history = await allAsync('SELECT role, content FROM messages WHERE chat_id = $1 ORDER BY created_at ASC', [chat_id]);
 
-    let memories = [], files = [];
-    if (project) {
-      const memoryMode = project.memory_mode;
-      [memories, files] = await Promise.all([
-        memoryMode === 'global'
-          ? allAsync('SELECT content FROM memories ORDER BY created_at DESC LIMIT 8')
-          : allAsync('SELECT content FROM memories WHERE project_id = $1 ORDER BY created_at DESC LIMIT 5', [projectId]),
-        allAsync('SELECT original_name, extracted_text FROM files WHERE project_id = $1', [projectId])
-      ]);
-    }
+    // Usa cache do system prompt
+    const systemPrompt = await getSystemPromptWithCache(userId, projectId);
 
-    const sysPrompt = assembleSystemPrompt({ settings, project, memories, files });
     const apiHistory = selectContextWindow(history);
-    const responseText = await geminiChat(apiHistory, sysPrompt, modelKey);
+    const responseText = await geminiChat(apiHistory, systemPrompt, modelKey);
 
     await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'assistant', responseText]);
     await runAsync('UPDATE chats SET updated_at = NOW() WHERE id = $1', [chat_id]);
 
     const isFirst = history.length === 1;
     if (isFirst) autoTitle(chat_id, message).catch(console.error);
-    if (projectId) extractMemories(projectId, responseText).catch(console.error);
+    if (projectId) {
+      extractMemories(projectId, responseText).catch(console.error);
+      // Invalida cache após inserir memória (para próxima requisição)
+      invalidateSystemPromptCache(userId, projectId);
+    }
 
     res.json({ response: responseText, model: modelKey });
   } catch (err) { next(err); }
@@ -508,30 +587,19 @@ app.post('/api/messages/edit', async (req, res, next) => {
       content: m.id === targetMsg.id ? new_content : m.content,
     }));
 
-    const [settings, project] = await Promise.all([
-      userId ? getAsync('SELECT personality, custom_traits FROM user_settings WHERE user_id = $1', [userId]) : Promise.resolve(null),
-      projectId ? getAsync('SELECT * FROM projects WHERE id = $1', [projectId]) : Promise.resolve(null)
-    ]);
+    // Usa cache do system prompt
+    const systemPrompt = await getSystemPromptWithCache(userId, projectId);
 
-    let memories = [], files = [];
-    if (project) {
-      const memoryMode = project.memory_mode;
-      [memories, files] = await Promise.all([
-        memoryMode === 'global'
-          ? allAsync('SELECT content FROM memories ORDER BY created_at DESC LIMIT 8')
-          : allAsync('SELECT content FROM memories WHERE project_id = $1 ORDER BY created_at DESC LIMIT 5', [projectId]),
-        allAsync('SELECT original_name, extracted_text FROM files WHERE project_id = $1', [projectId])
-      ]);
-    }
-
-    const sysPrompt = assembleSystemPrompt({ settings, project, memories, files });
     const apiHistory = selectContextWindow(cleanHistory);
-    const responseText = await geminiChat(apiHistory, sysPrompt, modelKey);
+    const responseText = await geminiChat(apiHistory, systemPrompt, modelKey);
 
     await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'assistant', responseText]);
     await runAsync('UPDATE chats SET updated_at = NOW() WHERE id = $1', [chat_id]);
 
-    if (projectId) extractMemories(projectId, responseText).catch(console.error);
+    if (projectId) {
+      extractMemories(projectId, responseText).catch(console.error);
+      invalidateSystemPromptCache(userId, projectId);
+    }
 
     res.json({ response: responseText, model: modelKey });
   } catch (err) { next(err); }
@@ -545,6 +613,7 @@ app.get('/api/files/:projectId', async (req, res, next) => {
 });
 
 app.post('/api/files/:projectId', upload.single('file'), async (req, res, next) => {
+  const userId = req.headers['x-user-id'];
   if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo enviado' });
   try {
     const ext = path.extname(req.file.originalname).toLowerCase();
@@ -564,16 +633,20 @@ app.post('/api/files/:projectId', upload.single('file'), async (req, res, next) 
       'INSERT INTO files (id, project_id, original_name, mime_type, size, extracted_text, path) VALUES ($1,$2,$3,$4,$5,$6,$7)',
       [fileId, req.params.projectId, req.file.originalname, req.file.mimetype, req.file.size, extractedText, req.file.path]
     );
+    // Invalida cache do projeto (novo arquivo adicionado)
+    if (userId) invalidateSystemPromptCache(userId, req.params.projectId);
     res.status(201).json({ id: fileId, original_name: req.file.originalname, size: req.file.size });
   } catch (err) { next(err); }
 });
 
 app.delete('/api/files/:projectId/:fileId', async (req, res, next) => {
+  const userId = req.headers['x-user-id'];
   try {
     const file = await getAsync('SELECT * FROM files WHERE id = $1 AND project_id = $2', [req.params.fileId, req.params.projectId]);
     if (!file) return res.status(404).json({ error: 'Arquivo não encontrado' });
     if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
     await runAsync('DELETE FROM files WHERE id = $1', [req.params.fileId]);
+    if (userId) invalidateSystemPromptCache(userId, req.params.projectId);
     res.json({ ok: true });
   } catch (err) { next(err); }
 });
