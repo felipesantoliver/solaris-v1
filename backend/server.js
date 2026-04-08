@@ -3,6 +3,7 @@
 //  (versão com edição de projetos, memória global/nenhuma,
 //   fontes externas: links e texto, fila de jobs assíncrona)
 //  + Separação Gemini 2.5 (Flash) e Gemini 3 (Pro) por projeto
+//  + Limpeza automática de repetições "Solaris" nas respostas
 // ============================================================
 
 import { setDefaultResultOrder } from 'dns';
@@ -25,6 +26,55 @@ import { generateEmbedding, indexFileChunks, cosineSimilarity } from './lib/embe
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3001;
+
+// ================== UTILITÁRIO DE LIMPEZA (MESMO DO FRONTEND) ==================
+// Remove repetições do nome "Solaris" no início de parágrafos,
+// mantendo APENAS a primeira ocorrência como identificador do assistente.
+function cleanAssistantMessage(text) {
+  if (!text) return text;
+
+  // Divide em linhas (respeitando \n, \r\n)
+  const lines = text.split(/\r?\n/);
+  const cleanedLines = [];
+  let firstSolarisFound = false;
+
+  // Padrão para detectar "Solaris" no início da linha (com ou sem espaços, dois pontos, "diz")
+  const solarisPrefixRegex = /^\s*Solaris\s*[:：]?\s*(diz\s*)?[:：]?\s*/i;
+
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i];
+
+    // Se a linha começa com o padrão "Solaris"
+    if (solarisPrefixRegex.test(line)) {
+      // Remove o prefixo "Solaris" da linha, mantendo o resto do conteúdo
+      const rest = line.replace(solarisPrefixRegex, "");
+
+      if (!firstSolarisFound) {
+        // Primeira ocorrência: adiciona "Solaris" como identificador e depois o restante (se houver)
+        cleanedLines.push("Solaris");
+        firstSolarisFound = true;
+        if (rest.trim()) {
+          cleanedLines.push(rest);
+        }
+      } else {
+        // Já temos o identificador, então só adicionamos o restante (sem "Solaris")
+        if (rest.trim()) {
+          cleanedLines.push(rest);
+        }
+      }
+    } else {
+      // Linha normal sem prefixo
+      cleanedLines.push(line);
+    }
+  }
+
+  // Junta novamente e normaliza quebras de linha excessivas
+  let result = cleanedLines.join("\n");
+  result = result.replace(/\n{3,}/g, "\n\n");
+  
+  // Remove espaços extras no início e fim
+  return result.trim();
+}
 
 // ─── Cache do System Prompt ──────────────────────────────────────────
 const SYSTEM_PROMPT_CACHE_TTL = 60000;
@@ -522,7 +572,14 @@ app.patch('/api/chats/:chatId/title', async (req, res, next) => {
 app.get('/api/messages/chat/:chatId', async (req, res, next) => {
   try {
     const rows = await allAsync('SELECT id, role, content, edited, edit_history, created_at FROM messages WHERE chat_id = $1 ORDER BY created_at ASC', [req.params.chatId]);
-    res.json(rows);
+    // Opcional: limpar mensagens antigas do assistente que possam ter repetições
+    const cleanedRows = rows.map(msg => {
+      if (msg.role === 'assistant' && msg.content) {
+        return { ...msg, content: cleanAssistantMessage(msg.content) };
+      }
+      return msg;
+    });
+    res.json(cleanedRows);
   } catch (err) { next(err); }
 });
 
@@ -584,13 +641,15 @@ app.post('/api/messages/stream', async (req, res, next) => {
       sendEvent({ chunk });
     }
 
-    await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'assistant', fullResponse]);
+    // Limpa a resposta final antes de salvar no banco
+    const cleanedResponse = cleanAssistantMessage(fullResponse);
+    await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'assistant', cleanedResponse]);
     await runAsync('UPDATE chats SET updated_at = NOW() WHERE id = $1', [chat_id]);
 
     const isFirst = history.length === 1;
     if (isFirst) autoTitle(chat_id, message).catch(console.error);
     if (projectId || memoryMode === 'global') {
-      extractMemories(projectId, userId, fullResponse, memoryMode).catch(console.error);
+      extractMemories(projectId, userId, cleanedResponse, memoryMode).catch(console.error);
       invalidateSystemPromptCache(userId, projectId);
     }
 
@@ -642,7 +701,9 @@ app.post('/api/messages', async (req, res, next) => {
     }
 
     const apiHistory = selectContextWindow(history);
-    const responseText = await geminiChat(apiHistory, finalSystemPrompt, modelKey);
+    let responseText = await geminiChat(apiHistory, finalSystemPrompt, modelKey);
+    // Limpa a resposta antes de salvar e enviar
+    responseText = cleanAssistantMessage(responseText);
 
     await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'assistant', responseText]);
     await runAsync('UPDATE chats SET updated_at = NOW() WHERE id = $1', [chat_id]);
