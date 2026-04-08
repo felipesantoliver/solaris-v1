@@ -31,25 +31,16 @@ async function safeJson(res) {
   return res.json();
 }
 
-// ================== UTILITÁRIO DE LIMPEZA ==================
+// ================== UTILITÁRIO DE LIMPEZA (CORRIGIDO) ==================
 // Remove TODAS as ocorrências do prefixo "Solaris" do conteúdo da mensagem.
-// O label "Solaris" já é exibido pelo cabeçalho do MessageBubble — não deve
-// aparecer dentro do texto em si.
+// O label "Solaris" já é exibido pelo cabeçalho do MessageBubble.
 function cleanAssistantMessage(text) {
   if (!text) return text;
-
-  // Padrão para detectar "Solaris" no início de uma linha (com variações de pontuação)
   const solarisPrefixRegex = /^\s*Solaris\s*[:：]?\s*(diz\s*)?[:：]?\s*/i;
-
   const lines = text.split(/\r?\n/);
-  const cleanedLines = lines.map(line => {
-    if (solarisPrefixRegex.test(line)) {
-      return line.replace(solarisPrefixRegex, "");
-    }
-    return line;
-  });
-
-  // Normaliza quebras de linha excessivas e remove espaços no início/fim
+  const cleanedLines = lines.map(line =>
+    solarisPrefixRegex.test(line) ? line.replace(solarisPrefixRegex, "") : line
+  );
   return cleanedLines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
@@ -762,8 +753,8 @@ export default function App() {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
-    let assistantMessageIndex = null;
-    let rawAccumulator = ''; // acumula texto bruto separado do exibido
+    let assistantMessageIndex = -1; // -1 = ainda não criado
+    let rawAccumulator = '';
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -780,16 +771,19 @@ export default function App() {
             if (parsed.chunk) {
               rawAccumulator += parsed.chunk;
               const displayContent = cleanAssistantMessage(rawAccumulator);
-              if (assistantMessageIndex === null) {
+              if (assistantMessageIndex === -1) {
+                // Cria a mensagem e registra o índice fora do setMessages para evitar closure bug
                 setMessages(prev => {
-                  const newMsg = { role: 'assistant', content: displayContent, model: modelKey };
                   assistantMessageIndex = prev.length;
-                  return [...prev, newMsg];
+                  return [...prev, { role: 'assistant', content: displayContent, model: modelKey }];
                 });
               } else {
+                const idx = assistantMessageIndex;
                 setMessages(prev => {
                   const updated = [...prev];
-                  updated[assistantMessageIndex] = { ...updated[assistantMessageIndex], content: displayContent };
+                  if (updated[idx]) {
+                    updated[idx] = { ...updated[idx], content: displayContent };
+                  }
                   return updated;
                 });
               }
@@ -798,11 +792,14 @@ export default function App() {
         }
       }
     }
-    // Garante limpeza final com texto completo
-    if (assistantMessageIndex !== null) {
+    // Limpeza final garantida
+    if (assistantMessageIndex !== -1) {
+      const idx = assistantMessageIndex;
       setMessages(prev => {
         const updated = [...prev];
-        updated[assistantMessageIndex] = { ...updated[assistantMessageIndex], content: cleanAssistantMessage(rawAccumulator) };
+        if (updated[idx]) {
+          updated[idx] = { ...updated[idx], content: cleanAssistantMessage(rawAccumulator) };
+        }
         return updated;
       });
     }
