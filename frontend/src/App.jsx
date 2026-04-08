@@ -9,7 +9,7 @@ import { createClient } from '@supabase/supabase-js';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
-import 'highlight.js/styles/github-dark.css'; // Tema escuro para blocos de código
+import 'highlight.js/styles/github-dark.css';
 
 const supabase = createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -148,7 +148,7 @@ function AuthModal({ onClose, darkMode, onAuthSuccess }) {
   );
 }
 
-// ─── Settings Modal (personalidade global) ─────────────────────────────────
+// ─── Settings Modal (completo: perfil + personalidade + excluir todos chats) ──
 const PERSONALITIES = [
   { id: 'direto', label: 'Direto', desc: 'Respostas curtas e objetivas, sem rodeios.' },
   { id: 'tecnico', label: 'Técnico', desc: 'Terminologia precisa e detalhes de implementação.' },
@@ -159,12 +159,17 @@ const PERSONALITIES = [
   { id: 'empatico', label: 'Empático', desc: 'Caloroso, acolhedor e encorajador.' },
 ];
 
-function SettingsModal({ onClose, darkMode, effectiveUserId }) {
+function SettingsModal({ onClose, darkMode, effectiveUserId, authUser, onAuthUpdate }) {
+  const [activeTab, setActiveTab] = useState('profile');
+  const [displayName, setDisplayName] = useState('');
   const [personality, setPersonality] = useState('direto');
   const [customTraits, setCustomTraits] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState('');
+  const [deletingChats, setDeletingChats] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const t = {
     bg: darkMode ? 'bg-[#1a1a1a]' : 'bg-white',
@@ -172,35 +177,189 @@ function SettingsModal({ onClose, darkMode, effectiveUserId }) {
     muted: darkMode ? 'text-white/40' : 'text-black/50',
     text: darkMode ? 'text-white/80' : 'text-black/80',
     input: darkMode ? 'bg-white/5 border-white/10 text-white placeholder-white/30' : 'bg-black/3 border-black/10 text-black placeholder-black/30',
+    btn: darkMode ? 'bg-white text-black hover:bg-white/90' : 'bg-black text-white hover:bg-black/90',
+    btnOutline: darkMode ? 'border-white/20 hover:bg-white/5' : 'border-black/20 hover:bg-black/5',
+    btnDanger: 'bg-red-500 hover:bg-red-600 text-white',
     card: darkMode ? 'border-white/10 hover:border-white/30' : 'border-black/10 hover:border-black/30',
     cardActive: darkMode ? 'border-white bg-white/8' : 'border-black bg-black/6',
-    btn: darkMode ? 'bg-white text-black hover:bg-white/90' : 'bg-black text-white hover:bg-black/90',
   };
 
   useEffect(() => {
-    fetch(`${API_BASE}/settings`, { headers: { 'x-user-id': effectiveUserId } }).then(r => r.json()).then(d => { setPersonality(d.personality || 'direto'); setCustomTraits(d.custom_traits || ''); }).catch(() => { }).finally(() => setLoading(false));
-  }, []);
+    const fetchData = async () => {
+      setLoading(true);
+      try {
+        if (authUser) {
+          const name = authUser.user_metadata?.display_name || authUser.user_metadata?.full_name || authUser.email?.split('@')[0] || '';
+          setDisplayName(name);
+        }
+        const res = await fetch(`${API_BASE}/settings`, { headers: { 'x-user-id': effectiveUserId } });
+        const data = await res.json();
+        setPersonality(data.personality || 'direto');
+        setCustomTraits(data.custom_traits || '');
+      } catch (err) { console.error(err); }
+      setLoading(false);
+    };
+    fetchData();
+  }, [authUser, effectiveUserId]);
 
-  async function handleSave() {
+  const updateDisplayName = async () => {
+    if (!authUser) return;
     setSaving(true);
     try {
-      await fetch(`${API_BASE}/settings`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-user-id': effectiveUserId }, body: JSON.stringify({ personality, custom_traits: customTraits }) });
-      setSaved(true); setTimeout(() => setSaved(false), 2000);
-    } catch { }
+      const { error } = await supabase.auth.updateUser({
+        data: { display_name: displayName.trim() }
+      });
+      if (error) throw error;
+      if (onAuthUpdate) onAuthUpdate();
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (err) {
+      setError(err.message);
+    }
     setSaving(false);
-  }
+  };
+
+  const savePersonality = async () => {
+    setSaving(true);
+    try {
+      await fetch(`${API_BASE}/settings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-user-id': effectiveUserId },
+        body: JSON.stringify({ personality, custom_traits: customTraits })
+      });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (err) { setError(err.message); }
+    setSaving(false);
+  };
+
+  const deleteAllChats = async () => {
+    setDeletingChats(true);
+    try {
+      const res = await fetch(`${API_BASE}/user/chats`, {
+        method: 'DELETE',
+        headers: { 'x-user-id': effectiveUserId }
+      });
+      if (!res.ok) throw new Error('Falha ao excluir chats');
+      window.location.reload();
+    } catch (err) {
+      setError(err.message);
+      setDeletingChats(false);
+      setConfirmDelete(false);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-      <div className={`${t.bg} border ${t.border} w-full max-w-lg rounded-2xl p-8 shadow-2xl max-h-[90vh] overflow-y-auto`}>
-        <div className="flex items-center justify-between mb-8"><div><h2 className="text-base font-medium">Configurações</h2><p className={`text-xs font-light mt-0.5 ${t.muted}`}>Personalidade do Solaris</p></div><button onClick={onClose} className={`${t.muted} hover:text-current`}><X size={16} /></button></div>
-        {loading ? (<div className="flex justify-center py-8"><Loader2 size={20} className="animate-spin opacity-40" /></div>) : (<>
-          <p className={`text-[10px] uppercase tracking-[0.3em] font-light ${t.muted} mb-4`}>Estilo de resposta</p>
-          <div className="grid grid-cols-2 gap-2 mb-6">{PERSONALITIES.map(p => (<button key={p.id} onClick={() => setPersonality(p.id)} className={`text-left p-3 rounded-xl border transition-all duration-200 ${personality === p.id ? t.cardActive : t.card}`}><p className={`text-sm font-medium ${personality === p.id ? (darkMode ? 'text-white' : 'text-black') : t.text}`}>{p.label}</p><p className={`text-xs font-light mt-0.5 ${t.muted}`}>{p.desc}</p></button>))}</div>
-          <p className={`text-[10px] uppercase tracking-[0.3em] font-light ${t.muted} mb-3`}>Traços adicionais (opcional)</p>
-          <textarea value={customTraits} onChange={e => setCustomTraits(e.target.value)} placeholder="Ex: use analogias com esportes, responda em inglês técnico..." rows={3} className={`w-full px-4 py-3 rounded-xl border text-sm font-light focus:outline-none resize-none mb-6 ${t.input}`} />
-          <button onClick={handleSave} disabled={saving} className={`w-full py-3 rounded-xl text-sm font-medium transition-all flex items-center justify-center gap-2 ${t.btn}`}>{saving ? <Loader2 size={16} className="animate-spin" /> : saved ? <Check size={16} /> : <Save size={16} />}{saved ? 'Salvo!' : 'Salvar configurações'}</button>
-        </>)}
+      <div className={`${t.bg} border ${t.border} w-full max-w-lg rounded-2xl shadow-2xl max-h-[90vh] flex flex-col`}>
+        <div className="flex items-center justify-between p-6 border-b border-current/10">
+          <h2 className="text-base font-medium">Configurações</h2>
+          <button onClick={onClose} className={t.muted}><X size={16} /></button>
+        </div>
+        <div className="flex border-b border-current/10">
+          <button onClick={() => setActiveTab('profile')} className={`px-6 py-3 text-sm font-medium transition-all ${activeTab === 'profile' ? (darkMode ? 'border-b-2 border-white text-white' : 'border-b-2 border-black text-black') : t.muted}`}>Perfil</button>
+          <button onClick={() => setActiveTab('personality')} className={`px-6 py-3 text-sm font-medium transition-all ${activeTab === 'personality' ? (darkMode ? 'border-b-2 border-white text-white' : 'border-b-2 border-black text-black') : t.muted}`}>Personalidade</button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-6">
+          {loading ? (
+            <div className="flex justify-center py-8"><Loader2 size={20} className="animate-spin opacity-40" /></div>
+          ) : (
+            <>
+              {activeTab === 'profile' && (
+                <div className="space-y-6">
+                  {authUser ? (
+                    <>
+                      <div>
+                        <label className={`text-xs uppercase tracking-wider ${t.muted}`}>Nome de exibição</label>
+                        <input
+                          type="text"
+                          value={displayName}
+                          onChange={(e) => setDisplayName(e.target.value)}
+                          className={`w-full mt-1 px-4 py-2 rounded-xl border ${t.input}`}
+                          placeholder="Como você quer ser chamado?"
+                        />
+                        <p className={`text-[10px] mt-1 ${t.muted}`}>Este nome será usado nas boas-vindas.</p>
+                      </div>
+                      <button
+                        onClick={updateDisplayName}
+                        disabled={saving || !displayName.trim()}
+                        className={`w-full py-3 rounded-xl text-sm font-medium transition-all flex items-center justify-center gap-2 ${t.btn}`}
+                      >
+                        {saving ? <Loader2 size={16} className="animate-spin" /> : saved ? <Check size={16} /> : <Save size={16} />}
+                        {saved ? 'Salvo!' : 'Atualizar nome'}
+                      </button>
+                    </>
+                  ) : (
+                    <p className={`text-sm ${t.muted}`}>Faça login para editar seu perfil.</p>
+                  )}
+                  <div className="pt-4 border-t border-current/10">
+                    <h3 className="text-sm font-medium mb-2 text-red-400">Zona de risco</h3>
+                    <p className={`text-xs ${t.muted} mb-3`}>Apaga permanentemente todas as suas conversas. Projetos e arquivos não são afetados.</p>
+                    {!confirmDelete ? (
+                      <button
+                        onClick={() => setConfirmDelete(true)}
+                        className={`w-full py-2 rounded-xl text-sm font-medium transition-all ${t.btnDanger}`}
+                      >
+                        Excluir todos os chats
+                      </button>
+                    ) : (
+                      <div className="flex gap-3">
+                        <button
+                          onClick={() => setConfirmDelete(false)}
+                          className={`flex-1 py-2 rounded-xl border ${t.btnOutline}`}
+                        >
+                          Cancelar
+                        </button>
+                        <button
+                          onClick={deleteAllChats}
+                          disabled={deletingChats}
+                          className={`flex-1 py-2 rounded-xl ${t.btnDanger} flex items-center justify-center gap-2`}
+                        >
+                          {deletingChats ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
+                          Confirmar exclusão
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+              {activeTab === 'personality' && (
+                <div className="space-y-4">
+                  <p className={`text-[10px] uppercase tracking-[0.3em] font-light ${t.muted} mb-2`}>Estilo de resposta</p>
+                  <div className="grid grid-cols-2 gap-2 mb-6">
+                    {PERSONALITIES.map(p => (
+                      <button
+                        key={p.id}
+                        onClick={() => setPersonality(p.id)}
+                        className={`text-left p-3 rounded-xl border transition-all duration-200 ${personality === p.id ? t.cardActive : t.card}`}
+                      >
+                        <p className={`text-sm font-medium ${personality === p.id ? (darkMode ? 'text-white' : 'text-black') : t.text}`}>{p.label}</p>
+                        <p className={`text-xs font-light mt-0.5 ${t.muted}`}>{p.desc}</p>
+                      </button>
+                    ))}
+                  </div>
+                  <label className={`text-[10px] uppercase tracking-[0.3em] font-light ${t.muted}`}>Traços adicionais (opcional)</label>
+                  <textarea
+                    value={customTraits}
+                    onChange={e => setCustomTraits(e.target.value)}
+                    placeholder="Ex: use analogias com esportes, responda em inglês técnico..."
+                    rows={3}
+                    className={`w-full px-4 py-3 rounded-xl border text-sm font-light focus:outline-none resize-none ${t.input}`}
+                  />
+                  <button
+                    onClick={savePersonality}
+                    disabled={saving}
+                    className={`w-full py-3 rounded-xl text-sm font-medium transition-all flex items-center justify-center gap-2 ${t.btn}`}
+                  >
+                    {saving ? <Loader2 size={16} className="animate-spin" /> : saved ? <Check size={16} /> : <Save size={16} />}
+                    {saved ? 'Salvo!' : 'Salvar personalidade'}
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+          {error && <p className="text-red-400 text-xs mt-4">{error}</p>}
+        </div>
       </div>
     </div>
   );
@@ -231,14 +390,13 @@ function CodeBlock({ language, children }) {
   );
 }
 
-// ─── MessageBubble com suporte a Modo Programador (Markdown + código) ─────
+// ─── MessageBubble com suporte a Modo Programador ─────────────────────
 function MessageBubble({ msg, index, darkMode, theme, onEdit, isEditing, editValue, setEditValue, onEditSave, onEditCancel, isLoading, programmingMode }) {
   const [showHistory, setShowHistory] = useState(false);
   const editRef = useRef(null);
   useEffect(() => { if (isEditing && editRef.current) { editRef.current.focus(); editRef.current.style.height = 'auto'; editRef.current.style.height = editRef.current.scrollHeight + 'px'; } }, [isEditing]);
   const hasHistory = Array.isArray(msg.edit_history) && msg.edit_history.length > 0;
 
-  // Renderização condicional: se modo programador ativo e for mensagem do assistente, usa Markdown
   const renderContent = () => {
     if (msg.role === 'assistant' && programmingMode) {
       return (
@@ -257,7 +415,6 @@ function MessageBubble({ msg, index, darkMode, theme, onEdit, isEditing, editVal
                 </code>
               );
             },
-            // Headings de nível 3 (###) são tratados como nome de arquivo
             h3({ children, ...props }) {
               const isFileName = /^[`\w\-\.]+$/.test(children);
               if (isFileName) {
@@ -526,7 +683,6 @@ export default function App() {
   const fileInputRef = useRef(null);
   const moreProjectsRef = useRef(null);
 
-  // Persistir modo programador
   useEffect(() => {
     localStorage.setItem('solaris_programming_mode', programmingMode);
   }, [programmingMode]);
@@ -710,10 +866,25 @@ export default function App() {
     </div>
   );
   const WelcomeScreen = () => (<div className="flex flex-col items-center justify-center h-full gap-6 px-8 text-center animate-in fade-in duration-700"><div className={`text-3xl font-extralight ${darkMode ? 'text-white/10' : 'text-black/10'}`}>✦</div><div><p className={`text-base font-light ${theme.textSecondary}`}>Olá{displayName ? `, ${displayName}` : ''}.</p><p className={`text-sm font-light mt-1 ${theme.textMuted}`}>{activeProjectId ? 'Nenhuma conversa ainda. Comece digitando.' : 'Como posso ajudar hoje?'}</p></div></div>);
+
+  // Função para atualizar o authUser após mudança no perfil
+  const handleAuthUpdate = useCallback(async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    setAuthUser(user);
+  }, []);
+
   return (
     <div className={`flex h-screen ${darkMode ? 'bg-[#050505] text-white' : 'bg-[#fafafa] text-[#1a1a1a]'} font-sans antialiased overflow-hidden transition-colors duration-500`}>
       {showAuthModal && <AuthModal darkMode={darkMode} onClose={() => setShowAuthModal(false)} onAuthSuccess={handleAuthSuccess} />}
-      {showSettingsModal && authUser && <SettingsModal darkMode={darkMode} onClose={() => setShowSettingsModal(false)} effectiveUserId={effectiveUserId} />}
+      {showSettingsModal && authUser && (
+        <SettingsModal
+          darkMode={darkMode}
+          onClose={() => setShowSettingsModal(false)}
+          effectiveUserId={effectiveUserId}
+          authUser={authUser}
+          onAuthUpdate={handleAuthUpdate}
+        />
+      )}
       {editingProject && <ProjectSettingsModal project={editingProject} onClose={() => setEditingProject(null)} onUpdate={(updated) => { setProjects(prev => prev.map(p => p.id === updated.id ? updated : p)); if (activeProjectId === updated.id) setActiveProjectId(updated.id); setEditingProject(null); }} darkMode={darkMode} effectiveUserId={effectiveUserId} />}
       <div className={`fixed top-24 left-1/2 -translate-x-1/2 z-[110] px-6 py-3 rounded-full bg-emerald-500 text-white text-xs font-bold tracking-widest uppercase shadow-2xl transition-all duration-500 ${showShareToast ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-4 pointer-events-none'}`}>Copiado para a área de transferência</div>
       {itemToDelete && (<div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"><div className={`${theme.modalBg} border ${theme.border} w-full max-w-sm rounded-2xl p-8 shadow-2xl`}><div className="flex flex-col items-center text-center"><div className="w-12 h-12 rounded-full bg-red-500/10 flex items-center justify-center mb-4"><AlertTriangle className="text-red-500" size={24} /></div><h3 className="text-lg font-medium mb-2">Apagar?</h3><p className={`text-sm ${theme.textSecondary} mb-8`}>Apagar "<span className="font-semibold">{itemToDelete.data.name || itemToDelete.data.title}</span>"?</p><div className="flex w-full gap-3"><button onClick={() => setItemToDelete(null)} className={`flex-1 py-3 rounded-xl border ${theme.border} text-xs font-bold uppercase tracking-widest hover:bg-black/5 transition-colors`}>Cancelar</button><button onClick={handleDeleteConfirm} className="flex-1 py-3 rounded-xl bg-red-500 text-white text-xs font-bold uppercase tracking-widest hover:bg-red-600 transition-colors">Eliminar</button></div></div></div></div>)}
@@ -733,7 +904,6 @@ export default function App() {
           <div className="flex items-center gap-4"><button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className={`p-2 rounded-lg transition-all ${darkMode ? 'text-white/60 hover:text-white hover:bg-white/5' : 'text-black/40 hover:text-black hover:bg-black/5'}`}><PanelLeft size={20} strokeWidth={1.5} /></button><div className="flex items-baseline gap-1 select-none"><span className="text-base font-medium tracking-tight">SOLARIS</span><span className={`text-[10px] font-bold ${theme.textMuted} tracking-tighter`}>V1</span></div>{activeProjectId && (<div className={`hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-lg ${darkMode ? 'bg-white/5' : 'bg-black/5'}`}><Folder size={12} className={theme.textMuted} /><span className={`text-xs font-light ${theme.textSecondary}`}>{projects.find(p => p.id === activeProjectId)?.name}</span><button onClick={() => setActiveProjectId(null)} className={`ml-1 ${theme.textMuted} hover:text-red-400 transition-colors`} title="Sair do projeto"><X size={10} /></button></div>)}</div>
           <div className="flex items-center gap-3">
             {authUser && (<button onClick={() => setShowSettingsModal(true)} className={`p-2 rounded-lg transition-all ${darkMode ? 'text-white/40 hover:text-white hover:bg-white/5' : 'text-black/40 hover:text-black hover:bg-black/5'}`} title="Configurações"><Settings size={18} strokeWidth={1.5} /></button>)}
-            {/* Botão do Modo Programador */}
             <button
               onClick={() => setProgrammingMode(!programmingMode)}
               className={`p-2 rounded-lg transition-all ${programmingMode ? 'text-amber-400 bg-amber-400/10' : (darkMode ? 'text-white/40 hover:text-white hover:bg-white/5' : 'text-black/40 hover:text-black hover:bg-black/5')}`}

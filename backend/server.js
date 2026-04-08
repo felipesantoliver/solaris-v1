@@ -1,7 +1,7 @@
 // ============================================================
 //  server.js — Solaris Backend com Streaming SSE
 //  (versão com edição de projetos, memória global/nenhuma,
-//   fontes externas: links e texto)
+//   fontes externas: links e texto, fila de jobs assíncrona)
 // ============================================================
 
 import { setDefaultResultOrder } from 'dns';
@@ -16,6 +16,7 @@ import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
 import { initDb, runAsync, getAsync, allAsync } from './database.js';
 import { errorHandler } from './utils/errorHandler.js';
+import { getJobQueue } from './jobQueue.js';  // <-- importa a fila de jobs
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -160,7 +161,7 @@ async function* streamGeminiChat(messages, systemPrompt, modelKey = 'flash') {
 }
 
 // ─── Embedding e busca semântica ──────────────────────────────────────
-async function generateEmbedding(text) {
+export async function generateEmbedding(text) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/embedding-001:embedContent?key=${GEMINI_API_KEY}`;
   const response = await fetch(url, {
     method: 'POST',
@@ -193,7 +194,7 @@ function splitTextIntoChunks(text, chunkSize = 500, overlap = 100) {
   return chunks;
 }
 
-async function indexFileChunks(fileId, text) {
+export async function indexFileChunks(fileId, text) {
   const chunks = splitTextIntoChunks(text);
   if (!chunks.length) return;
   await runAsync('DELETE FROM file_chunks WHERE file_id = $1', [fileId]);
@@ -701,7 +702,6 @@ app.post('/api/messages', async (req, res, next) => {
 });
 
 // ─── Rotas para fontes externas (links e texto) ───────────────────────
-// Obter todas as fontes externas de um projeto
 app.get('/api/projects/:projectId/sources', async (req, res, next) => {
   try {
     const rows = await allAsync('SELECT id, type, title, url, content, created_at FROM external_sources WHERE project_id = $1 ORDER BY created_at DESC', [req.params.projectId]);
@@ -709,17 +709,14 @@ app.get('/api/projects/:projectId/sources', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// Adicionar fonte via URL
 app.post('/api/projects/:projectId/sources/url', async (req, res, next) => {
   const { url, title } = req.body;
   if (!url) return res.status(400).json({ error: 'URL é obrigatória' });
   const projectId = req.params.projectId;
   try {
-    // Baixar conteúdo da URL (simples, sem JS)
     const fetchRes = await fetch(url, { headers: { 'User-Agent': 'SolarisBot/1.0' } });
     if (!fetchRes.ok) throw new Error(`Erro ao acessar URL: ${fetchRes.status}`);
     let html = await fetchRes.text();
-    // Extração muito simples de texto (remove tags)
     const text = html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, ' ')
       .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, ' ')
       .replace(/<[^>]+>/g, ' ')
@@ -733,13 +730,13 @@ app.post('/api/projects/:projectId/sources/url', async (req, res, next) => {
       'INSERT INTO external_sources (id, project_id, type, title, url, content) VALUES ($1, $2, $3, $4, $5, $6)',
       [sourceId, projectId, 'url', title || url, url, text]
     );
-    // Indexar como chunks (reaproveitar lógica de arquivos)
-    await indexFileChunks(sourceId, text); // reutiliza a mesma tabela file_chunks com file_id = sourceId
-    res.status(201).json({ id: sourceId, type: 'url', title: title || url });
+    // Indexar via job queue (processamento assíncrono)
+    const jobQueue = getJobQueue();
+    await jobQueue.addJob('embedding', { fileId: sourceId, projectId, text }, 1);
+    res.status(201).json({ id: sourceId, type: 'url', title: title || url, job_enqueued: true });
   } catch (err) { next(err); }
 });
 
-// Adicionar fonte via texto livre
 app.post('/api/projects/:projectId/sources/text', async (req, res, next) => {
   const { title, content } = req.body;
   if (!content) return res.status(400).json({ error: 'Conteúdo de texto é obrigatório' });
@@ -751,12 +748,12 @@ app.post('/api/projects/:projectId/sources/text', async (req, res, next) => {
       'INSERT INTO external_sources (id, project_id, type, title, content) VALUES ($1, $2, $3, $4, $5)',
       [sourceId, projectId, 'text', title || 'Texto adicionado', trimmedContent]
     );
-    await indexFileChunks(sourceId, trimmedContent);
-    res.status(201).json({ id: sourceId, type: 'text', title: title || 'Texto adicionado' });
+    const jobQueue = getJobQueue();
+    await jobQueue.addJob('embedding', { fileId: sourceId, projectId, text: trimmedContent }, 1);
+    res.status(201).json({ id: sourceId, type: 'text', title: title || 'Texto adicionado', job_enqueued: true });
   } catch (err) { next(err); }
 });
 
-// Remover fonte externa
 app.delete('/api/projects/:projectId/sources/:sourceId', async (req, res, next) => {
   const userId = req.headers['x-user-id'];
   try {
@@ -767,7 +764,7 @@ app.delete('/api/projects/:projectId/sources/:sourceId', async (req, res, next) 
   } catch (err) { next(err); }
 });
 
-// ─── Rotas existentes para arquivos ───────────────────────────────────
+// ─── Rotas para arquivos (com job queue) ───────────────────────────────
 app.get('/api/files/:projectId', async (req, res, next) => {
   try {
     const rows = await allAsync('SELECT id, original_name, mime_type, size, created_at FROM files WHERE project_id = $1 ORDER BY created_at DESC', [req.params.projectId]);
@@ -794,12 +791,20 @@ app.post('/api/files/:projectId', upload.single('file'), async (req, res, next) 
       }
     }
     const fileId = randomUUID();
-    await runAsync('INSERT INTO files (id, project_id, original_name, mime_type, size, extracted_text, path) VALUES ($1,$2,$3,$4,$5,$6,$7)', [fileId, req.params.projectId, req.file.originalname, req.file.mimetype, req.file.size, extractedText, req.file.path]);
-    if (extractedText && extractedText.length > 0) {
-      await indexFileChunks(fileId, extractedText);
-    }
+    await runAsync(
+      'INSERT INTO files (id, project_id, original_name, mime_type, size, extracted_text, path) VALUES ($1,$2,$3,$4,$5,$6,$7)',
+      [fileId, req.params.projectId, req.file.originalname, req.file.mimetype, req.file.size, extractedText, req.file.path]
+    );
+    // Adiciona job de upload (que por sua vez pode criar job de embedding)
+    const jobQueue = getJobQueue();
+    await jobQueue.addJob('upload', {
+      fileId,
+      projectId: req.params.projectId,
+      filePath: req.file.path,
+      extractedText
+    }, 0);
     if (userId) invalidateSystemPromptCache(userId, req.params.projectId);
-    res.status(201).json({ id: fileId, original_name: req.file.originalname, size: req.file.size });
+    res.status(201).json({ id: fileId, original_name: req.file.originalname, size: req.file.size, job_enqueued: true });
   } catch (err) { next(err); }
 });
 
@@ -812,6 +817,26 @@ app.delete('/api/files/:projectId/:fileId', async (req, res, next) => {
     await runAsync('DELETE FROM files WHERE id = $1', [req.params.fileId]);
     if (userId) invalidateSystemPromptCache(userId, req.params.projectId);
     res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
+// ─── Endpoint para excluir todos os chats do usuário ───────────────────
+app.delete('/api/user/chats', async (req, res, next) => {
+  const userId = req.headers['x-user-id'];
+  if (!userId) return res.status(400).json({ error: 'x-user-id obrigatório' });
+  try {
+    // Busca todos os projetos do usuário
+    const projects = await allAsync('SELECT id FROM projects WHERE user_id = $1', [userId]);
+    const projectIds = projects.map(p => p.id);
+    if (projectIds.length === 0) {
+      return res.json({ deleted: 0 });
+    }
+    // Constrói placeholders para IN
+    const placeholders = projectIds.map((_, i) => `$${i + 1}`).join(',');
+    // Remove mensagens e chats desses projetos
+    await runAsync(`DELETE FROM messages WHERE chat_id IN (SELECT id FROM chats WHERE project_id IN (${placeholders}))`, projectIds);
+    const result = await runAsync(`DELETE FROM chats WHERE project_id IN (${placeholders})`, projectIds);
+    res.json({ deleted: result.changes });
   } catch (err) { next(err); }
 });
 
@@ -873,7 +898,7 @@ async function geminiChat(messages, systemPrompt, modelKey = 'flash') {
 (async () => {
   try {
     await initDb();
-    // Adicionar colunas novas se não existirem
+    // Adicionar colunas novas se não existirem (garantia extra)
     const pool = (await import('./database.js')).pool;
     const client = await pool.connect();
     await client.query(`
@@ -891,8 +916,26 @@ async function geminiChat(messages, systemPrompt, modelKey = 'flash') {
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
       ALTER TABLE memories ADD COLUMN IF NOT EXISTS user_id TEXT;
+      CREATE TABLE IF NOT EXISTS jobs (
+        id TEXT PRIMARY KEY,
+        type TEXT NOT NULL,
+        status TEXT DEFAULT 'pending',
+        payload JSONB NOT NULL,
+        result JSONB,
+        error TEXT,
+        retry_count INTEGER DEFAULT 0,
+        max_retries INTEGER DEFAULT 3,
+        priority INTEGER DEFAULT 0,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
     `).catch(e => console.warn('Migração de esquema (ignorável):', e.message));
     client.release();
+
+    // Inicia a fila de jobs
+    const jobQueue = getJobQueue();
+    console.log('📋 JobQueue inicializada e rodando');
+
     app.listen(PORT, '0.0.0.0', () => console.log(`✅ Solaris backend na porta ${PORT}`));
   } catch (err) {
     console.error('❌ Falha ao iniciar:', err);
