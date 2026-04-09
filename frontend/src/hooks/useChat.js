@@ -52,10 +52,10 @@ export function useChat(effectiveUserId, authUser, model, activeProjectId) {
     loadMessages(activeChatId);
   }, [activeChatId, loadMessages]);
 
+  // ✅ CORREÇÃO: removido setInput('') daqui — input é gerenciado no App.jsx
   const sendMessage = useCallback(async (text, chatId, projectId, onCreateChat) => {
     if (!text.trim() || isLoading || isStreaming) return;
     setSendError('');
-    setInput('');
 
     let currentChatId = chatId;
     setMessages(prev => [...prev, { role: 'user', content: text }]);
@@ -135,11 +135,9 @@ export function useChat(effectiveUserId, authUser, model, activeProjectId) {
       setIsStreaming(false);
       setStatusMessage('');
     }
-  }, [isLoading, isStreaming, effectiveUserId, authUser, model, setActiveChatId]);
+  }, [isLoading, isStreaming, effectiveUserId, authUser, model]);
 
   const editMessage = useCallback(async (index, newContent, originalContent, chatId, projectId) => {
-    // Implementação de edição (pode ser adicionada futuramente)
-    // Por enquanto, apenas atualiza localmente
     setMessages(prev => {
       const updated = [...prev];
       updated[index] = {
@@ -150,7 +148,6 @@ export function useChat(effectiveUserId, authUser, model, activeProjectId) {
       };
       return updated;
     });
-    // Disparar requisição para regerar resposta (endpoint não implementado no backend atual)
   }, []);
 
   return {

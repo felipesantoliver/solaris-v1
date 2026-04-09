@@ -33,6 +33,9 @@ export default function App() {
   const [editingChatTitleValue, setEditingChatTitleValue] = useState('');
   const [showShareModal, setShowShareModal] = useState(false);
 
+  // ✅ CORREÇÃO 1: input e setInput estavam faltando
+  const [input, setInput] = useState('');
+
   const fileInputRef = useRef(null);
   const moreProjectsRef = useRef(null);
 
@@ -70,7 +73,6 @@ export default function App() {
     if (!authUser && model === 'pro') setModel('flash');
   }, [authUser, model]);
 
-  // Click outside for more projects
   useEffect(() => {
     const h = (e) => {
       if (moreProjectsRef.current && !moreProjectsRef.current.contains(e.target)) {
@@ -86,6 +88,7 @@ export default function App() {
     setActiveChatId(null);
     setMessages([]);
     setSendError('');
+    setInput('');
   };
 
   const handleSend = async () => {
@@ -94,6 +97,7 @@ export default function App() {
       setChatHistory(prev => [nc, ...prev]);
       return nc;
     });
+    setInput('');
   };
 
   const handleEdit = (index, content) => {
@@ -169,8 +173,6 @@ export default function App() {
     const from = projects.findIndex(p => p.id === draggedItemId);
     const to = projects.findIndex(p => p.id === id);
     if (from === -1 || to === -1) return;
-    const arr = [...projects];
-    arr.splice(to, 0, arr.splice(from, 1)[0]);
     // Reorder projects (not persisted to backend in this version)
   };
 
@@ -222,7 +224,8 @@ export default function App() {
         <AuthModal
           darkMode={darkMode}
           onClose={() => setShowAuthModal(false)}
-          onAuthSuccess={(user) => { setAuthUser(user); setShowAuthModal(false); }}
+          // ✅ CORREÇÃO 2: removido setAuthUser (não existe) — o useAuth já atualiza o estado internamente
+          onAuthSuccess={() => setShowAuthModal(false)}
           onGoogleLogin={handleGoogleLogin}
           onLogin={handleLogin}
           onSignUp={handleSignUp}

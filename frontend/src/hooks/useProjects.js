@@ -30,9 +30,9 @@ export function useProjects(effectiveUserId, authUser, model) {
     fetchNoProjectChats();
   }, [fetchProjects, fetchNoProjectChats]);
 
+  // ✅ CORREÇÃO: removido setActiveChatId que não existe neste hook
   const loadProjectChats = useCallback(async (projectId) => {
     if (!projectId) {
-      setActiveChatId(null);
       setChatHistory([]);
       return;
     }
@@ -43,6 +43,15 @@ export function useProjects(effectiveUserId, authUser, model) {
       setChatHistory([]);
     }
   }, [effectiveUserId]);
+
+  // Carregar chats quando o projeto ativo muda
+  useEffect(() => {
+    if (activeProjectId) {
+      loadProjectChats(activeProjectId);
+    } else {
+      fetchNoProjectChats();
+    }
+  }, [activeProjectId, loadProjectChats, fetchNoProjectChats]);
 
   const createProject = useCallback(async (name, summary = '', detailedObjective = '', tags = [], responseStyle = 'direto', memoryMode = 'projeto') => {
     const newProject = await api.createProject({
