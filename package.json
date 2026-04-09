@@ -1,8 +1,27 @@
 {
-  "dependencies": {
-    "highlight.js": "^11.11.1",
-    "react-markdown": "^10.1.0",
-    "rehype-highlight": "^7.0.2",
-    "remark-gfm": "^4.0.1"
+  "name": "solaris",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Solaris AI – Assistente pessoal com projetos, memória e múltiplos modelos Gemini",
+  "author": "Felipe Sant'Oliver",
+  "license": "SEE LICENSE IN LICENSE",
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "cd backend && npm run dev",
+    "dev:frontend": "cd frontend && npm run dev",
+    "build": "npm run build:frontend",
+    "build:frontend": "cd frontend && npm run build",
+    "start": "cd backend && npm start",
+    "install:all": "npm install && npm install --workspaces"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
