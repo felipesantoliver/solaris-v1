@@ -1,15 +1,34 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { api } from '../services/api';
 
-function cleanAssistantMessage(text) {
+// Remove prefixos "Solaris:" repetidos (mas preserva o conteúdo)
+function cleanDuplicateSolarisPrefix(text) {
   if (!text) return text;
-  const solarisPrefixRegex = /^\s*Solaris\s*[:：]?\s*(diz\s*)?[:：]?\s*/i;
-  return text
-    .split(/\r?\n/)
-    .map(line => solarisPrefixRegex.test(line) ? line.replace(solarisPrefixRegex, '') : line)
-    .join('\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
+  // Remove qualquer ocorrência de "Solaris:" ou "Solaris diz:" no início da string ou após quebra de linha
+  const cleaned = text.replace(/(?:^|\n)\s*Solaris\s*[:：]?\s*(?:diz\s*)?[:：]?\s*/gi, '\n');
+  // Remove múltiplas quebras de linha
+  return cleaned.replace(/\n{3,}/g, '\n\n').trim();
+}
+
+// Efeito de digitação (typewriter)
+async function typewriteMessage(setMessages, assistantIdx, fullContent, onComplete) {
+  let currentText = '';
+  const chars = fullContent.split('');
+  
+  for (let i = 0; i < chars.length; i++) {
+    currentText += chars[i];
+    setMessages(prev => {
+      const updated = [...prev];
+      if (updated[assistantIdx]) {
+        updated[assistantIdx] = { ...updated[assistantIdx], content: currentText };
+      }
+      return updated;
+    });
+    // Delay variável: mais rápido para letras comuns, um pouco maior para pontuação e quebras de linha
+    const delay = chars[i] === '\n' ? 60 : chars[i] === '.' || chars[i] === '?' || chars[i] === '!' ? 80 : 25;
+    await new Promise(r => setTimeout(r, delay));
+  }
+  onComplete?.();
 }
 
 export function useChat(effectiveUserId, authUser, model, activeProjectId) {
@@ -20,12 +39,12 @@ export function useChat(effectiveUserId, authUser, model, activeProjectId) {
   const [statusMessage, setStatusMessage] = useState('');
   const [sendError, setSendError] = useState('');
   const newChatRef = useRef(null);
-  const assistantMsgIdxRef = useRef(-1);
+  const typewriterRef = useRef(null);
 
   const statusSequence = [
-    { text: "Analisando contexto...", duration: 400 },
-    { text: "Consultando memórias do projeto...", duration: 400 },
-    { text: "Preparando resposta...", duration: 300 }
+    { text: "Analisando contexto...", duration: 600 },
+    { text: "Consultando memórias do projeto...", duration: 600 },
+    { text: "Preparando resposta...", duration: 500 }
   ];
 
   const showStatusSequence = async () => {
@@ -41,10 +60,8 @@ export function useChat(effectiveUserId, authUser, model, activeProjectId) {
     if (newChatRef.current === chatId) { newChatRef.current = null; return; }
     try {
       const msgs = await api.getMessages(chatId, effectiveUserId);
-      const cleaned = msgs.map(msg =>
-        msg.role === 'assistant' ? { ...msg, content: cleanAssistantMessage(msg.content) } : msg
-      );
-      setMessages(cleaned);
+      // Ao carregar mensagens antigas, não adicionamos prefixo extra
+      setMessages(msgs);
     } catch { setMessages([]); }
   }, [effectiveUserId]);
 
@@ -52,7 +69,6 @@ export function useChat(effectiveUserId, authUser, model, activeProjectId) {
     loadMessages(activeChatId);
   }, [activeChatId, loadMessages]);
 
-  // ✅ CORREÇÃO: removido setInput('') daqui — input é gerenciado no App.jsx
   const sendMessage = useCallback(async (text, chatId, projectId, onCreateChat) => {
     if (!text.trim() || isLoading || isStreaming) return;
     setSendError('');
@@ -78,64 +94,43 @@ export function useChat(effectiveUserId, authUser, model, activeProjectId) {
     setIsStreaming(true);
     setIsLoading(false);
 
-    let rawAccumulator = '';
-    assistantMsgIdxRef.current = -1;
+    // Índice onde a mensagem do assistente será inserida
+    const assistantIdx = messages.length + 1;
 
     try {
-      await api.sendMessageStream(
+      // Usa o fallback (resposta completa) em vez do stream problemático
+      const fallback = await api.sendMessageFallback(
         currentChatId,
         projectId,
         text,
         effectiveUserId,
-        authUser ? model : 'flash',
-        (chunk) => {
-          rawAccumulator += chunk;
-          const displayContent = cleanAssistantMessage(rawAccumulator);
-          if (assistantMsgIdxRef.current === -1) {
-            setMessages(prev => {
-              assistantMsgIdxRef.current = prev.length;
-              return [...prev, { role: 'assistant', content: displayContent, model: authUser ? model : 'flash' }];
-            });
-          } else {
-            const idx = assistantMsgIdxRef.current;
-            setMessages(prev => {
-              const updated = [...prev];
-              if (updated[idx]) updated[idx] = { ...updated[idx], content: displayContent };
-              return updated;
-            });
-          }
-        },
-        (title, chatIdFromServer) => {
-          // Atualizar título do chat na lista (será tratado no hook de projetos)
-        },
-        (error) => {
-          throw new Error(error);
-        },
-        () => {
-          const idx = assistantMsgIdxRef.current;
-          if (idx !== -1) {
-            setMessages(prev => {
-              const updated = [...prev];
-              if (updated[idx]) updated[idx] = { ...updated[idx], content: cleanAssistantMessage(rawAccumulator) };
-              return updated;
-            });
-          }
-        }
+        authUser ? model : 'flash'
       );
-    } catch (err) {
-      console.error('Streaming falhou, usando fallback:', err);
-      try {
-        const fallback = await api.sendMessageFallback(currentChatId, projectId, text, effectiveUserId, authUser ? model : 'flash');
-        const cleaned = cleanAssistantMessage(fallback.response);
-        setMessages(prev => [...prev, { role: 'assistant', content: cleaned, model: fallback.model }]);
-      } catch (fallbackErr) {
-        setMessages(prev => [...prev, { role: 'assistant', content: `⚠️ ${fallbackErr.message}` }]);
+      
+      let rawResponse = fallback.response || '';
+      // Remove prefixos "Solaris:" repetidos que o backend possa ter enviado
+      let cleanedContent = cleanDuplicateSolarisPrefix(rawResponse);
+      // Adiciona o prefixo "Solaris:" uma única vez, se ainda não existir
+      if (!cleanedContent.toLowerCase().startsWith('solaris')) {
+        cleanedContent = `Solaris: ${cleanedContent}`;
       }
+      
+      // Insere uma mensagem vazia do assistente e inicia a digitação
+      setMessages(prev => [...prev, { role: 'assistant', content: '', model: fallback.model }]);
+      
+      // Inicia o typewriter
+      await typewriteMessage(setMessages, assistantIdx, cleanedContent, () => {
+        // Finalizou a digitação
+      });
+      
+    } catch (err) {
+      console.error('Erro ao obter resposta:', err);
+      setMessages(prev => [...prev, { role: 'assistant', content: `⚠️ Não foi possível obter resposta: ${err.message}` }]);
     } finally {
       setIsStreaming(false);
       setStatusMessage('');
     }
-  }, [isLoading, isStreaming, effectiveUserId, authUser, model]);
+  }, [isLoading, isStreaming, messages.length, effectiveUserId, authUser, model]);
 
   const editMessage = useCallback(async (index, newContent, originalContent, chatId, projectId) => {
     setMessages(prev => {
@@ -148,6 +143,7 @@ export function useChat(effectiveUserId, authUser, model, activeProjectId) {
       };
       return updated;
     });
+    // Opcional: chamar API para salvar edição no backend
   }, []);
 
   return {
