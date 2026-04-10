@@ -60,7 +60,8 @@ export function ProjectModal({ project, onClose, onUpdate, darkMode, effectiveUs
         tags: tagsArray, response_style: responseStyle, memory_mode: memoryMode
       });
       setSaved(true); setTimeout(() => setSaved(false), 2000);
-      onUpdate(updated);
+      // A função onUpdate já tratou da atualização no componente pai,
+      // nenhuma chamada extra é necessária.
     } catch (err) { setError(err.message); }
     setLoading(false);
   }
