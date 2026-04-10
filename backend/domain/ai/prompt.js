@@ -1,50 +1,86 @@
-// domain/ai/prompt.js — Preparação de system prompt e cache
+// domain/ai/prompt.js — Preparação de system prompt e cache persistente (Supabase)
 
 import { getAsync, allAsync, runAsync } from '../../db/database.js';
 
-// Cache do System Prompt
-const SYSTEM_PROMPT_CACHE_TTL = 60000;
-const systemPromptCache = new Map();
+// TTL do cache em segundos (60 segundos = 1 minuto)
+const SYSTEM_PROMPT_CACHE_TTL_SECONDS = 60;
+
+// Função auxiliar para limpar entradas expiradas (executada antes de consultas)
+async function cleanExpiredCache() {
+  try {
+    await runAsync(`DELETE FROM system_prompt_cache WHERE expires_at < NOW()`);
+  } catch (err) {
+    console.warn('⚠️ Falha ao limpar cache expirado:', err.message);
+  }
+}
 
 export function getCacheKey(userId, projectId, memoryMode) {
   return `${userId}:${projectId || 'none'}:${memoryMode}`;
 }
 
-export function getCachedSystemPrompt(userId, projectId, memoryMode) {
+/**
+ * Obtém o system prompt do cache (Supabase).
+ */
+export async function getCachedSystemPrompt(userId, projectId, memoryMode) {
   const key = getCacheKey(userId, projectId, memoryMode);
-  const entry = systemPromptCache.get(key);
-  if (entry && Date.now() < entry.expiresAt) {
-    console.log(`💾 Cache hit para ${key}`);
-    return entry.data;
-  }
-  if (entry) systemPromptCache.delete(key);
-  return null;
-}
+  try {
+    // Remove entradas expiradas antes de consultar
+    await cleanExpiredCache();
 
-export function setCachedSystemPrompt(userId, projectId, memoryMode, data) {
-  const key = getCacheKey(userId, projectId, memoryMode);
-  systemPromptCache.set(key, { data, expiresAt: Date.now() + SYSTEM_PROMPT_CACHE_TTL });
-  console.log(`💾 Cache set para ${key}`);
-}
-
-export function invalidateSystemPromptCache(userId, projectId) {
-  for (const key of systemPromptCache.keys()) {
-    if (key.startsWith(`${userId}:${projectId || 'none'}:`)) {
-      systemPromptCache.delete(key);
-      console.log(`🗑️ Cache invalidado para ${key}`);
+    const row = await getAsync(
+      `SELECT value FROM system_prompt_cache WHERE key = $1 AND expires_at > NOW()`,
+      [key]
+    );
+    if (row) {
+      console.log(`💾 Cache hit (Supabase) para ${key}`);
+      return row.value;
     }
+    return null;
+  } catch (err) {
+    console.error('❌ Erro ao consultar cache:', err.message);
+    return null; // fallback: ignora cache em caso de erro
   }
 }
 
-// Limpeza periódica
-setInterval(() => {
-  const now = Date.now();
-  let deleted = 0;
-  for (const [key, entry] of systemPromptCache.entries()) {
-    if (now >= entry.expiresAt) { systemPromptCache.delete(key); deleted++; }
+/**
+ * Armazena o system prompt no cache (Supabase).
+ */
+export async function setCachedSystemPrompt(userId, projectId, memoryMode, data) {
+  const key = getCacheKey(userId, projectId, memoryMode);
+  try {
+    // UPSERT: insere ou atualiza com novo TTL
+    await runAsync(
+      `INSERT INTO system_prompt_cache (key, value, expires_at)
+       VALUES ($1, $2, NOW() + INTERVAL '${SYSTEM_PROMPT_CACHE_TTL_SECONDS} seconds')
+       ON CONFLICT (key) DO UPDATE SET
+         value = EXCLUDED.value,
+         expires_at = EXCLUDED.expires_at`,
+      [key, data]
+    );
+    console.log(`💾 Cache set (Supabase) para ${key}`);
+  } catch (err) {
+    console.error('❌ Erro ao salvar no cache:', err.message);
+    // Não propaga erro para não quebrar o fluxo principal
   }
-  if (deleted) console.log(`🧹 Cache limpo: ${deleted} entradas`);
-}, 5 * 60 * 1000);
+}
+
+/**
+ * Invalida todas as entradas de cache para um determinado usuário/projeto.
+ */
+export async function invalidateSystemPromptCache(userId, projectId) {
+  const prefix = `${userId}:${projectId || 'none'}:%`;
+  try {
+    const result = await runAsync(
+      `DELETE FROM system_prompt_cache WHERE key LIKE $1`,
+      [prefix]
+    );
+    console.log(`🗑️ Cache invalidado (Supabase) para ${userId}:${projectId || 'none'} (${result.changes} entradas)`);
+  } catch (err) {
+    console.error('❌ Erro ao invalidar cache:', err.message);
+  }
+}
+
+// ========== O RESTANTE DO ARQUIVO PERMANECE INALTERADO ==========
 
 // Guia de personalidades
 const PERSONALITY_GUIDE = {
@@ -168,7 +204,7 @@ export async function getBaseSystemPromptWithCache(userId, projectId, memoryMode
     return assembleBaseSystemPrompt({ settings, project, memories, memoryMode });
   }
 
-  const cached = getCachedSystemPrompt(userId, projectId, memoryMode);
+  const cached = await getCachedSystemPrompt(userId, projectId, memoryMode);
   if (cached) return cached;
 
   const [settings, project, memories] = await Promise.all([
@@ -183,7 +219,7 @@ export async function getBaseSystemPromptWithCache(userId, projectId, memoryMode
   ]);
 
   const systemPrompt = assembleBaseSystemPrompt({ settings, project, memories, memoryMode });
-  setCachedSystemPrompt(userId, projectId, memoryMode, systemPrompt);
+  await setCachedSystemPrompt(userId, projectId, memoryMode, systemPrompt);
   return systemPrompt;
 }
 
