@@ -1,4 +1,4 @@
-// domain/routers/messages.js — Streaming SSE, fallback, busca semântica
+// domain/routers/messages.js — Streaming SSE, fallback, busca semântica com pgvector
 
 import { Router } from 'express';
 import { runAsync, getAsync, allAsync } from '../../db/database.js';
@@ -9,7 +9,7 @@ import {
   selectContextWindow,
   invalidateSystemPromptCache
 } from '../ai/prompt.js';
-import { generateEmbedding, cosineSimilarity } from '../ai/embeddings.js';
+import { generateEmbedding } from '../ai/embeddings.js';
 import { resolveModelForRequest } from './projects.js';
 
 const router = Router();
@@ -54,18 +54,34 @@ function generateLocalTitle(firstMessage) {
   return title.substring(0, 50);
 }
 
-// Busca semântica
+/**
+ * Busca semântica eficiente usando pgvector.
+ * Requer que a coluna `embedding` seja do tipo `vector` e a extensão `vector` esteja instalada.
+ * @param {string} projectId - ID do projeto
+ * @param {string} query - Texto da consulta
+ * @param {number} limit - Número máximo de resultados
+ * @returns {Promise<string[]>} - Array de textos dos chunks mais relevantes
+ */
 async function searchRelevantChunks(projectId, query, limit = 3) {
   if (!projectId) return [];
+
   const queryEmbedding = await generateEmbedding(query);
-  const chunks = await allAsync(
-    `SELECT fc.chunk_text, fc.embedding FROM file_chunks fc JOIN files f ON f.id = fc.file_id WHERE f.project_id = $1`,
-    [projectId]
+  if (!queryEmbedding || queryEmbedding.length === 0) return [];
+
+  // Formata o embedding como string no formato esperado pelo pgvector: '[0.1,0.2,0.3]'
+  const vectorLiteral = `[${queryEmbedding.join(',')}]`;
+
+  const rows = await allAsync(
+    `SELECT fc.chunk_text
+     FROM file_chunks fc
+     JOIN files f ON f.id = fc.file_id
+     WHERE f.project_id = $1
+     ORDER BY fc.embedding <=> $2::vector
+     LIMIT $3`,
+    [projectId, vectorLiteral, limit]
   );
-  if (!chunks.length) return [];
-  const withScores = chunks.map(c => ({ text: c.chunk_text, score: cosineSimilarity(queryEmbedding, JSON.parse(c.embedding)) }));
-  withScores.sort((a, b) => b.score - a.score);
-  return withScores.slice(0, limit).map(c => c.text);
+
+  return rows.map(r => r.chunk_text);
 }
 
 // Obter mensagens de um chat
