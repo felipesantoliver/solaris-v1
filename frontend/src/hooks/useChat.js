@@ -94,8 +94,12 @@ export function useChat(effectiveUserId, authUser, model, activeProjectId) {
     setIsStreaming(true);
     setIsLoading(false);
 
-    // Índice onde a mensagem do assistente será inserida
-    const assistantIdx = messages.length + 1;
+    // CORREÇÃO: o índice do assistente é capturado no momento da inserção da mensagem vazia
+    let assistantIdx;
+    setMessages(prev => {
+      assistantIdx = prev.length; // índice exato antes de adicionar a mensagem do assistente
+      return [...prev, { role: 'assistant', content: '', model: '' }];
+    });
 
     try {
       // Usa o fallback (resposta completa) em vez do stream problemático
@@ -115,17 +119,32 @@ export function useChat(effectiveUserId, authUser, model, activeProjectId) {
         cleanedContent = `Solaris: ${cleanedContent}`;
       }
       
-      // Insere uma mensagem vazia do assistente e inicia a digitação
-      setMessages(prev => [...prev, { role: 'assistant', content: '', model: fallback.model }]);
+      // Atualiza a mensagem do assistente com o modelo correto (se disponível)
+      setMessages(prev => {
+        const updated = [...prev];
+        if (updated[assistantIdx]) {
+          updated[assistantIdx] = { ...updated[assistantIdx], model: fallback.model };
+        }
+        return updated;
+      });
       
-      // Inicia o typewriter
+      // Inicia o typewriter com o índice correto
       await typewriteMessage(setMessages, assistantIdx, cleanedContent, () => {
         // Finalizou a digitação
       });
       
     } catch (err) {
       console.error('Erro ao obter resposta:', err);
-      setMessages(prev => [...prev, { role: 'assistant', content: `⚠️ Não foi possível obter resposta: ${err.message}` }]);
+      setMessages(prev => {
+        const updated = [...prev];
+        if (updated[assistantIdx]) {
+          updated[assistantIdx] = { 
+            ...updated[assistantIdx], 
+            content: `⚠️ Não foi possível obter resposta: ${err.message}` 
+          };
+        }
+        return updated;
+      });
     } finally {
       setIsStreaming(false);
       setStatusMessage('');
