@@ -53,6 +53,17 @@ export function useProjects(effectiveUserId, authUser, model) {
     }
   }, [activeProjectId, loadProjectChats, fetchNoProjectChats]);
 
+  // Atualiza o titulo do chat na sidebar em tempo real, sem precisar recarregar a pagina
+  useEffect(() => {
+    const handler = (e) => {
+      const { title, chat_id } = e.detail || {};
+      if (!title || !chat_id) return;
+      setChatHistory(prev => prev.map(c => c.id === chat_id ? { ...c, title } : c));
+    };
+    window.addEventListener('solaris:chat-title', handler);
+    return () => window.removeEventListener('solaris:chat-title', handler);
+  }, []);
+
   const createProject = useCallback(async (name, summary = '', detailedObjective = '', tags = [], responseStyle = 'direto', memoryMode = 'projeto') => {
     const newProject = await api.createProject({
       name,
