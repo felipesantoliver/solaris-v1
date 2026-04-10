@@ -1,6 +1,5 @@
 import React, { useRef, useEffect } from 'react';
 import { MessageBubble } from './ui/MessageBubble';
-import { Loader2 } from 'lucide-react';
 
 export function ChatWindow({
   messages,
@@ -24,6 +23,12 @@ export function ChatWindow({
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isLoading, isStreaming]);
+
+  // Mostra os pontinhos apenas quando está carregando OU quando o streaming
+  // ainda não começou a produzir conteúdo (última msg do assistente ainda vazia)
+  const lastMsg = messages[messages.length - 1];
+  const isAssistantWriting = isStreaming && lastMsg?.role === 'assistant' && lastMsg?.content === '';
+  const showDots = isLoading || isAssistantWriting;
 
   const WelcomeScreen = () => (
     <div className="flex flex-col items-center justify-center h-full gap-6 px-8 text-center animate-in fade-in duration-700">
@@ -62,7 +67,9 @@ export function ChatWindow({
           ))}
         </div>
       )}
-      {(isLoading || isStreaming) && (
+
+      {/* Pontinhos: só aparecem antes do primeiro chunk chegar */}
+      {showDots && (
         <div className="flex items-center gap-3 mt-12">
           <div className="flex gap-1">
             <div className={`w-1.5 h-1.5 ${darkMode ? 'bg-white/40' : 'bg-black/60'} rounded-full animate-bounce [animation-delay:-0.3s]`} />
@@ -72,11 +79,9 @@ export function ChatWindow({
           {statusMessage && (
             <span className={`text-xs font-light tracking-wide ${theme.textSecondary} animate-pulse`}>{statusMessage}</span>
           )}
-          {isStreaming && !statusMessage && (
-            <span className={`text-xs font-light tracking-wide ${theme.textSecondary} animate-pulse`}>Gerando resposta...</span>
-          )}
         </div>
       )}
+
       <div ref={messagesEndRef} />
     </div>
   );

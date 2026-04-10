@@ -2,20 +2,21 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { api } from '../services/api';
 
 export function useChat(effectiveUserId, authUser, model, activeProjectId) {
-  const [messages, setMessages]       = useState([]);
+  const [messages, setMessages]         = useState([]);
   const [activeChatId, setActiveChatId] = useState(null);
-  const [isLoading, setIsLoading]     = useState(false);
-  const [isStreaming, setIsStreaming]  = useState(false);
+  const [isLoading, setIsLoading]       = useState(false);
+  const [isStreaming, setIsStreaming]    = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
-  const [sendError, setSendError]     = useState('');
-  const newChatRef    = useRef(null);
+  const [sendError, setSendError]       = useState('');
+  const newChatRef      = useRef(null);
   const assistantIdxRef = useRef(null);
+  const streamTimeoutRef = useRef(null); // timeout de segurança
 
   // ── Status visual antes da resposta ──────────────────────────────────────
   const statusSequence = [
-    { text: 'Analisando contexto...',          duration: 600 },
+    { text: 'Analisando contexto...',             duration: 600 },
     { text: 'Consultando memórias do projeto...', duration: 600 },
-    { text: 'Preparando resposta...',          duration: 500 },
+    { text: 'Preparando resposta...',             duration: 500 },
   ];
 
   const showStatusSequence = async () => {
@@ -25,6 +26,14 @@ export function useChat(effectiveUserId, authUser, model, activeProjectId) {
     }
     setStatusMessage('');
   };
+
+  // ── Finaliza streaming de forma segura ────────────────────────────────────
+  const finishStreaming = useCallback(() => {
+    clearTimeout(streamTimeoutRef.current);
+    setIsStreaming(false);
+    setStatusMessage('');
+    assistantIdxRef.current = null;
+  }, []);
 
   // ── Carregar mensagens de um chat ─────────────────────────────────────────
   const loadMessages = useCallback(async (chatId) => {
@@ -54,7 +63,7 @@ export function useChat(effectiveUserId, authUser, model, activeProjectId) {
         currentChatId = nc.id;
         newChatRef.current = nc.id;
         setActiveChatId(nc.id);
-      } catch (err) {
+      } catch {
         setSendError('Não foi possível iniciar a conversa. Tente novamente.');
         setMessages(prev => prev.slice(0, -1));
         return;
@@ -65,6 +74,11 @@ export function useChat(effectiveUserId, authUser, model, activeProjectId) {
     await showStatusSequence();
     setIsLoading(false);
     setIsStreaming(true);
+
+    // Timeout de segurança: libera o input após 30s caso o stream trave
+    streamTimeoutRef.current = setTimeout(() => {
+      finishStreaming();
+    }, 30000);
 
     // Insere a mensagem vazia do assistente e guarda o índice via ref
     setMessages(prev => {
@@ -80,7 +94,7 @@ export function useChat(effectiveUserId, authUser, model, activeProjectId) {
         effectiveUserId,
         authUser ? model : 'flash',
 
-        // onChunk — append em tempo real, sem typewriter artificial
+        // onChunk — append em tempo real
         (chunk) => {
           setMessages(prev => {
             const idx = assistantIdxRef.current;
@@ -91,10 +105,8 @@ export function useChat(effectiveUserId, authUser, model, activeProjectId) {
           });
         },
 
-        // onTitle — atualiza título do chat na sidebar
+        // onTitle
         (title, chat_id) => {
-          // O componente pai (App.jsx) escuta via setChatHistory;
-          // emitimos um evento customizado leve para não precisar de prop drilling
           window.dispatchEvent(new CustomEvent('solaris:chat-title', { detail: { title, chat_id } }));
         },
 
@@ -108,13 +120,12 @@ export function useChat(effectiveUserId, authUser, model, activeProjectId) {
             return updated;
           });
           setSendError('Não foi possível obter resposta. Tente novamente.');
+          finishStreaming();
         },
 
         // onDone
         () => {
-          setIsStreaming(false);
-          setStatusMessage('');
-          assistantIdxRef.current = null;
+          finishStreaming();
         },
       );
     } catch (err) {
@@ -127,11 +138,9 @@ export function useChat(effectiveUserId, authUser, model, activeProjectId) {
         return updated;
       });
       setSendError('Não foi possível obter resposta. Tente novamente.');
-      setIsStreaming(false);
-      setStatusMessage('');
-      assistantIdxRef.current = null;
+      finishStreaming();
     }
-  }, [isLoading, isStreaming, effectiveUserId, authUser, model]);
+  }, [isLoading, isStreaming, effectiveUserId, authUser, model, finishStreaming]);
 
   // ── Editar mensagem ───────────────────────────────────────────────────────
   const editMessage = useCallback(async (index, newContent, originalContent) => {
