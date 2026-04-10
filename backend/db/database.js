@@ -82,35 +82,22 @@ export async function getPool() {
   return pool;
 }
 
+// --- Funções auxiliares otimizadas usando pool.query diretamente ---
+
 export async function runAsync(sql, params = []) {
   const p = await getPool();
-  const client = await p.connect();
-  try {
-    const result = await client.query(sql, params);
-    return { lastID: result.oid ?? null, changes: result.rowCount };
-  } finally {
-    client.release();
-  }
+  const result = await p.query(sql, params);
+  return { lastID: result.oid ?? null, changes: result.rowCount };
 }
 
 export async function getAsync(sql, params = []) {
   const p = await getPool();
-  const client = await p.connect();
-  try {
-    const result = await client.query(sql, params);
-    return result.rows[0];
-  } finally {
-    client.release();
-  }
+  const result = await p.query(sql, params);
+  return result.rows[0];
 }
 
 export async function allAsync(sql, params = []) {
   const p = await getPool();
-  const client = await p.connect();
-  try {
-    const result = await client.query(sql, params);
-    return result.rows;
-  } finally {
-    client.release();
-  }
+  const result = await p.query(sql, params);
+  return result.rows;
 }
