@@ -9,36 +9,10 @@ import { randomUUID } from 'crypto';
 import { runAsync, getAsync, allAsync } from '../../db/database.js';
 import { getJobQueue } from '../../utils/jobQueue.js';
 import { invalidateSystemPromptCache } from '../ai/prompt.js';
-import { createClient } from '@supabase/supabase-js';
+import { extractUserId } from '../../middleware/auth.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const router = Router();
-
-// Configuração do Supabase para validação de token JWT
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_ANON_KEY
-);
-
-// Middleware de autenticação: extrai userId do token JWT ou do header x-user-id (guest)
-async function authenticateRequest(req, res, next) {
-  const authHeader = req.headers.authorization;
-  if (authHeader?.startsWith('Bearer ')) {
-    const token = authHeader.substring(7);
-    const { data: { user }, error } = await supabase.auth.getUser(token);
-    if (!error && user) {
-      req.userId = user.id;
-      return next();
-    }
-  }
-  // Fallback para guest mode (apenas se o arquivo pertencer ao guestId)
-  const guestId = req.headers['x-user-id'];
-  if (guestId) {
-    req.userId = guestId;
-    return next();
-  }
-  res.status(401).json({ error: 'Não autorizado' });
-}
 
 const uploadsDir = path.join(__dirname, '../../../uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
@@ -55,7 +29,7 @@ const upload = multer({
   },
 });
 
-// Listar arquivos do projeto
+// Listar arquivos do projeto (sem autenticação? mantido sem)
 router.get('/files/:projectId', async (req, res, next) => {
   try {
     const rows = await allAsync('SELECT id, original_name, mime_type, size, created_at FROM files WHERE project_id = $1 ORDER BY created_at DESC', [req.params.projectId]);
@@ -63,9 +37,9 @@ router.get('/files/:projectId', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// Upload de arquivo
-router.post('/files/:projectId', upload.single('file'), async (req, res, next) => {
-  const userId = req.headers['x-user-id'];
+// Upload de arquivo (com autenticação)
+router.post('/files/:projectId', extractUserId, upload.single('file'), async (req, res, next) => {
+  const userId = req.userId;
   if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo enviado' });
   try {
     const ext = path.extname(req.file.originalname).toLowerCase();
@@ -89,9 +63,9 @@ router.post('/files/:projectId', upload.single('file'), async (req, res, next) =
   } catch (err) { next(err); }
 });
 
-// Deletar arquivo
-router.delete('/files/:projectId/:fileId', async (req, res, next) => {
-  const userId = req.headers['x-user-id'];
+// Deletar arquivo (com autenticação)
+router.delete('/files/:projectId/:fileId', extractUserId, async (req, res, next) => {
+  const userId = req.userId;
   try {
     const file = await getAsync('SELECT * FROM files WHERE id = $1 AND project_id = $2', [req.params.fileId, req.params.projectId]);
     if (!file) return res.status(404).json({ error: 'Arquivo não encontrado' });
@@ -102,35 +76,22 @@ router.delete('/files/:projectId/:fileId', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ========== NOVO: Download de arquivo com autenticação ==========
-router.get('/files/:id/download', authenticateRequest, async (req, res, next) => {
+// Download de arquivo com autenticação
+router.get('/files/:id/download', extractUserId, async (req, res, next) => {
   try {
     const fileId = req.params.id;
     const file = await getAsync(
       'SELECT f.*, p.user_id as project_user_id FROM files f JOIN projects p ON f.project_id = p.id WHERE f.id = $1',
       [fileId]
     );
-    if (!file) {
-      return res.status(404).json({ error: 'Arquivo não encontrado' });
-    }
+    if (!file) return res.status(404).json({ error: 'Arquivo não encontrado' });
+    if (file.project_user_id !== req.userId) return res.status(403).json({ error: 'Acesso negado' });
+    if (!file.path || !fs.existsSync(file.path)) return res.status(404).json({ error: 'Arquivo não encontrado no disco' });
 
-    // Verifica se o usuário autenticado é o dono do projeto
-    if (file.project_user_id !== req.userId) {
-      return res.status(403).json({ error: 'Acesso negado' });
-    }
-
-    // Verifica se o arquivo físico existe
-    if (!file.path || !fs.existsSync(file.path)) {
-      return res.status(404).json({ error: 'Arquivo não encontrado no disco' });
-    }
-
-    // Define headers para exibição inline (ou download forçado se preferir)
     res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(file.original_name)}"`);
     res.setHeader('Content-Type', file.mime_type || 'application/octet-stream');
     res.sendFile(file.path);
-  } catch (err) {
-    next(err);
-  }
+  } catch (err) { next(err); }
 });
 
 export default router;

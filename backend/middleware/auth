@@ -1,0 +1,46 @@
+// backend/middleware/auth.js — Extração de userId via JWT (Supabase) ou header x-user-id
+
+/**
+ * Middleware que extrai o userId da requisição.
+ * Prioriza token JWT no header Authorization. Caso falhe ou não exista,
+ * utiliza o header x-user-id (modo convidado).
+ * 
+ * O userId extraído fica disponível em req.userId.
+ */
+export async function extractUserId(req, res, next) {
+  const authHeader = req.headers.authorization;
+
+  // Tenta autenticar via JWT do Supabase
+  if (authHeader?.startsWith('Bearer ')) {
+    const token = authHeader.substring(7);
+
+    // Só tenta validar se as variáveis do Supabase estiverem definidas
+    if (process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY) {
+      try {
+        // Import dinâmico para não quebrar se as variáveis não existirem
+        const { createClient } = await import('@supabase/supabase-js');
+        const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
+        const { data: { user }, error } = await supabase.auth.getUser(token);
+
+        if (!error && user) {
+          req.userId = user.id;
+          return next();
+        }
+      } catch (err) {
+        console.warn('⚠️ Falha na validação JWT do Supabase:', err.message);
+      }
+    } else {
+      console.warn('⚠️ SUPABASE_URL/ANON_KEY não definidas. JWT ignorado.');
+    }
+  }
+
+  // Fallback para guest mode (x-user-id)
+  const guestId = req.headers['x-user-id'];
+  if (guestId) {
+    req.userId = guestId;
+    return next();
+  }
+
+  // Nenhuma autenticação fornecida
+  res.status(401).json({ error: 'Usuário não autenticado. Forneça um token JWT ou x-user-id.' });
+}

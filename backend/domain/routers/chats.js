@@ -3,14 +3,15 @@
 import { Router } from 'express';
 import { randomUUID } from 'crypto';
 import { runAsync, getAsync, allAsync } from '../../db/database.js';
+import { extractUserId } from '../../middleware/auth.js';
 
 const router = Router();
+router.use(extractUserId);
 
 // Criar chat (com ou sem projeto)
 router.post('/projects/:id/chats', async (req, res, next) => {
-  const userId = req.headers['x-user-id'];
+  const userId = req.userId;
   const projectId = req.params.id === 'none' ? null : req.params.id;
-  if (!userId) return res.status(400).json({ error: 'x-user-id obrigatório' });
   try {
     if (projectId) {
       const project = await getAsync('SELECT id FROM projects WHERE id = $1 AND user_id = $2', [projectId, userId]);
@@ -46,8 +47,7 @@ router.patch('/chats/:chatId/title', async (req, res, next) => {
 
 // Listar chats sem projeto (avulsos) do usuário
 router.get('/user/chats', async (req, res, next) => {
-  const userId = req.headers['x-user-id'];
-  if (!userId) return res.status(400).json({ error: 'x-user-id obrigatório' });
+  const userId = req.userId;
   try {
     const rows = await allAsync(
       `SELECT id, title, created_at, updated_at
@@ -64,8 +64,7 @@ router.get('/user/chats', async (req, res, next) => {
 
 // Deletar TODOS os chats do usuário
 router.delete('/user/chats', async (req, res, next) => {
-  const userId = req.headers['x-user-id'];
-  if (!userId) return res.status(400).json({ error: 'x-user-id obrigatório' });
+  const userId = req.userId;
   try {
     const result = await runAsync('DELETE FROM chats WHERE user_id = $1', [userId]);
     res.json({ deleted: result.changes });

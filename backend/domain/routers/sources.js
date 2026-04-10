@@ -5,10 +5,11 @@ import { randomUUID } from 'crypto';
 import { runAsync, allAsync } from '../../db/database.js';
 import { getJobQueue } from '../../utils/jobQueue.js';
 import { invalidateSystemPromptCache } from '../ai/prompt.js';
+import { extractUserId } from '../../middleware/auth.js';
 
 const router = Router();
 
-// Listar fontes do projeto
+// Listar fontes do projeto (sem autenticação? No original não pedia userId, manteremos)
 router.get('/projects/:projectId/sources', async (req, res, next) => {
   try {
     const rows = await allAsync('SELECT id, type, title, url, content, created_at FROM external_sources WHERE project_id = $1 ORDER BY created_at DESC', [req.params.projectId]);
@@ -16,13 +17,13 @@ router.get('/projects/:projectId/sources', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// Adicionar fonte via URL (com timeout de 10 segundos)
-router.post('/projects/:projectId/sources/url', async (req, res, next) => {
+// Adicionar fonte via URL (com autenticação)
+router.post('/projects/:projectId/sources/url', extractUserId, async (req, res, next) => {
   const { url, title } = req.body;
   if (!url) return res.status(400).json({ error: 'URL é obrigatória' });
   const projectId = req.params.projectId;
+  const userId = req.userId;
 
-  // Configura AbortController para timeout de 10 segundos
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 10000);
 
@@ -31,7 +32,7 @@ router.post('/projects/:projectId/sources/url', async (req, res, next) => {
       signal: controller.signal,
       headers: { 'User-Agent': 'SolarisBot/1.0' }
     });
-    clearTimeout(timeoutId); // limpa o timeout assim que a resposta chega
+    clearTimeout(timeoutId);
 
     if (!fetchRes.ok) throw new Error(`Erro ao acessar URL: ${fetchRes.status}`);
     let html = await fetchRes.text();
@@ -52,7 +53,7 @@ router.post('/projects/:projectId/sources/url', async (req, res, next) => {
 
     res.status(201).json({ id: sourceId, type: 'url', title: title || url, job_enqueued: true });
   } catch (err) {
-    clearTimeout(timeoutId); // garante limpeza em caso de erro também
+    clearTimeout(timeoutId);
     if (err.name === 'AbortError') {
       err.status = 408;
       err.message = 'A URL demorou muito para responder (timeout de 10s)';
@@ -61,11 +62,12 @@ router.post('/projects/:projectId/sources/url', async (req, res, next) => {
   }
 });
 
-// Adicionar fonte via texto
-router.post('/projects/:projectId/sources/text', async (req, res, next) => {
+// Adicionar fonte via texto (com autenticação)
+router.post('/projects/:projectId/sources/text', extractUserId, async (req, res, next) => {
   const { title, content } = req.body;
   if (!content) return res.status(400).json({ error: 'Conteúdo de texto é obrigatório' });
   const projectId = req.params.projectId;
+  const userId = req.userId;
   try {
     const sourceId = randomUUID();
     const trimmedContent = content.substring(0, 50000);
@@ -76,9 +78,9 @@ router.post('/projects/:projectId/sources/text', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// Deletar fonte
-router.delete('/projects/:projectId/sources/:sourceId', async (req, res, next) => {
-  const userId = req.headers['x-user-id'];
+// Deletar fonte (com autenticação)
+router.delete('/projects/:projectId/sources/:sourceId', extractUserId, async (req, res, next) => {
+  const userId = req.userId;
   try {
     await runAsync('DELETE FROM external_sources WHERE id = $1 AND project_id = $2', [req.params.sourceId, req.params.projectId]);
     await runAsync('DELETE FROM file_chunks WHERE file_id = $1', [req.params.sourceId]);

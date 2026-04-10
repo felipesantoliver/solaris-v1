@@ -4,13 +4,14 @@ import { Router } from 'express';
 import { randomUUID } from 'crypto';
 import { runAsync, getAsync, allAsync } from '../../db/database.js';
 import { invalidateSystemPromptCache } from '../ai/prompt.js';
+import { extractUserId } from '../../middleware/auth.js';
 
 const router = Router();
+router.use(extractUserId); // aplica a todas as rotas
 
 // Listar projetos do usuário
 router.get('/projects', async (req, res, next) => {
-  const userId = req.headers['x-user-id'];
-  if (!userId) return res.status(400).json({ error: 'x-user-id obrigatório' });
+  const userId = req.userId;
   try {
     const rows = await allAsync('SELECT * FROM projects WHERE user_id = $1 ORDER BY created_at DESC', [userId]);
     res.json(rows);
@@ -19,7 +20,7 @@ router.get('/projects', async (req, res, next) => {
 
 // Obter projeto específico com seus chats
 router.get('/projects/:id', async (req, res, next) => {
-  const userId = req.headers['x-user-id'];
+  const userId = req.userId;
   try {
     const project = await getAsync('SELECT * FROM projects WHERE id = $1 AND user_id = $2', [req.params.id, userId]);
     if (!project) return res.status(404).json({ error: 'Projeto não encontrado' });
@@ -30,8 +31,7 @@ router.get('/projects/:id', async (req, res, next) => {
 
 // Criar projeto
 router.post('/projects', async (req, res, next) => {
-  const userId = req.headers['x-user-id'];
-  if (!userId) return res.status(400).json({ error: 'x-user-id obrigatório' });
+  const userId = req.userId;
   const { name, summary, detailed_objective, tags = [], response_style = 'direto', memory_mode = 'projeto', gemini_version = 'flash' } = req.body;
   if (!name) return res.status(400).json({ error: 'name obrigatório' });
   try {
@@ -46,7 +46,7 @@ router.post('/projects', async (req, res, next) => {
 
 // Atualizar projeto
 router.patch('/projects/:id', async (req, res, next) => {
-  const userId = req.headers['x-user-id'];
+  const userId = req.userId;
   const { name, summary, detailed_objective, tags, response_style, memory_mode, gemini_version } = req.body;
   try {
     const project = await getAsync('SELECT id, memory_mode FROM projects WHERE id = $1 AND user_id = $2', [req.params.id, userId]);
@@ -72,7 +72,7 @@ router.patch('/projects/:id', async (req, res, next) => {
 
 // Deletar projeto
 router.delete('/projects/:id', async (req, res, next) => {
-  const userId = req.headers['x-user-id'];
+  const userId = req.userId;
   try {
     const project = await getAsync('SELECT id FROM projects WHERE id = $1 AND user_id = $2', [req.params.id, userId]);
     if (!project) return res.status(404).json({ error: 'Projeto não encontrado' });
@@ -82,7 +82,7 @@ router.delete('/projects/:id', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// Resolver modelo por projeto
+// Resolver modelo por projeto (mantido como export)
 export async function resolveModelForRequest(userId, projectId, headerModel) {
   if (projectId) {
     const project = await getAsync('SELECT gemini_version FROM projects WHERE id = $1', [projectId]);

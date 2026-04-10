@@ -12,12 +12,12 @@ import {
 } from '../ai/prompt.js';
 import { generateEmbedding, cosineSimilarity } from '../ai/embeddings.js';
 import { resolveModelForRequest } from './projects.js';
+import { extractUserId } from '../../middleware/auth.js';
 
 const router = Router();
 
 // ─── Rate limit in-memory ──────────────────────────────────────────────────
-// Sliding window: guests 2 req/min, autenticados 5 req/min
-const rateLimitMap = new Map(); // userId -> timestamp[]
+const rateLimitMap = new Map();
 
 const RATE_LIMITS = {
   guest: { max: 2, windowMs: 60_000 },
@@ -25,8 +25,6 @@ const RATE_LIMITS = {
 };
 
 function checkRateLimit(userId) {
-  // Guests têm IDs que não são UUIDs Supabase (começam com formato diferente)
-  // Heurística simples: userId com menos de 36 chars = guest
   const isGuest = !userId || userId.length < 36;
   const { max, windowMs } = isGuest ? RATE_LIMITS.guest : RATE_LIMITS.auth;
   const now = Date.now();
@@ -37,7 +35,6 @@ function checkRateLimit(userId) {
   return true;
 }
 
-// Limpa entradas antigas a cada 5 minutos
 setInterval(() => {
   const now = Date.now();
   for (const [key, timestamps] of rateLimitMap.entries()) {
@@ -106,12 +103,15 @@ async function searchRelevantChunks(projectId, query, limit = 3) {
   return withScores.slice(0, limit).map(c => c.text);
 }
 
-// Processa resposta final: limpa prefixo Solaris + sanitiza provider mentions
 function processResponse(text) {
   return sanitizeModelResponse(cleanAssistantMessage(text));
 }
 
-// ─── GET mensagens de um chat ──────────────────────────────────────────────
+// Aplica middleware apenas nas rotas que precisam de userId
+// GET /messages/chat/:id (pode ser público? Mantemos sem autenticação? Vamos manter como antes, mas sem userId)
+// Decidimos aplicar extractUserId nas rotas POST porque precisam de userId para rate limit e operações.
+
+// ─── GET mensagens de um chat (pode ser acessado sem auth? No seu código original não exigia userId. Manteremos assim.)
 router.get('/messages/chat/:chatId', async (req, res, next) => {
   try {
     const rows = await allAsync(
@@ -128,10 +128,9 @@ router.get('/messages/chat/:chatId', async (req, res, next) => {
 });
 
 // ─── POST streaming SSE ────────────────────────────────────────────────────
-router.post('/messages/stream', async (req, res, next) => {
-  const userId = req.headers['x-user-id'];
+router.post('/messages/stream', extractUserId, async (req, res, next) => {
+  const userId = req.userId;
 
-  // Rate limit
   if (!checkRateLimit(userId)) {
     return res.status(429).json({ error: 'Muitas requisições. Aguarde antes de enviar outra mensagem.' });
   }
@@ -211,10 +210,9 @@ router.post('/messages/stream', async (req, res, next) => {
 });
 
 // ─── POST fallback não-streaming ───────────────────────────────────────────
-router.post('/messages', async (req, res, next) => {
-  const userId = req.headers['x-user-id'];
+router.post('/messages', extractUserId, async (req, res, next) => {
+  const userId = req.userId;
 
-  // Rate limit
   if (!checkRateLimit(userId)) {
     return res.status(429).json({ error: 'Muitas requisições. Aguarde antes de enviar outra mensagem.' });
   }
