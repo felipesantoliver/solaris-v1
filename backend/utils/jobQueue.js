@@ -82,6 +82,10 @@ class JobQueue {
             [id, type, JSON.stringify(payload), priority]
         );
         console.log(`📦 Job ${id} (${type}) adicionado à fila`);
+
+        // Dispara polling imediato para processar o job recém-criado sem esperar o intervalo
+        setImmediate(() => this.poll());
+
         return id;
     }
 
