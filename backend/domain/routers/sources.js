@@ -16,13 +16,23 @@ router.get('/projects/:projectId/sources', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// Adicionar fonte via URL
+// Adicionar fonte via URL (com timeout de 10 segundos)
 router.post('/projects/:projectId/sources/url', async (req, res, next) => {
   const { url, title } = req.body;
   if (!url) return res.status(400).json({ error: 'URL é obrigatória' });
   const projectId = req.params.projectId;
+
+  // Configura AbortController para timeout de 10 segundos
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000);
+
   try {
-    const fetchRes = await fetch(url, { headers: { 'User-Agent': 'SolarisBot/1.0' } });
+    const fetchRes = await fetch(url, {
+      signal: controller.signal,
+      headers: { 'User-Agent': 'SolarisBot/1.0' }
+    });
+    clearTimeout(timeoutId); // limpa o timeout assim que a resposta chega
+
     if (!fetchRes.ok) throw new Error(`Erro ao acessar URL: ${fetchRes.status}`);
     let html = await fetchRes.text();
     const text = html
@@ -30,12 +40,25 @@ router.post('/projects/:projectId/sources/url', async (req, res, next) => {
       .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, ' ')
       .replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().substring(0, 50000);
     if (!text) throw new Error('Não foi possível extrair texto da URL');
+
     const sourceId = randomUUID();
-    await runAsync('INSERT INTO external_sources (id, project_id, type, title, url, content) VALUES ($1, $2, $3, $4, $5, $6)', [sourceId, projectId, 'url', title || url, url, text]);
+    await runAsync(
+      'INSERT INTO external_sources (id, project_id, type, title, url, content) VALUES ($1, $2, $3, $4, $5, $6)',
+      [sourceId, projectId, 'url', title || url, url, text]
+    );
+
     const jobQueue = getJobQueue();
     await jobQueue.addJob('embedding', { fileId: sourceId, projectId, text }, 1);
+
     res.status(201).json({ id: sourceId, type: 'url', title: title || url, job_enqueued: true });
-  } catch (err) { next(err); }
+  } catch (err) {
+    clearTimeout(timeoutId); // garante limpeza em caso de erro também
+    if (err.name === 'AbortError') {
+      err.status = 408;
+      err.message = 'A URL demorou muito para responder (timeout de 10s)';
+    }
+    next(err);
+  }
 });
 
 // Adicionar fonte via texto
