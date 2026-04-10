@@ -48,23 +48,30 @@ export function ChatWindow({
         <WelcomeScreen />
       ) : (
         <div className="space-y-12">
-          {messages.map((msg, i) => (
-            <MessageBubble
-              key={msg.id || i}
-              msg={msg}
-              index={i}
-              darkMode={darkMode}
-              theme={theme}
-              onEdit={onEdit}
-              isEditing={editingMsgIndex === i}
-              editValue={editValue}
-              setEditValue={setEditValue}
-              onEditSave={onEditSave}
-              onEditCancel={onEditCancel}
-              isLoading={isLoading || isStreaming}
-              programmingMode={programmingMode}
-            />
-          ))}
+          {messages.map((msg, i) => {
+            // Índice da última mensagem do assistente
+            const lastAssistantIdx = messages.reduce((acc, m, idx) => m.role === 'assistant' ? idx : acc, -1);
+            const isLastAssistant = msg.role === 'assistant' && i === lastAssistantIdx;
+            return (
+              <MessageBubble
+                key={msg.id || i}
+                msg={msg}
+                index={i}
+                darkMode={darkMode}
+                theme={theme}
+                onEdit={onEdit}
+                isEditing={editingMsgIndex === i}
+                editValue={editValue}
+                setEditValue={setEditValue}
+                onEditSave={onEditSave}
+                onEditCancel={onEditCancel}
+                isLoading={isLoading || isStreaming}
+                programmingMode={programmingMode}
+                isLastAssistant={isLastAssistant}
+                isStreaming={isStreaming}
+              />
+            );
+          })}
         </div>
       )}
 

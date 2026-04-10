@@ -116,25 +116,40 @@ export const api = {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          const data = line.slice(6);
-          if (data === '[DONE]') { onDone?.(); continue; }
-          try {
-            const parsed = JSON.parse(data);
-            if (parsed.error) { onError?.(parsed.error); return; }
-            if (parsed.title && parsed.chat_id) onTitle?.(parsed.title, parsed.chat_id);
-            if (parsed.chunk) onChunk?.(parsed.chunk);
-            if (parsed.done) onDone?.();
-          } catch (e) { console.warn('SSE parse error:', e); }
+    let doneCalled = false;
+
+    const safeDone = () => {
+      if (!doneCalled) {
+        doneCalled = true;
+        onDone?.();
+      }
+    };
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const data = line.slice(6).trim();
+            if (data === '[DONE]') { safeDone(); continue; }
+            try {
+              const parsed = JSON.parse(data);
+              if (parsed.error) { onError?.(parsed.error); return; }
+              if (parsed.title && parsed.chat_id) onTitle?.(parsed.title, parsed.chat_id);
+              if (parsed.chunk) onChunk?.(parsed.chunk);
+              if (parsed.done) safeDone();
+            } catch (e) { console.warn('SSE parse error:', e); }
+          }
         }
       }
+    } finally {
+      // Garante que onDone é sempre chamado ao final do stream,
+      // independente do navegador, extensões ou fechamento abrupto da conexão
+      safeDone();
     }
   },
 

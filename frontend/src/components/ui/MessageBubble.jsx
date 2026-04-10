@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
-import { Pencil, RotateCcw, Check, Loader2, Star, Code } from 'lucide-react';
+import { Pencil, RotateCcw, Check, Loader2, Star } from 'lucide-react';
 import 'highlight.js/styles/github-dark.css';
 
 function CodeBlock({ language, children }) {
@@ -29,9 +29,76 @@ function CodeBlock({ language, children }) {
   );
 }
 
-export const MessageBubble = React.memo(({ msg, index, darkMode, theme, onEdit, isEditing, editValue, setEditValue, onEditSave, onEditCancel, isLoading, programmingMode }) => {
+// Hook de efeito typewriter
+function useTypewriter(fullText, isActive, speed = 16) {
+  const [displayed, setDisplayed] = useState('');
+  const [isDone, setIsDone] = useState(false);
+  const prevTextRef = useRef('');
+  const timerRef = useRef(null);
+  const indexRef = useRef(0);
+
+  useEffect(() => {
+    // Mensagens antigas: mostra tudo imediatamente
+    if (!isActive) {
+      setDisplayed(fullText);
+      setIsDone(true);
+      return;
+    }
+
+    // Reset quando nova mensagem começa (texto vazio)
+    if (fullText === '' && prevTextRef.current !== '') {
+      prevTextRef.current = '';
+      setDisplayed('');
+      setIsDone(false);
+      indexRef.current = 0;
+      clearInterval(timerRef.current);
+      return;
+    }
+
+    // Inicia ou continua o typewriter quando fullText muda
+    if (fullText !== prevTextRef.current && fullText.length > 0) {
+      prevTextRef.current = fullText;
+      clearInterval(timerRef.current);
+      setIsDone(false);
+      indexRef.current = 0;
+
+      timerRef.current = setInterval(() => {
+        indexRef.current += 1;
+        setDisplayed(fullText.slice(0, indexRef.current));
+        if (indexRef.current >= fullText.length) {
+          clearInterval(timerRef.current);
+          setIsDone(true);
+        }
+      }, speed);
+    }
+  }, [fullText, isActive, speed]);
+
+  useEffect(() => {
+    return () => clearInterval(timerRef.current);
+  }, []);
+
+  return { displayed, isDone };
+}
+
+export const MessageBubble = React.memo(({
+  msg,
+  index,
+  darkMode,
+  theme,
+  onEdit,
+  isEditing,
+  editValue,
+  setEditValue,
+  onEditSave,
+  onEditCancel,
+  isLoading,
+  programmingMode,
+  isLastAssistant,
+  isStreaming,
+}) => {
   const [showHistory, setShowHistory] = useState(false);
   const editRef = useRef(null);
+
   useEffect(() => {
     if (isEditing && editRef.current) {
       editRef.current.focus();
@@ -39,40 +106,65 @@ export const MessageBubble = React.memo(({ msg, index, darkMode, theme, onEdit, 
       editRef.current.style.height = editRef.current.scrollHeight + 'px';
     }
   }, [isEditing]);
+
   const hasHistory = Array.isArray(msg.edit_history) && msg.edit_history.length > 0;
+
+  // Typewriter: ativa na última mensagem do assistente APÓS o streaming terminar
+  const shouldTypewrite = msg.role === 'assistant' && isLastAssistant && !isStreaming && msg.content.length > 0;
+  const { displayed, isDone } = useTypewriter(msg.content, shouldTypewrite, 16);
+
+  const contentToRender = shouldTypewrite ? displayed : msg.content;
+  const showCursor = shouldTypewrite && !isDone;
 
   const renderContent = () => {
     if (msg.role === 'assistant' && programmingMode) {
       return (
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          rehypePlugins={[rehypeHighlight]}
-          components={{
-            code({ node, inline, className, children, ...props }) {
-              const match = /language-(\w+)/.exec(className || '');
-              const language = match ? match[1] : '';
-              return !inline ? (
-                <CodeBlock language={language}>{String(children).replace(/\n$/, '')}</CodeBlock>
-              ) : (
-                <code className={`${className} bg-black/20 px-1 rounded`} {...props}>
-                  {children}
-                </code>
-              );
-            },
-            h3({ children, ...props }) {
-              const isFileName = /^[`\w\-\.]+$/.test(children);
-              if (isFileName) {
-                return <h3 className="text-sm font-mono font-bold mt-4 mb-2 text-amber-400 border-l-2 border-amber-400 pl-2" {...props}>{children}</h3>;
-              }
-              return <h3 className="text-sm font-semibold mt-3 mb-1" {...props}>{children}</h3>;
-            },
-          }}
-        >
-          {msg.content}
-        </ReactMarkdown>
+        <div className="relative">
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            rehypePlugins={[rehypeHighlight]}
+            components={{
+              code({ node, inline, className, children, ...props }) {
+                const match = /language-(\w+)/.exec(className || '');
+                const language = match ? match[1] : '';
+                return !inline ? (
+                  <CodeBlock language={language}>{String(children).replace(/\n$/, '')}</CodeBlock>
+                ) : (
+                  <code className={`${className} bg-black/20 px-1 rounded`} {...props}>
+                    {children}
+                  </code>
+                );
+              },
+              h3({ children, ...props }) {
+                const isFileName = /^[`\w\-\.]+$/.test(children);
+                if (isFileName) {
+                  return <h3 className="text-sm font-mono font-bold mt-4 mb-2 text-amber-400 border-l-2 border-amber-400 pl-2" {...props}>{children}</h3>;
+                }
+                return <h3 className="text-sm font-semibold mt-3 mb-1" {...props}>{children}</h3>;
+              },
+            }}
+          >
+            {contentToRender}
+          </ReactMarkdown>
+          {showCursor && (
+            <span className={`inline-block w-0.5 h-4 ml-0.5 align-middle animate-pulse ${darkMode ? 'bg-white/60' : 'bg-black/60'}`} />
+          )}
+        </div>
       );
     }
-    return <div className={`text-base leading-relaxed transition-colors duration-500 whitespace-pre-wrap ${msg.role === 'user' ? (darkMode ? 'text-white font-medium' : 'text-black font-medium') : (darkMode ? 'text-white/60 font-light' : 'text-gray-600 font-light')}`}>{msg.content}</div>;
+
+    return (
+      <div className={`text-base leading-relaxed transition-colors duration-500 whitespace-pre-wrap ${
+        msg.role === 'user'
+          ? (darkMode ? 'text-white font-medium' : 'text-black font-medium')
+          : (darkMode ? 'text-white/60 font-light' : 'text-gray-600 font-light')
+      }`}>
+        {contentToRender}
+        {showCursor && (
+          <span className={`inline-block w-0.5 h-4 ml-0.5 align-middle animate-pulse ${darkMode ? 'bg-white/40' : 'bg-black/40'}`} />
+        )}
+      </div>
+    );
   };
 
   return (

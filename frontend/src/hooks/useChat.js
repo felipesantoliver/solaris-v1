@@ -32,7 +32,10 @@ export function useChat(effectiveUserId, authUser, model, activeProjectId) {
     clearTimeout(streamTimeoutRef.current);
     setIsStreaming(false);
     setStatusMessage('');
-    assistantIdxRef.current = null;
+    // Pequeno delay para garantir que o último chunk foi processado antes de finalizar
+    setTimeout(() => {
+      assistantIdxRef.current = null;
+    }, 50);
   }, []);
 
   // ── Carregar mensagens de um chat ─────────────────────────────────────────
