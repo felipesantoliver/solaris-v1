@@ -1,61 +1,71 @@
-// domain/routers/files.js (trecho adicional)
-import { createClient } from '@supabase/supabase-js';
-import { getAsync } from '../../db/database.js';
+// ============================================================
+//  server.js — Solaris Backend Bootstrap
+//  (apenas configuração de middlewares, rotas e listen)
+// ============================================================
+
+import { setDefaultResultOrder } from 'dns';
+setDefaultResultOrder('ipv4first');
+
+import express from 'express';
+import cors from 'cors';
 import path from 'path';
-import fs from 'fs';
 import { fileURLToPath } from 'url';
+import { initDb } from './db/schema.js';
+import { errorHandler } from './utils/errorHandler.js';
+import { getJobQueue } from './utils/jobQueue.js';
+
+// Import routers
+import projectsRouter from './domain/routers/projects.js';
+import chatsRouter from './domain/routers/chats.js';
+import messagesRouter from './domain/routers/messages.js';
+import filesRouter from './domain/routers/files.js';
+import sourcesRouter from './domain/routers/sources.js';
+import settingsRouter from './domain/routers/settings.js';
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const app = express();
+const PORT = process.env.PORT || 3001;
 
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
+// ─── CORS ─────────────────────────────────────────────────────────────
+const corsOptions = {
+  origin: process.env.FRONTEND_URL || false,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'x-user-id', 'x-model', 'Authorization'],
+  credentials: true,
+};
+app.options('*', cors(corsOptions));
+app.use(cors(corsOptions));
 
-// Middleware para extrair userId do token JWT ou guestId
-async function authenticateRequest(req, res, next) {
-  const authHeader = req.headers.authorization;
-  if (authHeader?.startsWith('Bearer ')) {
-    const token = authHeader.substring(7);
-    const { data: { user }, error } = await supabase.auth.getUser(token);
-    if (!error && user) {
-      req.userId = user.id;
-      return next();
-    }
-  }
-  // fallback para guest mode (apenas se o arquivo for público ou pertencer ao guestId)
-  const guestId = req.headers['x-user-id'];
-  if (guestId) {
-    req.userId = guestId;
-    return next();
-  }
-  res.status(401).json({ error: 'Não autorizado' });
-}
+// ─── Body parsers ─────────────────────────────────────────────────────
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true }));
 
-// GET /api/files/:id/download – baixar arquivo com verificação de propriedade
-router.get('/files/:id/download', authenticateRequest, async (req, res, next) => {
+// ─── Health check ─────────────────────────────────────────────────────
+app.get('/api/health', (_, res) => res.json({ status: 'ok' }));
+
+// ─── Register routers ─────────────────────────────────────────────────
+app.use('/api', projectsRouter);
+app.use('/api', chatsRouter);
+app.use('/api', messagesRouter);
+app.use('/api', filesRouter);       // agora inclui rota autenticada para download
+app.use('/api', sourcesRouter);
+app.use('/api', settingsRouter);
+
+// ─── Error handler (deve ser o último) ────────────────────────────────
+app.use(errorHandler);
+
+// ─── Unhandled rejection ──────────────────────────────────────────────
+process.on('unhandledRejection', (reason) => console.error('Unhandled rejection:', reason));
+
+// ─── Bootstrap ────────────────────────────────────────────────────────
+(async () => {
   try {
-    const fileId = req.params.id;
-    const file = await getAsync(
-      'SELECT * FROM files WHERE id = $1',
-      [fileId]
-    );
-    if (!file) return res.status(404).json({ error: 'Arquivo não encontrado' });
-
-    // Verifica se o usuário tem acesso ao projeto do arquivo
-    const project = await getAsync(
-      'SELECT user_id FROM projects WHERE id = $1',
-      [file.project_id]
-    );
-    if (!project || project.user_id !== req.userId) {
-      return res.status(403).json({ error: 'Acesso negado' });
-    }
-
-    const filePath = path.join(__dirname, '../../uploads', file.path || fileId);
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ error: 'Arquivo não encontrado no disco' });
-    }
-
-    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(file.original_name)}"`);
-    res.setHeader('Content-Type', file.mime_type || 'application/octet-stream');
-    res.sendFile(filePath);
+    await initDb();
+    const jobQueue = getJobQueue();
+    console.log('📋 JobQueue inicializada e rodando');
+    app.listen(PORT, '0.0.0.0', () => console.log(`✅ Solaris backend na porta ${PORT}`));
   } catch (err) {
-    next(err);
+    console.error('❌ Falha ao iniciar:', err);
+    process.exit(1);
   }
-});
+})();
