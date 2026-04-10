@@ -161,7 +161,7 @@ export async function extractMemories(projectId, userId, response, memoryMode) {
 }
 
 // Context window
-const MAX_CONTEXT_MESSAGES = 6;
+const MAX_CONTEXT_MESSAGES = 10;
 
 export function selectContextWindow(history) {
   if (!Array.isArray(history) || history.length === 0) return [];
