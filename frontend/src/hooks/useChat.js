@@ -1,50 +1,21 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { api } from '../services/api';
 
-// Remove prefixos "Solaris:" repetidos (mas preserva o conteúdo)
-function cleanDuplicateSolarisPrefix(text) {
-  if (!text) return text;
-  // Remove qualquer ocorrência de "Solaris:" ou "Solaris diz:" no início da string ou após quebra de linha
-  const cleaned = text.replace(/(?:^|\n)\s*Solaris\s*[:：]?\s*(?:diz\s*)?[:：]?\s*/gi, '\n');
-  // Remove múltiplas quebras de linha
-  return cleaned.replace(/\n{3,}/g, '\n\n').trim();
-}
-
-// Efeito de digitação (typewriter)
-async function typewriteMessage(setMessages, assistantIdx, fullContent, onComplete) {
-  let currentText = '';
-  const chars = fullContent.split('');
-  
-  for (let i = 0; i < chars.length; i++) {
-    currentText += chars[i];
-    setMessages(prev => {
-      const updated = [...prev];
-      if (updated[assistantIdx]) {
-        updated[assistantIdx] = { ...updated[assistantIdx], content: currentText };
-      }
-      return updated;
-    });
-    // Delay variável: mais rápido para letras comuns, um pouco maior para pontuação e quebras de linha
-    const delay = chars[i] === '\n' ? 60 : chars[i] === '.' || chars[i] === '?' || chars[i] === '!' ? 80 : 25;
-    await new Promise(r => setTimeout(r, delay));
-  }
-  onComplete?.();
-}
-
 export function useChat(effectiveUserId, authUser, model, activeProjectId) {
-  const [messages, setMessages] = useState([]);
+  const [messages, setMessages]       = useState([]);
   const [activeChatId, setActiveChatId] = useState(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [isStreaming, setIsStreaming] = useState(false);
+  const [isLoading, setIsLoading]     = useState(false);
+  const [isStreaming, setIsStreaming]  = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
-  const [sendError, setSendError] = useState('');
-  const newChatRef = useRef(null);
-  const typewriterRef = useRef(null);
+  const [sendError, setSendError]     = useState('');
+  const newChatRef    = useRef(null);
+  const assistantIdxRef = useRef(null);
 
+  // ── Status visual antes da resposta ──────────────────────────────────────
   const statusSequence = [
-    { text: "Analisando contexto...", duration: 600 },
-    { text: "Consultando memórias do projeto...", duration: 600 },
-    { text: "Preparando resposta...", duration: 500 }
+    { text: 'Analisando contexto...',          duration: 600 },
+    { text: 'Consultando memórias do projeto...', duration: 600 },
+    { text: 'Preparando resposta...',          duration: 500 },
   ];
 
   const showStatusSequence = async () => {
@@ -55,20 +26,21 @@ export function useChat(effectiveUserId, authUser, model, activeProjectId) {
     setStatusMessage('');
   };
 
+  // ── Carregar mensagens de um chat ─────────────────────────────────────────
   const loadMessages = useCallback(async (chatId) => {
     if (!chatId) { setMessages([]); return; }
     if (newChatRef.current === chatId) { newChatRef.current = null; return; }
     try {
-      const msgs = await api.getMessages(chatId, effectiveUserId);
-      // Ao carregar mensagens antigas, não adicionamos prefixo extra
+      const msgs = await api.getMessages(chatId);
       setMessages(msgs);
     } catch { setMessages([]); }
-  }, [effectiveUserId]);
+  }, []);
 
   useEffect(() => {
     loadMessages(activeChatId);
   }, [activeChatId, loadMessages]);
 
+  // ── Enviar mensagem (SSE streaming real) ──────────────────────────────────
   const sendMessage = useCallback(async (text, chatId, projectId, onCreateChat) => {
     if (!text.trim() || isLoading || isStreaming) return;
     setSendError('');
@@ -83,7 +55,7 @@ export function useChat(effectiveUserId, authUser, model, activeProjectId) {
         newChatRef.current = nc.id;
         setActiveChatId(nc.id);
       } catch (err) {
-        setSendError(`Não foi possível iniciar conversa: ${err.message}`);
+        setSendError('Não foi possível iniciar a conversa. Tente novamente.');
         setMessages(prev => prev.slice(0, -1));
         return;
       }
@@ -91,78 +63,91 @@ export function useChat(effectiveUserId, authUser, model, activeProjectId) {
 
     setIsLoading(true);
     await showStatusSequence();
-    setIsStreaming(true);
     setIsLoading(false);
+    setIsStreaming(true);
 
-    // CORREÇÃO: o índice do assistente é capturado no momento da inserção da mensagem vazia
-    let assistantIdx;
+    // Insere a mensagem vazia do assistente e guarda o índice via ref
     setMessages(prev => {
-      assistantIdx = prev.length; // índice exato antes de adicionar a mensagem do assistente
-      return [...prev, { role: 'assistant', content: '', model: '' }];
+      assistantIdxRef.current = prev.length;
+      return [...prev, { role: 'assistant', content: '', model: authUser ? model : 'flash' }];
     });
 
     try {
-      // Usa o fallback (resposta completa) em vez do stream problemático
-      const fallback = await api.sendMessageFallback(
+      await api.sendMessageStream(
         currentChatId,
         projectId,
         text,
         effectiveUserId,
-        authUser ? model : 'flash'
+        authUser ? model : 'flash',
+
+        // onChunk — append em tempo real, sem typewriter artificial
+        (chunk) => {
+          setMessages(prev => {
+            const idx = assistantIdxRef.current;
+            if (idx === null || !prev[idx]) return prev;
+            const updated = [...prev];
+            updated[idx] = { ...updated[idx], content: updated[idx].content + chunk };
+            return updated;
+          });
+        },
+
+        // onTitle — atualiza título do chat na sidebar
+        (title, chat_id) => {
+          // O componente pai (App.jsx) escuta via setChatHistory;
+          // emitimos um evento customizado leve para não precisar de prop drilling
+          window.dispatchEvent(new CustomEvent('solaris:chat-title', { detail: { title, chat_id } }));
+        },
+
+        // onError
+        (errMsg) => {
+          setMessages(prev => {
+            const idx = assistantIdxRef.current;
+            if (idx === null || !prev[idx]) return prev;
+            const updated = [...prev];
+            updated[idx] = { ...updated[idx], content: '⚠️ Não foi possível obter resposta. Tente novamente.' };
+            return updated;
+          });
+          setSendError('Não foi possível obter resposta. Tente novamente.');
+        },
+
+        // onDone
+        () => {
+          setIsStreaming(false);
+          setStatusMessage('');
+          assistantIdxRef.current = null;
+        },
       );
-      
-      let rawResponse = fallback.response || '';
-      // Remove prefixos "Solaris:" repetidos que o backend possa ter enviado
-      let cleanedContent = cleanDuplicateSolarisPrefix(rawResponse);
-      // Adiciona o prefixo "Solaris:" uma única vez, se ainda não existir
-      if (!cleanedContent.toLowerCase().startsWith('solaris')) {
-        cleanedContent = `Solaris: ${cleanedContent}`;
-      }
-      
-      // Atualiza a mensagem do assistente com o modelo correto (se disponível)
-      setMessages(prev => {
-        const updated = [...prev];
-        if (updated[assistantIdx]) {
-          updated[assistantIdx] = { ...updated[assistantIdx], model: fallback.model };
-        }
-        return updated;
-      });
-      
-      // Inicia o typewriter com o índice correto
-      await typewriteMessage(setMessages, assistantIdx, cleanedContent, () => {
-        // Finalizou a digitação
-      });
-      
     } catch (err) {
-      console.error('Erro ao obter resposta:', err);
+      console.error('Erro ao enviar mensagem:', err);
       setMessages(prev => {
+        const idx = assistantIdxRef.current;
+        if (idx === null || !prev[idx]) return prev;
         const updated = [...prev];
-        if (updated[assistantIdx]) {
-          updated[assistantIdx] = { 
-            ...updated[assistantIdx], 
-            content: `⚠️ Não foi possível obter resposta: ${err.message}` 
-          };
-        }
+        updated[idx] = { ...updated[idx], content: '⚠️ Não foi possível obter resposta. Tente novamente.' };
         return updated;
       });
-    } finally {
+      setSendError('Não foi possível obter resposta. Tente novamente.');
       setIsStreaming(false);
       setStatusMessage('');
+      assistantIdxRef.current = null;
     }
-  }, [isLoading, isStreaming, messages.length, effectiveUserId, authUser, model]);
+  }, [isLoading, isStreaming, effectiveUserId, authUser, model]);
 
-  const editMessage = useCallback(async (index, newContent, originalContent, chatId, projectId) => {
+  // ── Editar mensagem ───────────────────────────────────────────────────────
+  const editMessage = useCallback(async (index, newContent, originalContent) => {
     setMessages(prev => {
       const updated = [...prev];
       updated[index] = {
         ...updated[index],
         content: newContent,
         edited: true,
-        edit_history: [...(updated[index].edit_history || []), { content: originalContent, edited_at: new Date().toISOString() }]
+        edit_history: [
+          ...(updated[index].edit_history || []),
+          { content: originalContent, edited_at: new Date().toISOString() },
+        ],
       };
       return updated;
     });
-    // Opcional: chamar API para salvar edição no backend
   }, []);
 
   return {

@@ -1,4 +1,4 @@
-import { API_BASE } from '../config/supabase';
+import { API_BASE, getAuthHeaders } from '../config/supabase';
 
 async function safeJson(res) {
   const ct = res.headers.get('content-type') || '';
@@ -9,86 +9,107 @@ async function safeJson(res) {
 }
 
 export const api = {
-  // Projects
-  async getProjects(userId) {
-    const res = await fetch(`${API_BASE}/projects`, { headers: { 'x-user-id': userId } });
+  // ─── Projects ─────────────────────────────────────────────────────────────
+  async getProjects() {
+    const res = await fetch(`${API_BASE}/projects`, {
+      headers: await getAuthHeaders(),
+    });
     return safeJson(res);
   },
 
-  async getProject(id, userId) {
-    const res = await fetch(`${API_BASE}/projects/${id}`, { headers: { 'x-user-id': userId } });
+  async getProject(id) {
+    const res = await fetch(`${API_BASE}/projects/${id}`, {
+      headers: await getAuthHeaders(),
+    });
     return safeJson(res);
   },
 
-  async createProject(data, userId, model) {
+  async createProject(data, _userId, model) {
     const res = await fetch(`${API_BASE}/projects`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-user-id': userId, 'x-model': model },
+      headers: { 'Content-Type': 'application/json', 'x-model': model, ...(await getAuthHeaders()) },
       body: JSON.stringify(data),
     });
     return safeJson(res);
   },
 
-  async updateProject(id, data, userId) {
+  async updateProject(id, data) {
     const res = await fetch(`${API_BASE}/projects/${id}`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', 'x-user-id': userId },
+      headers: { 'Content-Type': 'application/json', ...(await getAuthHeaders()) },
       body: JSON.stringify(data),
     });
     return safeJson(res);
   },
 
-  async deleteProject(id, userId) {
-    const res = await fetch(`${API_BASE}/projects/${id}`, { method: 'DELETE', headers: { 'x-user-id': userId } });
+  async deleteProject(id) {
+    const res = await fetch(`${API_BASE}/projects/${id}`, {
+      method: 'DELETE',
+      headers: await getAuthHeaders(),
+    });
     return safeJson(res);
   },
 
-  // Chats
-  async createChat(projectId, userId, model) {
-    const endpoint = projectId ? `${API_BASE}/projects/${projectId}/chats` : `${API_BASE}/projects/none/chats`;
+  // ─── Chats ────────────────────────────────────────────────────────────────
+  async createChat(projectId, _userId, model) {
+    const endpoint = projectId
+      ? `${API_BASE}/projects/${projectId}/chats`
+      : `${API_BASE}/projects/none/chats`;
     const res = await fetch(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-user-id': userId, 'x-model': model },
+      headers: { 'Content-Type': 'application/json', 'x-model': model, ...(await getAuthHeaders()) },
       body: JSON.stringify({ title: 'Nova conversa' }),
     });
     return safeJson(res);
   },
 
-  async deleteChat(projectId, chatId, userId) {
-    const endpoint = projectId ? `${API_BASE}/projects/${projectId}/chats/${chatId}` : `${API_BASE}/projects/none/chats/${chatId}`;
-    const res = await fetch(endpoint, { method: 'DELETE', headers: { 'x-user-id': userId } });
+  async deleteChat(projectId, chatId) {
+    const endpoint = projectId
+      ? `${API_BASE}/projects/${projectId}/chats/${chatId}`
+      : `${API_BASE}/projects/none/chats/${chatId}`;
+    const res = await fetch(endpoint, {
+      method: 'DELETE',
+      headers: await getAuthHeaders(),
+    });
     return safeJson(res);
   },
 
-  async updateChatTitle(chatId, title, userId) {
+  async updateChatTitle(chatId, title) {
     const res = await fetch(`${API_BASE}/chats/${chatId}/title`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', 'x-user-id': userId },
+      headers: { 'Content-Type': 'application/json', ...(await getAuthHeaders()) },
       body: JSON.stringify({ title }),
     });
     return safeJson(res);
   },
 
-  async getUserChats(userId) {
-    const res = await fetch(`${API_BASE}/user/chats`, { headers: { 'x-user-id': userId } });
+  async getUserChats() {
+    const res = await fetch(`${API_BASE}/user/chats`, {
+      headers: await getAuthHeaders(),
+    });
     return safeJson(res);
   },
 
-  async deleteAllUserChats(userId) {
-    const res = await fetch(`${API_BASE}/user/chats`, { method: 'DELETE', headers: { 'x-user-id': userId } });
+  async deleteAllUserChats() {
+    const res = await fetch(`${API_BASE}/user/chats`, {
+      method: 'DELETE',
+      headers: await getAuthHeaders(),
+    });
     return safeJson(res);
   },
 
-  // Messages
-  async getMessages(chatId, userId) {
-    const res = await fetch(`${API_BASE}/messages/chat/${chatId}`, { headers: { 'x-user-id': userId } });
+  // ─── Messages ─────────────────────────────────────────────────────────────
+  async getMessages(chatId) {
+    const res = await fetch(`${API_BASE}/messages/chat/${chatId}`, {
+      headers: await getAuthHeaders(),
+    });
     return safeJson(res);
   },
 
-  async sendMessageStream(chatId, projectId, message, userId, model, onChunk, onTitle, onError, onDone) {
+  async sendMessageStream(chatId, projectId, message, _userId, model, onChunk, onTitle, onError, onDone) {
     const response = await fetch(`${API_BASE}/messages/stream`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-user-id': userId, 'x-model': model },
+      headers: { 'Content-Type': 'application/json', 'x-model': model, ...(await getAuthHeaders()) },
       body: JSON.stringify({ project_id: projectId || null, chat_id: chatId, message }),
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -117,25 +138,27 @@ export const api = {
     }
   },
 
-  async sendMessageFallback(chatId, projectId, message, userId, model) {
+  async sendMessageFallback(chatId, projectId, message, _userId, model) {
     const res = await fetch(`${API_BASE}/messages`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-user-id': userId, 'x-model': model },
+      headers: { 'Content-Type': 'application/json', 'x-model': model, ...(await getAuthHeaders()) },
       body: JSON.stringify({ project_id: projectId || null, chat_id: chatId, message }),
     });
     return safeJson(res);
   },
 
-  // Settings
-  async getSettings(userId) {
-    const res = await fetch(`${API_BASE}/settings`, { headers: { 'x-user-id': userId } });
+  // ─── Settings ─────────────────────────────────────────────────────────────
+  async getSettings() {
+    const res = await fetch(`${API_BASE}/settings`, {
+      headers: await getAuthHeaders(),
+    });
     return safeJson(res);
   },
 
-  async saveSettings(userId, personality, customTraits) {
+  async saveSettings(_userId, personality, customTraits) {
     const res = await fetch(`${API_BASE}/settings`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-user-id': userId },
+      headers: { 'Content-Type': 'application/json', ...(await getAuthHeaders()) },
       body: JSON.stringify({ personality, custom_traits: customTraits }),
     });
     return safeJson(res);
@@ -150,48 +173,53 @@ export const api = {
     return safeJson(res);
   },
 
-  // Files
-  async uploadFile(projectId, file, userId) {
+  // ─── Files ────────────────────────────────────────────────────────────────
+  async uploadFile(projectId, file) {
     const fd = new FormData();
     fd.append('file', file);
     const res = await fetch(`${API_BASE}/files/${projectId}`, {
       method: 'POST',
-      headers: { 'x-user-id': userId },
+      headers: await getAuthHeaders(),
       body: fd,
     });
     return safeJson(res);
   },
 
-  // Sources
-  async getSources(projectId, userId) {
-    const res = await fetch(`${API_BASE}/projects/${projectId}/sources`, { headers: { 'x-user-id': userId } });
+  // ─── Sources ──────────────────────────────────────────────────────────────
+  async getSources(projectId) {
+    const res = await fetch(`${API_BASE}/projects/${projectId}/sources`, {
+      headers: await getAuthHeaders(),
+    });
     return safeJson(res);
   },
 
-  async addUrlSource(projectId, url, title, userId) {
+  async addUrlSource(projectId, url, title) {
     const res = await fetch(`${API_BASE}/projects/${projectId}/sources/url`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-user-id': userId },
+      headers: { 'Content-Type': 'application/json', ...(await getAuthHeaders()) },
       body: JSON.stringify({ url, title }),
     });
     return safeJson(res);
   },
 
-  async addTextSource(projectId, content, title, userId) {
+  async addTextSource(projectId, content, title) {
     const res = await fetch(`${API_BASE}/projects/${projectId}/sources/text`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-user-id': userId },
+      headers: { 'Content-Type': 'application/json', ...(await getAuthHeaders()) },
       body: JSON.stringify({ content, title }),
     });
     return safeJson(res);
   },
 
-  async deleteSource(projectId, sourceId, userId) {
-    const res = await fetch(`${API_BASE}/projects/${projectId}/sources/${sourceId}`, { method: 'DELETE', headers: { 'x-user-id': userId } });
+  async deleteSource(projectId, sourceId) {
+    const res = await fetch(`${API_BASE}/projects/${projectId}/sources/${sourceId}`, {
+      method: 'DELETE',
+      headers: await getAuthHeaders(),
+    });
     return safeJson(res);
   },
 
-  // Share
+  // ─── Share ────────────────────────────────────────────────────────────────
   async getSharedChat(chatId) {
     const res = await fetch(`${API_BASE}/share/${chatId}`);
     return safeJson(res);

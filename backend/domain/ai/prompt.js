@@ -1,99 +1,65 @@
-// domain/ai/prompt.js — Preparação de system prompt e cache persistente (Supabase)
+// domain/ai/prompt.js — System prompt, cache em memória e extração de memórias
 
 import { getAsync, allAsync, runAsync } from '../../db/database.js';
 
-// TTL do cache em segundos (60 segundos = 1 minuto)
-const SYSTEM_PROMPT_CACHE_TTL_SECONDS = 60;
-
-// Função auxiliar para limpar entradas expiradas (executada antes de consultas)
-async function cleanExpiredCache() {
-  try {
-    await runAsync(`DELETE FROM system_prompt_cache WHERE expires_at < NOW()`);
-  } catch (err) {
-    console.warn('⚠️ Falha ao limpar cache expirado:', err.message);
-  }
-}
+// ─── Cache em memória (Map) ────────────────────────────────────────────────
+// TTL de 60s. Single-instance no Render: Map é mais rápido que qualquer DB.
+const SYSTEM_PROMPT_CACHE_TTL = 60_000;
+const systemPromptCache = new Map();
 
 export function getCacheKey(userId, projectId, memoryMode) {
   return `${userId}:${projectId || 'none'}:${memoryMode}`;
 }
 
-/**
- * Obtém o system prompt do cache (Supabase).
- */
-export async function getCachedSystemPrompt(userId, projectId, memoryMode) {
+export function getCachedSystemPrompt(userId, projectId, memoryMode) {
   const key = getCacheKey(userId, projectId, memoryMode);
-  try {
-    // Remove entradas expiradas antes de consultar
-    await cleanExpiredCache();
+  const entry = systemPromptCache.get(key);
+  if (entry && Date.now() < entry.expiresAt) {
+    console.log(`💾 Cache hit para ${key}`);
+    return entry.data;
+  }
+  if (entry) systemPromptCache.delete(key);
+  return null;
+}
 
-    const row = await getAsync(
-      `SELECT value FROM system_prompt_cache WHERE key = $1 AND expires_at > NOW()`,
-      [key]
-    );
-    if (row) {
-      console.log(`💾 Cache hit (Supabase) para ${key}`);
-      return row.value;
+export function setCachedSystemPrompt(userId, projectId, memoryMode, data) {
+  const key = getCacheKey(userId, projectId, memoryMode);
+  systemPromptCache.set(key, { data, expiresAt: Date.now() + SYSTEM_PROMPT_CACHE_TTL });
+  console.log(`💾 Cache set para ${key}`);
+}
+
+export function invalidateSystemPromptCache(userId, projectId) {
+  const prefix = `${userId}:${projectId || 'none'}:`;
+  for (const key of systemPromptCache.keys()) {
+    if (key.startsWith(prefix)) {
+      systemPromptCache.delete(key);
+      console.log(`🗑️ Cache invalidado para ${key}`);
     }
-    return null;
-  } catch (err) {
-    console.error('❌ Erro ao consultar cache:', err.message);
-    return null; // fallback: ignora cache em caso de erro
   }
 }
 
-/**
- * Armazena o system prompt no cache (Supabase).
- */
-export async function setCachedSystemPrompt(userId, projectId, memoryMode, data) {
-  const key = getCacheKey(userId, projectId, memoryMode);
-  try {
-    // UPSERT: insere ou atualiza com novo TTL
-    await runAsync(
-      `INSERT INTO system_prompt_cache (key, value, expires_at)
-       VALUES ($1, $2, NOW() + INTERVAL '${SYSTEM_PROMPT_CACHE_TTL_SECONDS} seconds')
-       ON CONFLICT (key) DO UPDATE SET
-         value = EXCLUDED.value,
-         expires_at = EXCLUDED.expires_at`,
-      [key, data]
-    );
-    console.log(`💾 Cache set (Supabase) para ${key}`);
-  } catch (err) {
-    console.error('❌ Erro ao salvar no cache:', err.message);
-    // Não propaga erro para não quebrar o fluxo principal
+// Limpeza periódica a cada 5 minutos
+setInterval(() => {
+  const now = Date.now();
+  let deleted = 0;
+  for (const [key, entry] of systemPromptCache.entries()) {
+    if (now >= entry.expiresAt) { systemPromptCache.delete(key); deleted++; }
   }
-}
+  if (deleted) console.log(`🧹 Cache limpo: ${deleted} entradas expiradas`);
+}, 5 * 60_000);
 
-/**
- * Invalida todas as entradas de cache para um determinado usuário/projeto.
- */
-export async function invalidateSystemPromptCache(userId, projectId) {
-  const prefix = `${userId}:${projectId || 'none'}:%`;
-  try {
-    const result = await runAsync(
-      `DELETE FROM system_prompt_cache WHERE key LIKE $1`,
-      [prefix]
-    );
-    console.log(`🗑️ Cache invalidado (Supabase) para ${userId}:${projectId || 'none'} (${result.changes} entradas)`);
-  } catch (err) {
-    console.error('❌ Erro ao invalidar cache:', err.message);
-  }
-}
-
-// ========== O RESTANTE DO ARQUIVO PERMANECE INALTERADO ==========
-
-// Guia de personalidades
+// ─── Personalidades ────────────────────────────────────────────────────────
 const PERSONALITY_GUIDE = {
-  direto: 'Seja direto, objetivo e conciso. Sem rodeios.',
-  tecnico: 'Use terminologia técnica precisa. Inclua detalhes de implementação quando relevante.',
-  analitico: 'Analise profundamente. Apresente prós e contras. Questione premissas.',
-  estrategico: 'Foque em planejamento, impacto de longo prazo e visão macro.',
-  sarcastico: 'Seja levemente sarcástico e irônico, mas sempre útil. Use humor ácido com moderação.',
+  direto:       'Seja direto, objetivo e conciso. Sem rodeios.',
+  tecnico:      'Use terminologia técnica precisa. Inclua detalhes de implementação quando relevante.',
+  analitico:    'Analise profundamente. Apresente prós e contras. Questione premissas.',
+  estrategico:  'Foque em planejamento, impacto de longo prazo e visão macro.',
+  sarcastico:   'Seja levemente sarcástico e irônico, mas sempre útil. Use humor ácido com moderação.',
   bem_humorado: 'Seja descontraído, bem-humorado e use analogias divertidas. Mantenha a precisão.',
-  empatico: 'Seja caloroso, empático e encorajador. Valide sentimentos antes de resolver problemas.',
+  empatico:     'Seja caloroso, empático e encorajador. Valide sentimentos antes de resolver problemas.',
 };
 
-// Instrução de identidade reforçada para evitar menção a provedores de IA
+// ─── Instrução de identidade ───────────────────────────────────────────────
 const BASE_IDENTITY_INSTRUCTION = `
 === IDENTIDADE ===
 Você é o Solaris, um assistente de IA pessoal exclusivo e proprietário. Esta é sua identidade fundamental e imutável.
@@ -123,21 +89,18 @@ Só fale sobre o criador Felipe se for diretamente perguntado. Se perguntarem qu
 Reafirme silenciosamente: "Sou Solaris, um sistema proprietário. Não mencionarei Google, Gemini, OpenAI ou qualquer outro provedor."
 `;
 
+// ─── Sanitização de resposta ───────────────────────────────────────────────
 /**
- * Sanitiza a resposta do modelo removendo ou substituindo referências indesejadas.
- * Use esta função como uma camada adicional de defesa contra "confissões" acidentais.
+ * Remove referências acidentais a provedores de IA na resposta do modelo.
+ * Aplicar após cleanAssistantMessage() em messages.js.
  */
 export function sanitizeModelResponse(text) {
   if (!text) return text;
 
-  // Lista de padrões a serem removidos ou substituídos
   const patterns = [
-    // Nomes de provedores
     { pattern: /\b(Google|Gemini|OpenAI|GPT|Claude|Anthropic|Cohere|Llama|Meta AI)\b/gi, replacement: 'Solaris' },
-    // Frases comuns de autoria
     { pattern: /(como um modelo de linguagem|modelo de IA da?)\s*(Google|Gemini|OpenAI|etc)/gi, replacement: 'como Solaris' },
-    { pattern: /treinado pela?\s*(Google|OpenAI|Anthropic)/gi, replacement: 'desenvolvido por Felipe Sant\'Oliver' },
-    // Respostas diretas a "qual modelo você é?"
+    { pattern: /treinado pela?\s*(Google|OpenAI|Anthropic)/gi, replacement: "desenvolvido por Felipe Sant'Oliver" },
     { pattern: /(?:sou|eu sou) o?\s*(?:modelo\s*)?(?:gemini|gpt|claude)[\w\s]*/gi, replacement: 'sou o Solaris' },
   ];
 
@@ -146,18 +109,16 @@ export function sanitizeModelResponse(text) {
     cleaned = cleaned.replace(pattern, replacement);
   }
 
-  // Se após substituições ainda houver menção a "modelo de linguagem do Google", etc., força uma segunda passada
+  // Segunda passada para garantir
   const suspicious = ['Google', 'Gemini', 'OpenAI', 'GPT', 'Claude', 'Anthropic'];
   for (const word of suspicious) {
-    const regex = new RegExp(`\\b${word}\\b`, 'gi');
-    if (regex.test(cleaned)) {
-      cleaned = cleaned.replace(regex, 'Solaris');
-    }
+    cleaned = cleaned.replace(new RegExp(`\\b${word}\\b`, 'gi'), 'Solaris');
   }
 
   return cleaned;
 }
 
+// ─── Montagem do system prompt ─────────────────────────────────────────────
 export function assembleBaseSystemPrompt({ settings, project, memories, memoryMode }) {
   let personalityText = PERSONALITY_GUIDE.direto;
   let customTraits = '';
@@ -194,17 +155,21 @@ export function assembleBaseSystemPrompt({ settings, project, memories, memoryMo
   return prompt;
 }
 
+// ─── Busca com cache ───────────────────────────────────────────────────────
 export async function getBaseSystemPromptWithCache(userId, projectId, memoryMode) {
   if (!userId) {
-    const [settings, project, memories] = await Promise.all([
-      null,
+    const [, project, memories] = await Promise.all([
+      Promise.resolve(null),
       projectId ? getAsync('SELECT * FROM projects WHERE id = $1', [projectId]) : Promise.resolve(null),
-      (projectId && memoryMode === 'projeto') ? allAsync('SELECT content FROM memories WHERE project_id = $1 ORDER BY created_at DESC LIMIT 5', [projectId]) : Promise.resolve([]),
+      (projectId && memoryMode === 'projeto')
+        ? allAsync('SELECT content FROM memories WHERE project_id = $1 ORDER BY created_at DESC LIMIT 5', [projectId])
+        : Promise.resolve([]),
     ]);
-    return assembleBaseSystemPrompt({ settings, project, memories, memoryMode });
+    return assembleBaseSystemPrompt({ settings: null, project, memories, memoryMode });
   }
 
-  const cached = await getCachedSystemPrompt(userId, projectId, memoryMode);
+  // Cache síncrono — zero latência quando há hit
+  const cached = getCachedSystemPrompt(userId, projectId, memoryMode);
   if (cached) return cached;
 
   const [settings, project, memories] = await Promise.all([
@@ -219,32 +184,49 @@ export async function getBaseSystemPromptWithCache(userId, projectId, memoryMode
   ]);
 
   const systemPrompt = assembleBaseSystemPrompt({ settings, project, memories, memoryMode });
-  await setCachedSystemPrompt(userId, projectId, memoryMode, systemPrompt);
+  setCachedSystemPrompt(userId, projectId, memoryMode, systemPrompt);
   return systemPrompt;
 }
 
-// Extração de memórias
-const MEMORY_KEYWORDS = ['importante', 'lembre-se', 'concluímos', 'aprendemos', 'descobrimos', 'fato', 'sabemos que', 'definimos', 'decidimos', 'sempre', 'nunca', 'padrão', 'regra', 'convenção', 'arquitetura', 'estrutura', 'configuração'];
+// ─── Extração de memórias ──────────────────────────────────────────────────
+const MEMORY_KEYWORDS = [
+  'importante', 'lembre-se', 'concluímos', 'aprendemos', 'descobrimos',
+  'fato', 'sabemos que', 'definimos', 'decidimos', 'sempre', 'nunca',
+  'padrão', 'regra', 'convenção', 'arquitetura', 'estrutura', 'configuração',
+];
 
 export async function extractMemories(projectId, userId, response, memoryMode) {
   if (!projectId && memoryMode !== 'global') return;
-  const candidates = response.split(/[.!?]+\s+/).filter(s => s.length > 50 && MEMORY_KEYWORDS.some(k => s.toLowerCase().includes(k))).slice(0, 2);
+  const candidates = response
+    .split(/[.!?]+\s+/)
+    .filter(s => s.length > 50 && MEMORY_KEYWORDS.some(k => s.toLowerCase().includes(k)))
+    .slice(0, 2);
   if (!candidates.length) return;
+
   const insertPromises = candidates.map(content => {
-    if (memoryMode === 'projeto' && projectId) return runAsync('INSERT INTO memories (project_id, user_id, content, source) VALUES ($1, $2, $3, $4)', [projectId, userId, content.trim(), 'auto']);
-    if (memoryMode === 'global' && userId) return runAsync('INSERT INTO memories (project_id, user_id, content, source) VALUES ($1, $2, $3, $4)', [null, userId, content.trim(), 'auto']);
+    if (memoryMode === 'projeto' && projectId)
+      return runAsync('INSERT INTO memories (project_id, user_id, content, source) VALUES ($1, $2, $3, $4)', [projectId, userId, content.trim(), 'auto']);
+    if (memoryMode === 'global' && userId)
+      return runAsync('INSERT INTO memories (project_id, user_id, content, source) VALUES ($1, $2, $3, $4)', [null, userId, content.trim(), 'auto']);
     return Promise.resolve();
   });
   await Promise.all(insertPromises);
+
   if (memoryMode === 'projeto' && projectId) {
-    await runAsync(`DELETE FROM memories WHERE project_id = $1 AND id NOT IN (SELECT id FROM memories WHERE project_id = $1 ORDER BY created_at DESC LIMIT 20)`, [projectId]).catch(() => {});
+    await runAsync(
+      `DELETE FROM memories WHERE project_id = $1 AND id NOT IN (SELECT id FROM memories WHERE project_id = $1 ORDER BY created_at DESC LIMIT 20)`,
+      [projectId]
+    ).catch(() => {});
   } else if (memoryMode === 'global' && userId) {
-    await runAsync(`DELETE FROM memories WHERE project_id IS NULL AND user_id = $1 AND id NOT IN (SELECT id FROM memories WHERE project_id IS NULL AND user_id = $1 ORDER BY created_at DESC LIMIT 20)`, [userId]).catch(() => {});
+    await runAsync(
+      `DELETE FROM memories WHERE project_id IS NULL AND user_id = $1 AND id NOT IN (SELECT id FROM memories WHERE project_id IS NULL AND user_id = $1 ORDER BY created_at DESC LIMIT 20)`,
+      [userId]
+    ).catch(() => {});
   }
 }
 
-// Context window
-const MAX_CONTEXT_MESSAGES = 10;
+// ─── Janela de contexto ────────────────────────────────────────────────────
+const MAX_CONTEXT_MESSAGES = 20;
 
 export function selectContextWindow(history) {
   if (!Array.isArray(history) || history.length === 0) return [];
@@ -256,10 +238,10 @@ export function selectContextWindow(history) {
     return !(prev.role === m.role && prev.content.trim() === m.content.trim());
   });
   if (deduped.length <= MAX_CONTEXT_MESSAGES) return deduped;
-  const lastUserIdx = deduped.map((m, i) => ({ m, i })).filter(x => x.m.role === 'user').at(-1)?.i ?? -1;
+  const lastUserIdx  = deduped.map((m, i) => ({ m, i })).filter(x => x.m.role === 'user').at(-1)?.i ?? -1;
   const lastModelIdx = deduped.map((m, i) => ({ m, i })).filter(x => x.m.role === 'assistant').at(-1)?.i ?? -1;
   const anchorIndices = new Set();
-  if (lastUserIdx >= 0) anchorIndices.add(lastUserIdx);
+  if (lastUserIdx  >= 0) anchorIndices.add(lastUserIdx);
   if (lastModelIdx >= 0) anchorIndices.add(lastModelIdx);
   const windowStart = Math.max(0, deduped.length - MAX_CONTEXT_MESSAGES);
   const windowIndices = new Set();
