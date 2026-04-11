@@ -14,9 +14,9 @@ export function useChat(effectiveUserId, authUser, model, activeProjectId) {
 
   // ── Status visual antes da resposta ──────────────────────────────────────
   const statusSequence = [
-    { text: 'Analisando contexto...',             duration: 600 },
-    { text: 'Consultando memórias do projeto...', duration: 600 },
-    { text: 'Preparando resposta...',             duration: 500 },
+    { text: 'Analisando contexto...',             duration: 300 },
+    { text: 'Consultando memórias do projeto...', duration: 300 },
+    { text: 'Preparando resposta...',             duration: 200 },
   ];
 
   const showStatusSequence = async () => {
@@ -73,21 +73,22 @@ export function useChat(effectiveUserId, authUser, model, activeProjectId) {
       }
     }
 
+    // Insere a mensagem vazia do assistente imediatamente (sem esperar a animação)
+    setMessages(prev => {
+      assistantIdxRef.current = prev.length;
+      return [...prev, { role: 'assistant', content: '', model: authUser ? model : 'flash' }];
+    });
+
     setIsLoading(true);
-    await showStatusSequence();
-    setIsLoading(false);
     setIsStreaming(true);
+
+    // Animação de status em paralelo com a requisição (não bloqueia mais)
+    showStatusSequence().then(() => setStatusMessage(''));
 
     // Timeout de segurança: libera o input após 30s caso o stream trave
     streamTimeoutRef.current = setTimeout(() => {
       finishStreaming();
     }, 30000);
-
-    // Insere a mensagem vazia do assistente e guarda o índice via ref
-    setMessages(prev => {
-      assistantIdxRef.current = prev.length;
-      return [...prev, { role: 'assistant', content: '', model: authUser ? model : 'flash' }];
-    });
 
     try {
       await api.sendMessageStream(
