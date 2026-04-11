@@ -31,8 +31,8 @@ export function useChat(effectiveUserId, authUser, model, activeProjectId) {
   const finishStreaming = useCallback(() => {
     clearTimeout(streamTimeoutRef.current);
     setIsStreaming(false);
+    setIsLoading(false);
     setStatusMessage('');
-    // Pequeno delay para garantir que o último chunk foi processado antes de finalizar
     setTimeout(() => {
       assistantIdxRef.current = null;
     }, 50);
