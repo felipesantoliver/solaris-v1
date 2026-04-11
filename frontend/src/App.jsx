@@ -94,7 +94,6 @@ export default function App() {
   const handleSend = async () => {
     await sendMessage(input, activeChatId, activeProjectId, async (projectId) => {
       const nc = await createChatInProject(projectId);
-      setChatHistory(prev => [nc, ...prev]);
       return nc;
     });
     setInput('');
