@@ -73,14 +73,15 @@ export function useChat(effectiveUserId, authUser, model, activeProjectId) {
       }
     }
 
-    // Insere a mensagem vazia do assistente imediatamente (sem esperar a animação)
+    setIsLoading(true);
+    setIsStreaming(true);
+
+    // Insere o placeholder do assistente APÓS ativar isStreaming,
+    // para que isAssistantWriting seja true desde o início
     setMessages(prev => {
       assistantIdxRef.current = prev.length;
       return [...prev, { role: 'assistant', content: '', model: authUser ? model : 'flash' }];
     });
-
-    setIsLoading(true);
-    setIsStreaming(true);
 
     // Animação de status em paralelo com a requisição (não bloqueia mais)
     showStatusSequence().then(() => setStatusMessage(''));

@@ -55,21 +55,17 @@ export function useProjects(effectiveUserId, authUser, model) {
 
   // Atualiza o titulo do chat na sidebar em tempo real, sem precisar recarregar a pagina
   useEffect(() => {
-    const applyTitle = (title, chat_id) => {
-      setChatHistory(prev => {
-        const exists = prev.some(c => c.id === chat_id);
-        if (!exists) return prev;
-        return prev.map(c => c.id === chat_id ? { ...c, title } : c);
-      });
-    };
-
     const handler = (e) => {
       const { title, chat_id } = e.detail || {};
       if (!title || !chat_id) return;
-      // Tenta imediatamente; se o chat ainda nao estiver na lista, tenta novamente apos um curto delay
-      applyTitle(title, chat_id);
-      setTimeout(() => applyTitle(title, chat_id), 300);
-      setTimeout(() => applyTitle(title, chat_id), 800);
+      setChatHistory(prev => {
+        // Se já existe, só atualiza o título (evita duplicação)
+        if (prev.some(c => c.id === chat_id)) {
+          return prev.map(c => c.id === chat_id ? { ...c, title } : c);
+        }
+        // Se ainda não existe na lista, adiciona no topo com o título correto
+        return [{ id: chat_id, title }, ...prev];
+      });
     };
     window.addEventListener('solaris:chat-title', handler);
     return () => window.removeEventListener('solaris:chat-title', handler);

@@ -27,8 +27,9 @@ export function ChatWindow({
   // Mostra os pontinhos apenas quando está carregando OU quando o streaming
   // ainda não começou a produzir conteúdo (última msg do assistente ainda vazia)
   const lastMsg = messages[messages.length - 1];
-  const isAssistantWriting = isStreaming && lastMsg?.role === 'assistant' && lastMsg?.content === '';
-  const showDots = isLoading || isAssistantWriting;
+  // Dots aparecem enquanto: está carregando OU enquanto o streaming ainda não produziu conteúdo
+  const assistantPlaceholderEmpty = lastMsg?.role === 'assistant' && !lastMsg?.content;
+  const showDots = isLoading || (isStreaming && assistantPlaceholderEmpty);
 
   const WelcomeScreen = () => (
     <div className="flex flex-col items-center justify-center h-full gap-6 px-8 text-center animate-in fade-in duration-700">
