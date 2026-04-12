@@ -18,7 +18,12 @@ export function geminiUrl(modelKey, stream = false) {
   return stream ? `${baseUrl}:streamGenerateContent?key=${key}&alt=sse` : `${baseUrl}:generateContent?key=${key}`;
 }
 
-export function buildGeminiBody(messages, systemPrompt) {
+const MAX_OUTPUT_TOKENS = {
+  flash: 1024,
+  pro:   2048,
+};
+
+export function buildGeminiBody(messages, systemPrompt, modelKey = 'flash') {
   const contents = messages.map(msg => ({
     role: msg.role === 'assistant' ? 'model' : 'user',
     parts: [{ text: msg.content }],
@@ -26,7 +31,7 @@ export function buildGeminiBody(messages, systemPrompt) {
   return {
     system_instruction: { parts: [{ text: systemPrompt }] },
     contents,
-    generationConfig: { maxOutputTokens: 2048 },
+    generationConfig: { maxOutputTokens: MAX_OUTPUT_TOKENS[modelKey] ?? MAX_OUTPUT_TOKENS.flash },
   };
 }
 
@@ -49,7 +54,7 @@ export async function withRetry(fn, maxRetries = 3, baseDelay = 3000) {
 
 export async function* streamGeminiChat(messages, systemPrompt, modelKey = 'flash') {
   const url = geminiUrl(modelKey, true);
-  const body = buildGeminiBody(messages, systemPrompt);
+  const body = buildGeminiBody(messages, systemPrompt, modelKey);
   const response = await withRetry(() =>
     fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
   );
@@ -82,7 +87,7 @@ export async function* streamGeminiChat(messages, systemPrompt, modelKey = 'flas
 
 export async function geminiChat(messages, systemPrompt, modelKey = 'flash') {
   const url = geminiUrl(modelKey, false);
-  const body = buildGeminiBody(messages, systemPrompt);
+  const body = buildGeminiBody(messages, systemPrompt, modelKey);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30000);
   try {
