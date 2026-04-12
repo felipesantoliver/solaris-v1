@@ -33,7 +33,7 @@ export function ChatWindow({
 
   const WelcomeScreen = () => (
     <div className="flex flex-col items-center justify-center h-full gap-6 px-8 text-center animate-in fade-in duration-700">
-      <div className={`text-3xl font-extralight ${darkMode ? 'text-white/10' : 'text-black/10'}`}>✦</div>
+      <div className={`text-3xl font-extralight ${darkMode ? 'text-[#F5A623]/20' : 'text-[#1E3A5F]/15'}`}>✦</div>
       <div>
         <p className={`text-base font-light ${theme.textSecondary}`}>Olá{displayName ? `, ${displayName}` : ''}.</p>
         <p className={`text-sm font-light mt-1 ${theme.textMuted}`}>
@@ -80,9 +80,9 @@ export function ChatWindow({
       {showDots && (
         <div className="flex items-center gap-3 mt-12">
           <div className="flex gap-1">
-            <div className={`w-1.5 h-1.5 ${darkMode ? 'bg-white/40' : 'bg-black/60'} rounded-full animate-bounce [animation-delay:-0.3s]`} />
-            <div className={`w-1.5 h-1.5 ${darkMode ? 'bg-white/40' : 'bg-black/60'} rounded-full animate-bounce [animation-delay:-0.15s]`} />
-            <div className={`w-1.5 h-1.5 ${darkMode ? 'bg-white/40' : 'bg-black/60'} rounded-full animate-bounce`} />
+            <div className={`w-1.5 h-1.5 ${darkMode ? 'bg-[#F5A623]/50' : 'bg-[#1E3A5F]/60'} rounded-full animate-bounce [animation-delay:-0.3s]`} />
+            <div className={`w-1.5 h-1.5 ${darkMode ? 'bg-[#F5A623]/50' : 'bg-[#1E3A5F]/60'} rounded-full animate-bounce [animation-delay:-0.15s]`} />
+            <div className={`w-1.5 h-1.5 ${darkMode ? 'bg-[#F5A623]/50' : 'bg-[#1E3A5F]/60'} rounded-full animate-bounce`} />
           </div>
           {statusMessage && (
             <span className={`text-xs font-light tracking-wide ${theme.textSecondary} animate-pulse`}>{statusMessage}</span>

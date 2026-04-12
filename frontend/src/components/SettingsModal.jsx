@@ -25,16 +25,16 @@ export function SettingsModal({ onClose, darkMode, effectiveUserId, authUser, on
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const t = {
-    bg: darkMode ? 'bg-[#1a1a1a]' : 'bg-white',
-    border: darkMode ? 'border-white/10' : 'border-black/8',
-    muted: darkMode ? 'text-white/40' : 'text-black/50',
-    text: darkMode ? 'text-white/80' : 'text-black/80',
-    input: darkMode ? 'bg-white/5 border-white/10 text-white placeholder-white/30' : 'bg-black/3 border-black/10 text-black placeholder-black/30',
-    btn: darkMode ? 'bg-white text-black hover:bg-white/90' : 'bg-black text-white hover:bg-black/90',
-    btnOutline: darkMode ? 'border-white/20 hover:bg-white/5' : 'border-black/20 hover:bg-black/5',
+    bg: darkMode ? 'bg-[#1E3A5F]' : 'bg-white',
+    border: darkMode ? 'border-[#F5A623]/15' : 'border-[#1E3A5F]/10',
+    muted: darkMode ? 'text-[#E8F0F9]/40' : 'text-[#1E3A5F]/50',
+    text: darkMode ? 'text-[#E8F0F9]/80' : 'text-[#0D1B2A]/80',
+    input: darkMode ? 'bg-[#0D1B2A]/60 border-[#F5A623]/15 text-[#E8F0F9] placeholder-[#E8F0F9]/30' : 'bg-[#1E3A5F]/5 border-[#1E3A5F]/10 text-[#0D1B2A] placeholder-[#1E3A5F]/30',
+    btn: darkMode ? 'bg-[#F5A623] text-[#0D1B2A] font-semibold hover:bg-[#F5A623]/85' : 'bg-[#0D1B2A] text-white hover:bg-[#1E3A5F]',
+    btnOutline: darkMode ? 'border-[#E8F0F9]/20 hover:bg-[#E8F0F9]/5' : 'border-[#1E3A5F]/20 hover:bg-[#1E3A5F]/5',
     btnDanger: 'bg-red-500 hover:bg-red-600 text-white',
-    card: darkMode ? 'border-white/10 hover:border-white/30' : 'border-black/10 hover:border-black/30',
-    cardActive: darkMode ? 'border-white bg-white/8' : 'border-black bg-black/6',
+    card: darkMode ? 'border-[#E8F0F9]/10 hover:border-[#F5A623]/40' : 'border-[#1E3A5F]/10 hover:border-[#1E3A5F]/40',
+    cardActive: darkMode ? 'border-[#F5A623] bg-[#F5A623]/10' : 'border-[#0D1B2A] bg-[#0D1B2A]/6',
   };
 
   useEffect(() => {
@@ -97,8 +97,8 @@ export function SettingsModal({ onClose, darkMode, effectiveUserId, authUser, on
           <button onClick={onClose} className={t.muted}><X size={16} /></button>
         </div>
         <div className="flex border-b border-current/10">
-          <button onClick={() => setActiveTab('profile')} className={`px-6 py-3 text-sm font-medium transition-all ${activeTab === 'profile' ? (darkMode ? 'border-b-2 border-white text-white' : 'border-b-2 border-black text-black') : t.muted}`}>Perfil</button>
-          <button onClick={() => setActiveTab('personality')} className={`px-6 py-3 text-sm font-medium transition-all ${activeTab === 'personality' ? (darkMode ? 'border-b-2 border-white text-white' : 'border-b-2 border-black text-black') : t.muted}`}>Personalidade</button>
+          <button onClick={() => setActiveTab('profile')} className={`px-6 py-3 text-sm font-medium transition-all ${activeTab === 'profile' ? (darkMode ? 'border-b-2 border-[#F5A623] text-[#F5A623]' : 'border-b-2 border-[#0D1B2A] text-[#0D1B2A]') : t.muted}`}>Perfil</button>
+          <button onClick={() => setActiveTab('personality')} className={`px-6 py-3 text-sm font-medium transition-all ${activeTab === 'personality' ? (darkMode ? 'border-b-2 border-[#F5A623] text-[#F5A623]' : 'border-b-2 border-[#0D1B2A] text-[#0D1B2A]') : t.muted}`}>Personalidade</button>
         </div>
         <div className="flex-1 overflow-y-auto p-6">
           {loading ? (
@@ -173,7 +173,7 @@ export function SettingsModal({ onClose, darkMode, effectiveUserId, authUser, on
                         onClick={() => setPersonality(p.id)}
                         className={`text-left p-3 rounded-xl border transition-all duration-200 ${personality === p.id ? t.cardActive : t.card}`}
                       >
-                        <p className={`text-sm font-medium ${personality === p.id ? (darkMode ? 'text-white' : 'text-black') : t.text}`}>{p.label}</p>
+                        <p className={`text-sm font-medium ${personality === p.id ? (darkMode ? 'text-[#F5A623]' : 'text-[#0D1B2A]') : t.text}`}>{p.label}</p>
                         <p className={`text-xs font-light mt-0.5 ${t.muted}`}>{p.desc}</p>
                       </button>
                     ))}

@@ -92,7 +92,7 @@ export const MessageBubble = React.memo(({
             {msg.content}
           </ReactMarkdown>
           {showCursor && (
-            <span className={`inline-block w-0.5 h-4 ml-0.5 align-middle animate-pulse ${darkMode ? 'bg-white/60' : 'bg-black/60'}`} />
+            <span className={`inline-block w-0.5 h-4 ml-0.5 align-middle animate-pulse ${darkMode ? 'bg-[#F5A623]/60' : 'bg-[#1E3A5F]/60'}`} />
           )}
         </div>
       );
@@ -101,12 +101,12 @@ export const MessageBubble = React.memo(({
     return (
       <div className={`text-base leading-relaxed transition-colors duration-500 whitespace-pre-wrap ${
         msg.role === 'user'
-          ? (darkMode ? 'text-white font-medium' : 'text-black font-medium')
-          : (darkMode ? 'text-white/60 font-light' : 'text-gray-600 font-light')
+          ? (darkMode ? 'text-[#E8F0F9] font-medium' : 'text-[#0D1B2A] font-medium')
+          : (darkMode ? 'text-[#E8F0F9]/65 font-light' : 'text-[#1E3A5F]/80 font-light')
       }`}>
         {msg.content}
         {showCursor && (
-          <span className={`inline-block w-0.5 h-4 ml-0.5 align-middle animate-pulse ${darkMode ? 'bg-white/40' : 'bg-black/40'}`} />
+          <span className={`inline-block w-0.5 h-4 ml-0.5 align-middle animate-pulse ${darkMode ? 'bg-[#F5A623]/40' : 'bg-[#1E3A5F]/40'}`} />
         )}
       </div>
     );
@@ -131,7 +131,7 @@ export const MessageBubble = React.memo(({
               value={editValue}
               onChange={e => { setEditValue(e.target.value); e.target.style.height = 'auto'; e.target.style.height = e.target.scrollHeight + 'px'; }}
               onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onEditSave(); } if (e.key === 'Escape') onEditCancel(); }}
-              className={`w-full bg-transparent border-b ${theme.inputBorder} text-base leading-relaxed resize-none focus:outline-none py-1 font-light ${darkMode ? 'text-white' : 'text-black'}`}
+              className={`w-full bg-transparent border-b ${theme.inputBorder} text-base leading-relaxed resize-none focus:outline-none py-1 font-light ${darkMode ? 'text-[#E8F0F9]' : 'text-[#0D1B2A]'}`}
               rows={1}
             />
             <div className="flex items-center gap-3 mt-2 justify-end">
@@ -139,7 +139,7 @@ export const MessageBubble = React.memo(({
               <button
                 onClick={onEditSave}
                 disabled={isLoading || !editValue.trim()}
-                className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all ${darkMode ? 'bg-white/10 text-white hover:bg-white/20' : 'bg-black/10 text-black hover:bg-black/20'} disabled:opacity-40`}
+                className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all ${darkMode ? 'bg-[#F5A623]/15 text-[#F5A623] hover:bg-[#F5A623]/25' : 'bg-[#1E3A5F]/10 text-[#1E3A5F] hover:bg-[#1E3A5F]/20'} disabled:opacity-40`}
               >
                 {isLoading ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}Salvar e regerar
               </button>
@@ -163,7 +163,7 @@ export const MessageBubble = React.memo(({
           </>
         )}
         {showHistory && hasHistory && !isEditing && (
-          <div className={`mt-3 text-left border-l-2 ${darkMode ? 'border-white/10' : 'border-black/10'} pl-3 space-y-2`}>
+          <div className={`mt-3 text-left border-l-2 ${darkMode ? 'border-[#F5A623]/20' : 'border-[#1E3A5F]/15'} pl-3 space-y-2`}>
             <p className={`text-[10px] uppercase tracking-widest ${theme.textMuted} mb-2`}>Versões anteriores</p>
             {msg.edit_history.map((h, i) => (
               <p key={i} className={`text-xs ${theme.textMuted} font-light`}>

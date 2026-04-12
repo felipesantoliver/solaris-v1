@@ -76,7 +76,7 @@ export function MessageInput({
             onKeyDown={handleKeyDown}
             rows={1}
             placeholder="O que deseja perguntar?"
-            className={`flex-1 bg-transparent border-none text-lg ${darkMode ? 'text-white placeholder-white/20' : 'text-black placeholder-black/30'} resize-none focus:outline-none py-2 font-light`}
+            className={`flex-1 bg-transparent border-none text-lg ${darkMode ? 'text-[#E8F0F9] placeholder-[#E8F0F9]/20' : 'text-[#0D1B2A] placeholder-[#1E3A5F]/30'} resize-none focus:outline-none py-2 font-light`}
           />
           <button
             onClick={onSend}
@@ -84,7 +84,7 @@ export function MessageInput({
             className={`p-2 mb-3 transition-all ${
               (isLoading || isStreaming || !input.trim())
                 ? theme.textMuted
-                : (darkMode ? 'text-white hover:scale-110' : 'text-black hover:scale-110')
+                : 'text-[#F5A623] hover:scale-110 hover:text-[#F5A623]/80'
             }`}
           >
             {(isLoading || isStreaming) ? <Loader2 size={20} className="animate-spin" /> :
@@ -97,7 +97,7 @@ export function MessageInput({
           <div className="flex items-center gap-4">
             <span
               onClick={() => fileInputRef.current?.click()}
-              className={`flex items-center gap-3 cursor-pointer ${darkMode ? 'hover:text-white' : 'hover:text-black'} transition-colors mb-2`}
+              className={`flex items-center gap-3 cursor-pointer ${darkMode ? 'hover:text-[#F5A623]' : 'hover:text-[#1E3A5F]'} transition-colors mb-2`}
             >
               <Plus size={10} /> Anexo
             </span>

@@ -23,7 +23,7 @@ export function ShareModal({ isOpen, onClose, messages, darkMode, theme }) {
         <p className={`text-sm ${theme.textSecondary} mb-6`}>Copie o conteúdo da conversa para compartilhar.</p>
         <button
           onClick={handleCopy}
-          className={`w-full py-3 rounded-xl flex items-center justify-center gap-2 ${darkMode ? 'bg-white text-black hover:bg-white/90' : 'bg-black text-white hover:bg-black/90'} transition-all`}
+          className={`w-full py-3 rounded-xl flex items-center justify-center gap-2 ${darkMode ? 'bg-[#F5A623] text-[#0D1B2A] font-semibold hover:bg-[#F5A623]/85' : 'bg-[#0D1B2A] text-white hover:bg-[#1E3A5F]'} transition-all`}
         >
           {copied ? <Check size={16} /> : <Share2 size={16} />}
           {copied ? 'Copiado!' : 'Copiar conversa'}
