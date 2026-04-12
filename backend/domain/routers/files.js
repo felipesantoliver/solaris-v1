@@ -17,15 +17,21 @@ const router = Router();
 const uploadsDir = path.join(__dirname, '../../../uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
+const ALLOWED_EXTS = ['.pdf', '.txt', '.md', '.json', '.js', '.ts', '.py', '.css', '.html', '.csv'];
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
+
 const upload = multer({
   storage: multer.diskStorage({
     destination: (_, __, cb) => cb(null, uploadsDir),
     filename: (_, file, cb) => cb(null, `${Date.now()}-${file.originalname}`),
   }),
-  limits: { fileSize: 10 * 1024 * 1024 },
+  limits: { fileSize: MAX_FILE_SIZE },
   fileFilter: (_, file, cb) => {
-    const allowed = ['.pdf', '.txt', '.md', '.json', '.js', '.ts', '.py', '.css', '.html', '.csv'];
-    cb(null, allowed.includes(path.extname(file.originalname).toLowerCase()));
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (!ALLOWED_EXTS.includes(ext)) {
+      return cb(Object.assign(new Error(`Tipo de arquivo não permitido: ${ext}. Permitidos: ${ALLOWED_EXTS.join(', ')}`), { code: 'INVALID_FILE_TYPE' }));
+    }
+    cb(null, true);
   },
 });
 
@@ -38,7 +44,16 @@ router.get('/files/:projectId', async (req, res, next) => {
 });
 
 // Upload de arquivo (com autenticação)
-router.post('/files/:projectId', extractUserId, upload.single('file'), async (req, res, next) => {
+router.post('/files/:projectId', extractUserId, (req, res, next) => {
+  upload.single('file')(req, res, (err) => {
+    if (err?.code === 'LIMIT_FILE_SIZE')
+      return res.status(413).json({ error: `Arquivo muito grande. Máximo: ${MAX_FILE_SIZE / 1024 / 1024}MB.` });
+    if (err?.code === 'INVALID_FILE_TYPE')
+      return res.status(415).json({ error: err.message });
+    if (err) return next(err);
+    next();
+  });
+}, async (req, res, next) => {
   const userId = req.userId;
   if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo enviado' });
   try {
