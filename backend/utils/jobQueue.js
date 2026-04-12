@@ -19,6 +19,8 @@ class JobQueue {
     start() {
         if (this.intervalId) return;
         this.intervalId = setInterval(() => this.poll(), this.pollInterval);
+        this.cleanupIntervalId = setInterval(() => this.cleanup(), 24 * 60 * 60 * 1000);
+        this.cleanup();
         console.log(`🚀 JobQueue iniciada (concorrência=${this.concurrency})`);
     }
 
@@ -26,6 +28,21 @@ class JobQueue {
         if (this.intervalId) {
             clearInterval(this.intervalId);
             this.intervalId = null;
+        }
+        if (this.cleanupIntervalId) {
+            clearInterval(this.cleanupIntervalId);
+            this.cleanupIntervalId = null;
+        }
+    }
+
+    async cleanup() {
+        try {
+            const { rowCount } = await runAsync(
+                `DELETE FROM jobs WHERE status IN ('completed', 'failed') AND updated_at < NOW() - INTERVAL '7 days'`
+            );
+            if (rowCount > 0) console.log(`🧹 JobQueue: ${rowCount} jobs antigos removidos`);
+        } catch (err) {
+            console.error('❌ Erro na limpeza de jobs:', err.message);
         }
     }
 
