@@ -198,31 +198,27 @@ export default function App() {
     await updateDisplayName(newDisplayName);
   };
 
-  // Theme object — 60:30:10 color rule
-  // 60% → #0D1B2A (deep night blue) — dominant background
-  // 30% → #1E3A5F (mid navy blue) — sidebar, header, panels, cards
-  // 10% → #F5A623 (amber gold) — accents, highlights, actions
+  // Theme object
   const theme = {
-    bgAside: darkMode ? 'bg-[#1E3A5F]' : 'bg-[#E8F0F9]',
-    bgMain: darkMode ? 'bg-[#0D1B2A]' : 'bg-[#F4F8FD]',
-    border: darkMode ? 'border-[#F5A623]/15' : 'border-[#1E3A5F]/10',
-    textPrimary: darkMode ? 'text-[#E8F0F9]/90' : 'text-[#0D1B2A]',
-    textSecondary: darkMode ? 'text-[#E8F0F9]/50' : 'text-[#1E3A5F]/70',
-    textMuted: darkMode ? 'text-[#E8F0F9]/25' : 'text-[#1E3A5F]/35',
-    inputBorder: darkMode ? 'border-[#F5A623]/20' : 'border-[#1E3A5F]/15',
-    inputFocus: darkMode ? 'focus-within:border-[#F5A623]' : 'focus-within:border-[#F5A623]',
-    scrollbar: darkMode ? 'rgba(245,166,35,0.15)' : 'rgba(30,58,95,0.12)',
-    orbit: darkMode ? 'border-[#E8F0F9]/10' : 'border-[#1E3A5F]/20',
-    projectHover: darkMode ? 'hover:bg-[#F5A623]/8' : 'hover:bg-[#1E3A5F]/8',
-    projectActive: darkMode ? 'bg-[#F5A623]/15 text-[#F5A623] shadow-sm' : 'bg-[#1E3A5F]/10 text-[#0D1B2A] shadow-sm',
-    modalBg: darkMode ? 'bg-[#1E3A5F]' : 'bg-white',
-    accent: '#F5A623',
+    bgAside: darkMode ? 'bg-[#0a0a0a]' : 'bg-white',
+    bgMain: darkMode ? 'bg-[#111111]' : 'bg-[#fdfdfd]',
+    border: darkMode ? 'border-white/10' : 'border-black/5',
+    textPrimary: darkMode ? 'text-white/90' : 'text-[#1a1a1a]',
+    textSecondary: darkMode ? 'text-white/40' : 'text-black/50',
+    textMuted: darkMode ? 'text-white/20' : 'text-black/30',
+    inputBorder: darkMode ? 'border-white/20' : 'border-black/10',
+    inputFocus: darkMode ? 'focus-within:border-white' : 'focus-within:border-black',
+    scrollbar: darkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)',
+    orbit: darkMode ? 'border-white/10' : 'border-black/20',
+    projectHover: darkMode ? 'hover:bg-white/5' : 'hover:bg-black/5',
+    projectActive: darkMode ? 'bg-white/10 text-white shadow-sm' : 'bg-black/5 text-black shadow-sm',
+    modalBg: darkMode ? 'bg-[#1a1a1a]' : 'bg-white',
   };
 
   const hasUserStartedChat = messages.some(m => m.role === 'user');
 
   return (
-    <div className={`flex h-screen ${darkMode ? 'bg-[#0D1B2A] text-[#E8F0F9]' : 'bg-[#F4F8FD] text-[#0D1B2A]'} font-sans antialiased overflow-hidden transition-colors duration-500`}>
+    <div className={`flex h-screen ${darkMode ? 'bg-[#050505] text-white' : 'bg-[#fafafa] text-[#1a1a1a]'} font-sans antialiased overflow-hidden transition-colors duration-500`}>
       {showAuthModal && (
         <AuthModal
           darkMode={darkMode}
@@ -269,7 +265,7 @@ export default function App() {
         darkMode={darkMode}
         theme={theme}
       />
-      <div className={`fixed top-24 left-1/2 -translate-x-1/2 z-[110] px-6 py-3 rounded-full bg-[#F5A623] text-[#0D1B2A] text-xs font-bold tracking-widest uppercase shadow-2xl transition-all duration-500 ${showShareToast ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-4 pointer-events-none'}`}>
+      <div className={`fixed top-24 left-1/2 -translate-x-1/2 z-[110] px-6 py-3 rounded-full bg-emerald-500 text-white text-xs font-bold tracking-widest uppercase shadow-2xl transition-all duration-500 ${showShareToast ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-4 pointer-events-none'}`}>
         Copiado para a área de transferência
       </div>
 
@@ -305,17 +301,17 @@ export default function App() {
       />
 
       <main className={`flex-1 flex flex-col ${theme.bgMain} relative transition-colors duration-500`}>
-        <header className={`h-20 flex items-center justify-between px-6 md:px-10 border-b ${theme.border} ${darkMode ? 'bg-[#1E3A5F]' : 'bg-[#E8F0F9]'} transition-colors duration-500`}>
+        <header className={`h-20 flex items-center justify-between px-6 md:px-10 border-b ${theme.border} transition-colors duration-500`}>
           <div className="flex items-center gap-4">
-            <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className={`p-2 rounded-lg transition-all ${darkMode ? 'text-[#E8F0F9]/60 hover:text-[#F5A623] hover:bg-[#F5A623]/10' : 'text-[#1E3A5F]/60 hover:text-[#1E3A5F] hover:bg-[#1E3A5F]/10'}`}>
+            <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className={`p-2 rounded-lg transition-all ${darkMode ? 'text-white/60 hover:text-white hover:bg-white/5' : 'text-black/40 hover:text-black hover:bg-black/5'}`}>
               <PanelLeft size={20} strokeWidth={1.5} />
             </button>
             <div className="flex items-baseline gap-1 select-none">
-              <span className={`text-base font-medium tracking-tight ${darkMode ? 'text-[#F5A623]' : 'text-[#0D1B2A]'}`}>SOLARIS</span>
+              <span className="text-base font-medium tracking-tight">SOLARIS</span>
               <span className={`text-[10px] font-bold ${theme.textMuted} tracking-tighter`}>V1</span>
             </div>
             {activeProjectId && (
-              <div className={`hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-lg ${darkMode ? 'bg-[#F5A623]/10' : 'bg-[#1E3A5F]/10'}`}>
+              <div className={`hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-lg ${darkMode ? 'bg-white/5' : 'bg-black/5'}`}>
                 <span className={`text-xs font-light ${theme.textSecondary}`}>{projects.find(p => p.id === activeProjectId)?.name}</span>
                 <button onClick={() => setActiveProjectId(null)} className={`ml-1 ${theme.textMuted} hover:text-red-400 transition-colors`} title="Sair do projeto">✕</button>
               </div>
@@ -325,7 +321,7 @@ export default function App() {
             {hasUserStartedChat && (
               <button
                 onClick={handleShare}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border transition-all duration-200 border-[#F5A623]/30 text-[#F5A623]/60 hover:text-[#F5A623] hover:border-[#F5A623]/60`}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border transition-all duration-200 ${theme.border} ${theme.textSecondary} hover:text-current hover:border-current opacity-60 hover:opacity-100`}
                 title="Copiar conversa"
               >
                 <Share2 size={13} strokeWidth={1.5} />
@@ -333,11 +329,11 @@ export default function App() {
               </button>
             )}
             {authUser && (
-              <button onClick={() => setShowSettingsModal(true)} className={`p-2 rounded-lg transition-all ${darkMode ? 'text-[#E8F0F9]/40 hover:text-[#F5A623] hover:bg-[#F5A623]/10' : 'text-[#1E3A5F]/60 hover:text-[#0D1B2A] hover:bg-[#1E3A5F]/10'}`} title="Configurações">
+              <button onClick={() => setShowSettingsModal(true)} className={`p-2 rounded-lg transition-all ${darkMode ? 'text-white/40 hover:text-white hover:bg-white/5' : 'text-black/40 hover:text-black hover:bg-black/5'}`} title="Configurações">
                 <Settings size={18} strokeWidth={1.5} />
               </button>
             )}
-            <button onClick={() => setDarkMode(d => !d)} className={`transition-all ${darkMode ? 'text-[#F5A623] hover:text-[#F5A623]/70' : 'text-[#1E3A5F]/60 hover:text-[#0D1B2A]'}`}>
+            <button onClick={() => setDarkMode(d => !d)} className={`transition-all ${darkMode ? 'text-yellow-400 hover:text-yellow-200' : 'text-slate-400 hover:text-slate-600'}`}>
               {darkMode ? <Sun size={18} strokeWidth={1.5} /> : <Moon size={18} strokeWidth={1.5} />}
             </button>
             {authUser ? (
@@ -346,13 +342,13 @@ export default function App() {
                 <span className="hidden sm:inline">Sair</span>
               </button>
             ) : (
-              <button onClick={() => setShowAuthModal(true)} className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border border-[#F5A623]/30 text-xs font-light transition-all text-[#F5A623]/70 hover:text-[#F5A623] hover:border-[#F5A623]`}>
+              <button onClick={() => setShowAuthModal(true)} className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border ${theme.border} text-xs font-light transition-all ${theme.textSecondary} hover:text-current hover:border-current`}>
                 <LogIn size={14} strokeWidth={1.5} />
                 <span className="hidden sm:inline">Entrar</span>
               </button>
             )}
             {!authUser && (
-              <span onClick={() => setShowAuthModal(true)} className="hidden md:flex items-center gap-1.5 cursor-pointer text-[#F5A623]/60 hover:text-[#F5A623] transition-colors text-xs">
+              <span onClick={() => setShowAuthModal(true)} className="hidden md:flex items-center gap-1.5 cursor-pointer text-amber-400/60 hover:text-amber-400 transition-colors text-xs">
                 <Star size={10} /> Entrar para usar Pro
               </span>
             )}

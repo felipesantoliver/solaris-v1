@@ -166,7 +166,7 @@ export function Sidebar({
                         onKeyDown={e => { if (e.key === 'Enter') onConfirmRenameChat(chat.id); if (e.key === 'Escape') { setEditingChatTitleId(null); setEditingChatTitleValue(''); } }}
                         onBlur={() => onConfirmRenameChat(chat.id)}
                         onClick={e => e.stopPropagation()}
-                        className={`text-xs font-light bg-transparent border-none focus:outline-none w-full min-w-0 ${darkMode ? 'text-[#E8F0F9]' : 'text-[#0D1B2A]'}`}
+                        className={`text-xs font-light bg-transparent border-none focus:outline-none w-full min-w-0 ${darkMode ? 'text-white' : 'text-black'}`}
                         maxLength={50}
                       />
                     ) : (
@@ -195,8 +195,8 @@ export function Sidebar({
             </div>
           )}
           <div className="flex flex-col py-4">
-            <span className={`text-[8px] font-extralight uppercase tracking-[0.4em] ${darkMode ? 'text-[#E8F0F9]/20' : 'text-[#1E3A5F]/30'} mb-0.5`}>Criado por</span>
-            <span className={`text-sm italic tracking-wide ${darkMode ? 'text-[#F5A623]/70' : 'text-[#1E3A5F]/70'}`} style={{ fontFamily: 'Georgia, serif' }}>
+            <span className={`text-[8px] font-extralight uppercase tracking-[0.4em] ${darkMode ? 'text-white/20' : 'text-black/30'} mb-0.5`}>Criado por</span>
+            <span className={`text-sm italic tracking-wide ${darkMode ? 'text-white/50' : 'text-black/60'}`} style={{ fontFamily: 'Georgia, serif' }}>
               felipe sant'oliver
             </span>
           </div>

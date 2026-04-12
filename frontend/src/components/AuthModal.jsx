@@ -11,14 +11,14 @@ export function AuthModal({ onClose, darkMode, onAuthSuccess, onGoogleLogin, onL
   const [info, setInfo] = useState('');
 
   const t = {
-    bg: darkMode ? 'bg-[#1E3A5F]' : 'bg-white',
-    border: darkMode ? 'border-[#F5A623]/15' : 'border-[#1E3A5F]/10',
-    muted: darkMode ? 'text-[#E8F0F9]/40' : 'text-[#1E3A5F]/50',
-    input: darkMode ? 'bg-[#0D1B2A]/60 border-[#F5A623]/15 text-[#E8F0F9] placeholder-[#E8F0F9]/30' : 'bg-[#1E3A5F]/5 border-[#1E3A5F]/10 text-[#0D1B2A] placeholder-[#1E3A5F]/30',
-    btn: darkMode ? 'bg-[#F5A623] text-[#0D1B2A] hover:bg-[#F5A623]/85 font-semibold' : 'bg-[#0D1B2A] text-white hover:bg-[#1E3A5F]',
-    google: darkMode ? 'border-[#E8F0F9]/10 hover:bg-[#E8F0F9]/5 text-[#E8F0F9]/80' : 'border-[#1E3A5F]/10 hover:bg-[#1E3A5F]/5 text-[#1E3A5F]/70',
-    tab: darkMode ? 'text-[#E8F0F9]/30 hover:text-[#E8F0F9]/60' : 'text-[#1E3A5F]/30 hover:text-[#1E3A5F]/60',
-    tabActive: darkMode ? 'text-[#F5A623] border-b border-[#F5A623]' : 'text-[#0D1B2A] border-b border-[#0D1B2A]',
+    bg: darkMode ? 'bg-[#1a1a1a]' : 'bg-white',
+    border: darkMode ? 'border-white/10' : 'border-black/8',
+    muted: darkMode ? 'text-white/40' : 'text-black/50',
+    input: darkMode ? 'bg-white/5 border-white/10 text-white placeholder-white/30' : 'bg-black/3 border-black/10 text-black placeholder-black/30',
+    btn: darkMode ? 'bg-white text-black hover:bg-white/90' : 'bg-black text-white hover:bg-black/90',
+    google: darkMode ? 'border-white/10 hover:bg-white/5 text-white/80' : 'border-black/10 hover:bg-black/5 text-black/70',
+    tab: darkMode ? 'text-white/30 hover:text-white/60' : 'text-black/30 hover:text-black/60',
+    tabActive: darkMode ? 'text-white border-b border-white' : 'text-black border-b border-black',
   };
 
   const handleGoogle = async () => {
