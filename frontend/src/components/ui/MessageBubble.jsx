@@ -2,7 +2,64 @@ import React, { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Pencil, RotateCcw, Check, Loader2, Star, Copy, Terminal } from 'lucide-react';
-import { codeToHtml } from 'shiki';
+import { Light as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { githubGist, githubDark } from 'react-syntax-highlighter/dist/esm/styles/hljs';
+
+// Registra apenas as linguagens usadas (evita bundle gigante)
+import js from 'react-syntax-highlighter/dist/esm/languages/hljs/javascript';
+import ts from 'react-syntax-highlighter/dist/esm/languages/hljs/typescript';
+import python from 'react-syntax-highlighter/dist/esm/languages/hljs/python';
+import java from 'react-syntax-highlighter/dist/esm/languages/hljs/java';
+import cpp from 'react-syntax-highlighter/dist/esm/languages/hljs/cpp';
+import c from 'react-syntax-highlighter/dist/esm/languages/hljs/c';
+import csharp from 'react-syntax-highlighter/dist/esm/languages/hljs/csharp';
+import html from 'react-syntax-highlighter/dist/esm/languages/hljs/xml';
+import css from 'react-syntax-highlighter/dist/esm/languages/hljs/css';
+import json from 'react-syntax-highlighter/dist/esm/languages/hljs/json';
+import sql from 'react-syntax-highlighter/dist/esm/languages/hljs/sql';
+import bash from 'react-syntax-highlighter/dist/esm/languages/hljs/bash';
+import go from 'react-syntax-highlighter/dist/esm/languages/hljs/go';
+import rust from 'react-syntax-highlighter/dist/esm/languages/hljs/rust';
+import php from 'react-syntax-highlighter/dist/esm/languages/hljs/php';
+import ruby from 'react-syntax-highlighter/dist/esm/languages/hljs/ruby';
+import swift from 'react-syntax-highlighter/dist/esm/languages/hljs/swift';
+import kotlin from 'react-syntax-highlighter/dist/esm/languages/hljs/kotlin';
+import yaml from 'react-syntax-highlighter/dist/esm/languages/hljs/yaml';
+import xml from 'react-syntax-highlighter/dist/esm/languages/hljs/xml';
+import markdown from 'react-syntax-highlighter/dist/esm/languages/hljs/markdown';
+
+SyntaxHighlighter.registerLanguage('javascript', js);
+SyntaxHighlighter.registerLanguage('js', js);
+SyntaxHighlighter.registerLanguage('typescript', ts);
+SyntaxHighlighter.registerLanguage('ts', ts);
+SyntaxHighlighter.registerLanguage('jsx', js);
+SyntaxHighlighter.registerLanguage('tsx', ts);
+SyntaxHighlighter.registerLanguage('python', python);
+SyntaxHighlighter.registerLanguage('py', python);
+SyntaxHighlighter.registerLanguage('java', java);
+SyntaxHighlighter.registerLanguage('cpp', cpp);
+SyntaxHighlighter.registerLanguage('c', c);
+SyntaxHighlighter.registerLanguage('csharp', csharp);
+SyntaxHighlighter.registerLanguage('cs', csharp);
+SyntaxHighlighter.registerLanguage('html', html);
+SyntaxHighlighter.registerLanguage('css', css);
+SyntaxHighlighter.registerLanguage('json', json);
+SyntaxHighlighter.registerLanguage('sql', sql);
+SyntaxHighlighter.registerLanguage('bash', bash);
+SyntaxHighlighter.registerLanguage('sh', bash);
+SyntaxHighlighter.registerLanguage('shell', bash);
+SyntaxHighlighter.registerLanguage('go', go);
+SyntaxHighlighter.registerLanguage('rust', rust);
+SyntaxHighlighter.registerLanguage('php', php);
+SyntaxHighlighter.registerLanguage('ruby', ruby);
+SyntaxHighlighter.registerLanguage('rb', ruby);
+SyntaxHighlighter.registerLanguage('swift', swift);
+SyntaxHighlighter.registerLanguage('kotlin', kotlin);
+SyntaxHighlighter.registerLanguage('yaml', yaml);
+SyntaxHighlighter.registerLanguage('yml', yaml);
+SyntaxHighlighter.registerLanguage('xml', xml);
+SyntaxHighlighter.registerLanguage('markdown', markdown);
+SyntaxHighlighter.registerLanguage('md', markdown);
 
 // Mapa de nomes amigáveis para exibição no header
 const LANGUAGE_LABELS = {
@@ -40,41 +97,16 @@ const LANGUAGE_LABELS = {
   markdown: 'Markdown',
 };
 
-// Linguagens suportadas pelo shiki — fallback para 'text' se não reconhecer
-const SHIKI_SUPPORTED = new Set([
-  'js','javascript','ts','typescript','jsx','tsx','py','python','cpp','c','cs','csharp',
-  'java','html','css','json','sql','bash','sh','shell','go','rust','php','rb','ruby',
-  'swift','kotlin','yaml','yml','xml','md','markdown','vue','svelte','r','scala',
-  'haskell','lua','perl','arduino','c++',
-]);
-
 function CodeBlock({ language, children, darkMode }) {
   const [copied, setCopied] = useState(false);
-  const [highlightedHtml, setHighlightedHtml] = useState('');
-  const [isHighlighting, setIsHighlighting] = useState(true);
 
   // Normaliza children para string, evitando o bug "[object Object]"
   const codeString = Array.isArray(children)
     ? children.map(c => (typeof c === 'string' ? c : '')).join('')
     : String(children ?? '');
 
-  const lang = SHIKI_SUPPORTED.has(language?.toLowerCase()) ? language.toLowerCase() : 'text';
+  const lang = language?.toLowerCase() || 'text';
   const displayLabel = LANGUAGE_LABELS[lang] || language || 'Código';
-
-  // Gera o HTML com syntax highlighting via shiki
-  useEffect(() => {
-    if (!codeString) return;
-    setIsHighlighting(true);
-    codeToHtml(codeString, {
-      lang,
-      theme: darkMode ? 'github-dark' : 'github-light',
-    })
-      .then(html => {
-        setHighlightedHtml(html);
-        setIsHighlighting(false);
-      })
-      .catch(() => setIsHighlighting(false));
-  }, [codeString, lang, darkMode]);
 
   const handleCopy = () => {
     navigator.clipboard.writeText(codeString);
@@ -110,23 +142,22 @@ function CodeBlock({ language, children, darkMode }) {
         </button>
       </div>
 
-      {/* Corpo: código com highlight do shiki ou fallback plain */}
-      {!isHighlighting && highlightedHtml ? (
-        <div
-          className="text-sm leading-relaxed [&>pre]:m-0 [&>pre]:p-4 [&>pre]:rounded-none [&>pre]:overflow-x-auto [&>pre]:text-sm"
-          dangerouslySetInnerHTML={{ __html: highlightedHtml }}
-        />
-      ) : (
-        <pre
-          className="p-4 overflow-x-auto text-sm leading-relaxed m-0 rounded-none"
-          style={{
-            backgroundColor: darkMode ? '#0d1117' : '#f6f8fa',
-            color: darkMode ? '#e6edf3' : '#24292f',
-          }}
-        >
-          <code className="font-mono whitespace-pre">{codeString}</code>
-        </pre>
-      )}
+      {/* Corpo: código com syntax highlighting */}
+      <SyntaxHighlighter
+        language={lang}
+        style={darkMode ? githubDark : githubGist}
+        customStyle={{
+          margin: 0,
+          borderRadius: 0,
+          fontSize: '0.875rem',
+          lineHeight: '1.6',
+          padding: '1rem',
+          background: darkMode ? '#0d1117' : '#f6f8fa',
+        }}
+        codeTagProps={{ style: { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' } }}
+      >
+        {codeString}
+      </SyntaxHighlighter>
     </div>
   );
 }
