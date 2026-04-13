@@ -84,6 +84,9 @@ function generateLocalTitle(firstMessage) {
   return title.substring(0, 50);
 }
 
+// ─── RAG: threshold de similaridade ───────────────────────────────────────
+const RAG_SIMILARITY_THRESHOLD = 0.65;
+
 async function searchRelevantChunks(projectId, query, limit = 3) {
   if (!projectId) return [];
   const queryEmbedding = await generateEmbedding(query);
@@ -99,19 +102,18 @@ async function searchRelevantChunks(projectId, query, limit = 3) {
     text: c.chunk_text,
     score: cosineSimilarity(queryEmbedding, JSON.parse(c.embedding)),
   }));
-  withScores.sort((a, b) => b.score - a.score);
-  return withScores.slice(0, limit).map(c => c.text);
+  return withScores
+    .filter(c => c.score > RAG_SIMILARITY_THRESHOLD)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map(c => c.text);
 }
 
 function processResponse(text) {
   return sanitizeModelResponse(cleanAssistantMessage(text));
 }
 
-// Aplica middleware apenas nas rotas que precisam de userId
-// GET /messages/chat/:id (pode ser público? Mantemos sem autenticação? Vamos manter como antes, mas sem userId)
-// Decidimos aplicar extractUserId nas rotas POST porque precisam de userId para rate limit e operações.
-
-// ─── GET mensagens de um chat (pode ser acessado sem auth? No seu código original não exigia userId. Manteremos assim.)
+// ─── GET mensagens de um chat ──────────────────────────────────────────────
 router.get('/messages/chat/:chatId', async (req, res, next) => {
   try {
     const rows = await allAsync(
@@ -170,9 +172,9 @@ router.post('/messages/stream', extractUserId, async (req, res, next) => {
 
     let finalSystemPrompt = baseSystemPrompt;
     if (relevantChunks.length > 0) {
-      finalSystemPrompt += `\n=== CONTEXTO DOS ARQUIVOS ===\nOs seguintes trechos dos seus documentos podem ser relevantes para a pergunta atual:\n\n`;
-      relevantChunks.forEach((chunk, idx) => { finalSystemPrompt += `[Trecho ${idx + 1}]\n${chunk}\n\n`; });
-      finalSystemPrompt += `Utilize essas informações sempre que pertinente. Se não forem úteis, ignore-as.\n`;
+      finalSystemPrompt += `\nTrechos relevantes dos seus documentos:\n\n`;
+      relevantChunks.forEach((chunk, idx) => { finalSystemPrompt += `[${idx + 1}] ${chunk}\n\n`; });
+      finalSystemPrompt += `Use essas informações quando pertinente.\n`;
     }
 
     const apiHistory = selectContextWindow(history);
@@ -243,9 +245,9 @@ router.post('/messages', extractUserId, async (req, res, next) => {
 
     let finalSystemPrompt = baseSystemPrompt;
     if (relevantChunks.length > 0) {
-      finalSystemPrompt += `\n=== CONTEXTO DOS ARQUIVOS ===\n`;
-      relevantChunks.forEach((chunk, idx) => { finalSystemPrompt += `[Trecho ${idx + 1}]\n${chunk}\n\n`; });
-      finalSystemPrompt += `Utilize essas informações sempre que pertinente.\n`;
+      finalSystemPrompt += `\nTrechos relevantes dos seus documentos:\n\n`;
+      relevantChunks.forEach((chunk, idx) => { finalSystemPrompt += `[${idx + 1}] ${chunk}\n\n`; });
+      finalSystemPrompt += `Use essas informações quando pertinente.\n`;
     }
 
     const apiHistory = selectContextWindow(history);
