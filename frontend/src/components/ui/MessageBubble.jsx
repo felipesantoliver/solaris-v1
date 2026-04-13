@@ -2,27 +2,86 @@ import React, { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
-import { Pencil, RotateCcw, Check, Loader2, Star } from 'lucide-react';
+import { Pencil, RotateCcw, Check, Loader2, Star, Copy, Terminal } from 'lucide-react';
 import 'highlight.js/styles/github-dark.css';
+
+// Mapa de nomes amigáveis para exibição no header
+const LANGUAGE_LABELS = {
+  js: 'JavaScript',
+  javascript: 'JavaScript',
+  ts: 'TypeScript',
+  typescript: 'TypeScript',
+  jsx: 'JSX',
+  tsx: 'TSX',
+  py: 'Python',
+  python: 'Python',
+  cpp: 'C++',
+  c: 'C',
+  cs: 'C#',
+  csharp: 'C#',
+  java: 'Java',
+  html: 'HTML',
+  css: 'CSS',
+  json: 'JSON',
+  sql: 'SQL',
+  bash: 'Bash',
+  sh: 'Shell',
+  shell: 'Shell',
+  go: 'Go',
+  rust: 'Rust',
+  php: 'PHP',
+  rb: 'Ruby',
+  ruby: 'Ruby',
+  swift: 'Swift',
+  kotlin: 'Kotlin',
+  yaml: 'YAML',
+  yml: 'YAML',
+  xml: 'XML',
+  md: 'Markdown',
+  markdown: 'Markdown',
+};
 
 function CodeBlock({ language, children }) {
   const [copied, setCopied] = useState(false);
+
   const handleCopy = () => {
     navigator.clipboard.writeText(children);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
+
+  const displayLabel = LANGUAGE_LABELS[language?.toLowerCase()] || language || 'Código';
+
   return (
-    <div className="relative group my-4 rounded-lg overflow-hidden">
-      <div className="absolute top-2 right-2 z-10">
+    <div className="my-5 rounded-xl overflow-hidden border border-white/10 shadow-lg">
+      {/* Header da linguagem */}
+      <div className="flex items-center justify-between px-4 py-2.5 bg-white/5 border-b border-white/10">
+        <div className="flex items-center gap-2">
+          <Terminal size={13} className="text-amber-400/80" />
+          <span className="text-xs font-mono font-semibold tracking-wide text-white/60 uppercase">
+            {displayLabel}
+          </span>
+        </div>
         <button
           onClick={handleCopy}
-          className="bg-black/50 hover:bg-black/70 text-white text-xs px-2 py-1 rounded-md backdrop-blur-sm transition-all flex items-center gap-1"
+          className="flex items-center gap-1.5 text-[11px] text-white/40 hover:text-white/80 transition-colors duration-200 px-2 py-1 rounded-md hover:bg-white/10"
         >
-          {copied ? <Check size={12} /> : <span>Copiar</span>}
+          {copied ? (
+            <>
+              <Check size={11} className="text-emerald-400" />
+              <span className="text-emerald-400">copiado</span>
+            </>
+          ) : (
+            <>
+              <Copy size={11} />
+              <span>copiar</span>
+            </>
+          )}
         </button>
       </div>
-      <pre className={`language-${language} p-4 rounded-lg overflow-x-auto text-sm`}>
+
+      {/* Corpo com o código */}
+      <pre className={`language-${language} p-4 overflow-x-auto text-sm leading-relaxed m-0 rounded-none bg-[#0d1117]`}>
         <code>{children}</code>
       </pre>
     </div>
@@ -58,7 +117,6 @@ export const MessageBubble = React.memo(({
 
   const hasHistory = Array.isArray(msg.edit_history) && msg.edit_history.length > 0;
 
-  // Cursor piscando apenas enquanto a última mensagem do assistente está sendo recebida
   const showCursor = isLastAssistant && isStreaming && msg.content.length > 0;
 
   const renderContent = () => {
@@ -75,7 +133,7 @@ export const MessageBubble = React.memo(({
                 return !inline ? (
                   <CodeBlock language={language}>{String(children).replace(/\n$/, '')}</CodeBlock>
                 ) : (
-                  <code className={`${className} bg-black/20 px-1 rounded`} {...props}>
+                  <code className={`${className} bg-amber-400/10 text-amber-300 px-1.5 py-0.5 rounded text-[0.85em] font-mono`} {...props}>
                     {children}
                   </code>
                 );
