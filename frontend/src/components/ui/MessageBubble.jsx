@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Pencil, RotateCcw, Check, Loader2, Star, Copy, Terminal } from 'lucide-react';
+import { codeToHtml } from 'shiki';
 
 // Mapa de nomes amigáveis para exibição no header
 const LANGUAGE_LABELS = {
@@ -39,13 +40,41 @@ const LANGUAGE_LABELS = {
   markdown: 'Markdown',
 };
 
+// Linguagens suportadas pelo shiki — fallback para 'text' se não reconhecer
+const SHIKI_SUPPORTED = new Set([
+  'js','javascript','ts','typescript','jsx','tsx','py','python','cpp','c','cs','csharp',
+  'java','html','css','json','sql','bash','sh','shell','go','rust','php','rb','ruby',
+  'swift','kotlin','yaml','yml','xml','md','markdown','vue','svelte','r','scala',
+  'haskell','lua','perl','arduino','c++',
+]);
+
 function CodeBlock({ language, children, darkMode }) {
   const [copied, setCopied] = useState(false);
+  const [highlightedHtml, setHighlightedHtml] = useState('');
+  const [isHighlighting, setIsHighlighting] = useState(true);
 
-  // Garante que children seja sempre uma string, evitando o bug "[object Object]"
+  // Normaliza children para string, evitando o bug "[object Object]"
   const codeString = Array.isArray(children)
     ? children.map(c => (typeof c === 'string' ? c : '')).join('')
     : String(children ?? '');
+
+  const lang = SHIKI_SUPPORTED.has(language?.toLowerCase()) ? language.toLowerCase() : 'text';
+  const displayLabel = LANGUAGE_LABELS[lang] || language || 'Código';
+
+  // Gera o HTML com syntax highlighting via shiki
+  useEffect(() => {
+    if (!codeString) return;
+    setIsHighlighting(true);
+    codeToHtml(codeString, {
+      lang,
+      theme: darkMode ? 'github-dark' : 'github-light',
+    })
+      .then(html => {
+        setHighlightedHtml(html);
+        setIsHighlighting(false);
+      })
+      .catch(() => setIsHighlighting(false));
+  }, [codeString, lang, darkMode]);
 
   const handleCopy = () => {
     navigator.clipboard.writeText(codeString);
@@ -53,11 +82,9 @@ function CodeBlock({ language, children, darkMode }) {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const displayLabel = LANGUAGE_LABELS[language?.toLowerCase()] || language || 'Código';
-
   return (
     <div className={`my-5 rounded-xl overflow-hidden shadow-lg border ${darkMode ? 'border-white/10' : 'border-black/10'}`}>
-      {/* Header da linguagem */}
+      {/* Header: linguagem + botão copiar */}
       <div className={`flex items-center justify-between px-4 py-2.5 border-b ${darkMode ? 'bg-white/5 border-white/10' : 'bg-black/5 border-black/10'}`}>
         <div className="flex items-center gap-2">
           <Terminal size={13} className="text-amber-400/80" />
@@ -83,21 +110,23 @@ function CodeBlock({ language, children, darkMode }) {
         </button>
       </div>
 
-      {/* Corpo com o código — fundo e cor adaptados ao tema */}
-      <pre
-        className="p-4 overflow-x-auto text-sm leading-relaxed m-0 rounded-none"
-        style={{
-          backgroundColor: darkMode ? '#0d1117' : '#f6f8fa',
-          color: darkMode ? '#e6edf3' : '#24292f',
-        }}
-      >
-        <code
-          className="font-mono whitespace-pre"
-          style={{ background: 'transparent' }}
+      {/* Corpo: código com highlight do shiki ou fallback plain */}
+      {!isHighlighting && highlightedHtml ? (
+        <div
+          className="text-sm leading-relaxed [&>pre]:m-0 [&>pre]:p-4 [&>pre]:rounded-none [&>pre]:overflow-x-auto [&>pre]:text-sm"
+          dangerouslySetInnerHTML={{ __html: highlightedHtml }}
+        />
+      ) : (
+        <pre
+          className="p-4 overflow-x-auto text-sm leading-relaxed m-0 rounded-none"
+          style={{
+            backgroundColor: darkMode ? '#0d1117' : '#f6f8fa',
+            color: darkMode ? '#e6edf3' : '#24292f',
+          }}
         >
-          {codeString}
-        </code>
-      </pre>
+          <code className="font-mono whitespace-pre">{codeString}</code>
+        </pre>
+      )}
     </div>
   );
 }
