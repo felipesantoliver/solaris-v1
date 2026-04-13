@@ -3,7 +3,8 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Pencil, RotateCcw, Check, Loader2, Star, Copy, Terminal } from 'lucide-react';
 import { Light as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { githubGist, githubDark } from 'react-syntax-highlighter/dist/esm/styles/hljs';
+import githubGist from 'react-syntax-highlighter/dist/esm/styles/hljs/github-gist';
+import githubDark from 'react-syntax-highlighter/dist/esm/styles/hljs/github';
 
 // Registra apenas as linguagens usadas (evita bundle gigante)
 import js from 'react-syntax-highlighter/dist/esm/languages/hljs/javascript';
