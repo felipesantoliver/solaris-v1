@@ -1,108 +1,101 @@
 import React, { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import rehypeHighlight from 'rehype-highlight';
 import { Pencil, RotateCcw, Check, Loader2, Star, Copy, Terminal } from 'lucide-react';
-import 'highlight.js/styles/github-dark.css';
 
+// Mapa de nomes amigáveis para exibição no header
 const LANGUAGE_LABELS = {
-  js: 'JavaScript', javascript: 'JavaScript', ts: 'TypeScript', typescript: 'TypeScript',
-  jsx: 'JSX', tsx: 'TSX', py: 'Python', python: 'Python', cpp: 'C++', c: 'C',
-  cs: 'C#', csharp: 'C#', java: 'Java', html: 'HTML', css: 'CSS', json: 'JSON',
-  sql: 'SQL', bash: 'Bash', sh: 'Shell', shell: 'Shell', go: 'Go', rust: 'Rust',
-  php: 'PHP', rb: 'Ruby', ruby: 'Ruby', swift: 'Swift', kotlin: 'Kotlin',
-  yaml: 'YAML', yml: 'YAML', xml: 'XML', md: 'Markdown', markdown: 'Markdown',
+  js: 'JavaScript',
+  javascript: 'JavaScript',
+  ts: 'TypeScript',
+  typescript: 'TypeScript',
+  jsx: 'JSX',
+  tsx: 'TSX',
+  py: 'Python',
+  python: 'Python',
+  cpp: 'C++',
+  c: 'C',
+  cs: 'C#',
+  csharp: 'C#',
+  java: 'Java',
+  html: 'HTML',
+  css: 'CSS',
+  json: 'JSON',
+  sql: 'SQL',
+  bash: 'Bash',
+  sh: 'Shell',
+  shell: 'Shell',
+  go: 'Go',
+  rust: 'Rust',
+  php: 'PHP',
+  rb: 'Ruby',
+  ruby: 'Ruby',
+  swift: 'Swift',
+  kotlin: 'Kotlin',
+  yaml: 'YAML',
+  yml: 'YAML',
+  xml: 'XML',
+  md: 'Markdown',
+  markdown: 'Markdown',
 };
-
-// Fix bug [object Object]: normaliza content que pode vir como string ou array Anthropic
-function normalizeContent(content) {
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content)) {
-    return content.map(block => {
-      if (typeof block === 'string') return block;
-      if (block && typeof block === 'object') {
-        if (block.type === 'text') return block.text || '';
-        if (block.text) return block.text;
-      }
-      return '';
-    }).join('');
-  }
-  if (content && typeof content === 'object' && content.text) return content.text;
-  return '';
-}
 
 function CodeBlock({ language, children, darkMode }) {
   const [copied, setCopied] = useState(false);
 
+  // Garante que children seja sempre uma string, evitando o bug "[object Object]"
+  const codeString = Array.isArray(children)
+    ? children.map(c => (typeof c === 'string' ? c : '')).join('')
+    : String(children ?? '');
+
   const handleCopy = () => {
-    navigator.clipboard.writeText(children);
+    navigator.clipboard.writeText(codeString);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const displayLabel = LANGUAGE_LABELS[language?.toLowerCase()] || language || 'código';
+  const displayLabel = LANGUAGE_LABELS[language?.toLowerCase()] || language || 'Código';
 
   return (
-    <div style={{
-      margin: '16px 0',
-      borderRadius: '8px',
-      overflow: 'hidden',
-      border: '1px solid rgba(255,255,255,0.1)',
-      boxShadow: '0 2px 12px rgba(0,0,0,0.3)',
-      fontFamily: "'Söhne Mono', ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, Consolas, monospace",
-    }}>
-      {/* Header estilo ChatGPT */}
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        padding: '10px 16px',
-        backgroundColor: '#2f2f2f',
-        borderBottom: '1px solid rgba(255,255,255,0.08)',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <Terminal size={13} style={{ color: '#9ca3af' }} />
-          <span style={{
-            fontSize: '12px',
-            fontFamily: 'monospace',
-            fontWeight: 600,
-            color: '#9ca3af',
-            letterSpacing: '0.03em',
-          }}>
+    <div className={`my-5 rounded-xl overflow-hidden shadow-lg border ${darkMode ? 'border-white/10' : 'border-black/10'}`}>
+      {/* Header da linguagem */}
+      <div className={`flex items-center justify-between px-4 py-2.5 border-b ${darkMode ? 'bg-white/5 border-white/10' : 'bg-black/5 border-black/10'}`}>
+        <div className="flex items-center gap-2">
+          <Terminal size={13} className="text-amber-400/80" />
+          <span className={`text-xs font-mono font-semibold tracking-wide uppercase ${darkMode ? 'text-white/60' : 'text-black/50'}`}>
             {displayLabel}
           </span>
         </div>
         <button
           onClick={handleCopy}
-          style={{
-            display: 'flex', alignItems: 'center', gap: '6px',
-            fontSize: '12px',
-            color: copied ? '#4ade80' : '#9ca3af',
-            background: 'none', border: 'none', cursor: 'pointer',
-            padding: '4px 8px', borderRadius: '6px',
-            transition: 'all 0.15s',
-          }}
+          className={`flex items-center gap-1.5 text-[11px] transition-colors duration-200 px-2 py-1 rounded-md ${darkMode ? 'text-white/40 hover:text-white/80 hover:bg-white/10' : 'text-black/40 hover:text-black/80 hover:bg-black/10'}`}
         >
           {copied ? (
-            <><Check size={12} style={{ color: '#4ade80' }} /><span>copiado</span></>
+            <>
+              <Check size={11} className="text-emerald-400" />
+              <span className="text-emerald-400">copiado</span>
+            </>
           ) : (
-            <><Copy size={12} /><span>copiar</span></>
+            <>
+              <Copy size={11} />
+              <span>copiar</span>
+            </>
           )}
         </button>
       </div>
 
-      {/* Corpo — sempre dark, igual ao ChatGPT */}
-      <pre style={{
-        margin: 0, padding: '16px', overflowX: 'auto',
-        backgroundColor: '#1e1e1e',
-        fontSize: '13px', lineHeight: 1.6,
-      }}>
-        <code style={{
-          color: '#e5e7eb',
-          fontFamily: 'inherit',
-          whiteSpace: 'pre',
-        }}>
-          {children}
+      {/* Corpo com o código — fundo e cor adaptados ao tema */}
+      <pre
+        className="p-4 overflow-x-auto text-sm leading-relaxed m-0 rounded-none"
+        style={{
+          backgroundColor: darkMode ? '#0d1117' : '#f6f8fa',
+          color: darkMode ? '#e6edf3' : '#24292f',
+        }}
+      >
+        <code
+          className="font-mono whitespace-pre"
+          style={{ background: 'transparent' }}
+        >
+          {codeString}
         </code>
       </pre>
     </div>
@@ -110,8 +103,20 @@ function CodeBlock({ language, children, darkMode }) {
 }
 
 export const MessageBubble = React.memo(({
-  msg, index, darkMode, theme, onEdit, isEditing, editValue, setEditValue,
-  onEditSave, onEditCancel, isLoading, programmingMode, isLastAssistant, isStreaming,
+  msg,
+  index,
+  darkMode,
+  theme,
+  onEdit,
+  isEditing,
+  editValue,
+  setEditValue,
+  onEditSave,
+  onEditCancel,
+  isLoading,
+  programmingMode,
+  isLastAssistant,
+  isStreaming,
 }) => {
   const [showHistory, setShowHistory] = useState(false);
   const editRef = useRef(null);
@@ -125,60 +130,37 @@ export const MessageBubble = React.memo(({
   }, [isEditing]);
 
   const hasHistory = Array.isArray(msg.edit_history) && msg.edit_history.length > 0;
-  const contentStr = normalizeContent(msg.content);
-  const showCursor = isLastAssistant && isStreaming && contentStr.length > 0;
+
+  const showCursor = isLastAssistant && isStreaming && msg.content.length > 0;
 
   const renderContent = () => {
     if (msg.role === 'assistant' && programmingMode) {
-      const textColor = darkMode ? 'rgba(255,255,255,0.85)' : '#111827';
       return (
-        <div className="relative" style={{ color: textColor, fontSize: '14px', lineHeight: '1.75' }}>
+        <div className="relative">
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
-            rehypePlugins={[rehypeHighlight]}
             components={{
               code({ node, inline, className, children, ...props }) {
                 const match = /language-(\w+)/.exec(className || '');
                 const language = match ? match[1] : '';
                 return !inline ? (
-                  <CodeBlock language={language} darkMode={darkMode}>
-                    {String(children).replace(/\n$/, '')}
-                  </CodeBlock>
+                  <CodeBlock language={language} darkMode={darkMode}>{children}</CodeBlock>
                 ) : (
-                  <code style={{
-                    backgroundColor: darkMode ? 'rgba(251,191,36,0.12)' : 'rgba(0,0,0,0.07)',
-                    color: darkMode ? '#fbbf24' : '#b45309',
-                    padding: '1px 6px', borderRadius: '4px',
-                    fontSize: '0.85em', fontFamily: 'monospace',
-                  }} {...props}>{children}</code>
+                  <code className={`${className} bg-amber-400/10 text-amber-300 px-1.5 py-0.5 rounded text-[0.85em] font-mono`} {...props}>
+                    {children}
+                  </code>
                 );
               },
-              p({ children }) {
-                return <p style={{ margin: '0 0 12px 0', color: darkMode ? 'rgba(255,255,255,0.82)' : '#1f2937' }}>{children}</p>;
-              },
-              h1({ children }) { return <h1 style={{ fontSize: '1.25em', fontWeight: 700, margin: '20px 0 8px', color: darkMode ? '#fff' : '#111' }}>{children}</h1>; },
-              h2({ children }) { return <h2 style={{ fontSize: '1.1em', fontWeight: 700, margin: '16px 0 6px', color: darkMode ? '#fff' : '#111' }}>{children}</h2>; },
               h3({ children, ...props }) {
-                const isFileName = typeof children === 'string' && /^[`\w\-\.]+$/.test(children);
-                return isFileName
-                  ? <h3 style={{ fontSize: '13px', fontFamily: 'monospace', fontWeight: 700, margin: '16px 0 8px', color: '#f59e0b', borderLeft: '2px solid #f59e0b', paddingLeft: '8px' }} {...props}>{children}</h3>
-                  : <h3 style={{ fontSize: '1em', fontWeight: 600, margin: '12px 0 4px', color: darkMode ? '#fff' : '#111' }} {...props}>{children}</h3>;
-              },
-              ul({ children }) { return <ul style={{ paddingLeft: '20px', margin: '8px 0', color: darkMode ? 'rgba(255,255,255,0.82)' : '#1f2937' }}>{children}</ul>; },
-              ol({ children }) { return <ol style={{ paddingLeft: '20px', margin: '8px 0', color: darkMode ? 'rgba(255,255,255,0.82)' : '#1f2937' }}>{children}</ol>; },
-              li({ children }) { return <li style={{ margin: '4px 0' }}>{children}</li>; },
-              strong({ children }) { return <strong style={{ fontWeight: 700, color: darkMode ? '#fff' : '#111' }}>{children}</strong>; },
-              blockquote({ children }) {
-                return <blockquote style={{
-                  borderLeft: `3px solid ${darkMode ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.15)'}`,
-                  paddingLeft: '12px', margin: '8px 0',
-                  color: darkMode ? 'rgba(255,255,255,0.55)' : '#6b7280',
-                  fontStyle: 'italic',
-                }}>{children}</blockquote>;
+                const isFileName = /^[`\w\-\.]+$/.test(children);
+                if (isFileName) {
+                  return <h3 className="text-sm font-mono font-bold mt-4 mb-2 text-amber-400 border-l-2 border-amber-400 pl-2" {...props}>{children}</h3>;
+                }
+                return <h3 className="text-sm font-semibold mt-3 mb-1" {...props}>{children}</h3>;
               },
             }}
           >
-            {contentStr}
+            {msg.content}
           </ReactMarkdown>
           {showCursor && (
             <span className={`inline-block w-0.5 h-4 ml-0.5 align-middle animate-pulse ${darkMode ? 'bg-white/60' : 'bg-black/60'}`} />
@@ -193,7 +175,7 @@ export const MessageBubble = React.memo(({
           ? (darkMode ? 'text-white font-medium' : 'text-black font-medium')
           : (darkMode ? 'text-white/60 font-light' : 'text-gray-600 font-light')
       }`}>
-        {contentStr}
+        {msg.content}
         {showCursor && (
           <span className={`inline-block w-0.5 h-4 ml-0.5 align-middle animate-pulse ${darkMode ? 'bg-white/40' : 'bg-black/40'}`} />
         )}
@@ -244,7 +226,7 @@ export const MessageBubble = React.memo(({
                     <RotateCcw size={10} />{msg.edit_history.length}v
                   </button>
                 )}
-                <button onClick={() => onEdit(index, contentStr)} className={`flex items-center gap-1 text-[10px] ${theme.textMuted} hover:text-current transition-colors`}>
+                <button onClick={() => onEdit(index, msg.content)} className={`flex items-center gap-1 text-[10px] ${theme.textMuted} hover:text-current transition-colors`}>
                   <Pencil size={10} />editar
                 </button>
               </div>
@@ -256,7 +238,7 @@ export const MessageBubble = React.memo(({
             <p className={`text-[10px] uppercase tracking-widest ${theme.textMuted} mb-2`}>Versões anteriores</p>
             {msg.edit_history.map((h, i) => (
               <p key={i} className={`text-xs ${theme.textMuted} font-light`}>
-                <span className="opacity-50 mr-2">{i + 1}.</span>{normalizeContent(h.content)}
+                <span className="opacity-50 mr-2">{i + 1}.</span>{h.content}
               </p>
             ))}
           </div>
