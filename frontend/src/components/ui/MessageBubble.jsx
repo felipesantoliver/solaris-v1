@@ -116,9 +116,9 @@ function CodeBlock({ language, children, darkMode }) {
   };
 
   return (
-    <div className={`my-5 rounded-xl overflow-hidden shadow-lg border ${darkMode ? 'border-white/10' : 'border-black/10'}`}>
+    <div className={`my-5 rounded-xl overflow-hidden shadow-lg border-2 ${darkMode ? 'border-white/20' : 'border-black/15'}`}>
       {/* Header: linguagem + botão copiar */}
-      <div className={`flex items-center justify-between px-4 py-2.5 border-b ${darkMode ? 'bg-white/5 border-white/10' : 'bg-black/5 border-black/10'}`}>
+      <div className={`flex items-center justify-between px-4 py-2.5 border-b-2 ${darkMode ? 'bg-white/5 border-white/20' : 'bg-black/5 border-black/15'}`}>
         <div className="flex items-center gap-2">
           <Terminal size={13} className="text-amber-400/80" />
           <span className={`text-xs font-mono font-semibold tracking-wide uppercase ${darkMode ? 'text-white/60' : 'text-black/50'}`}>
@@ -127,17 +127,23 @@ function CodeBlock({ language, children, darkMode }) {
         </div>
         <button
           onClick={handleCopy}
-          className={`flex items-center gap-1.5 text-[11px] transition-colors duration-200 px-2 py-1 rounded-md ${darkMode ? 'text-white/40 hover:text-white/80 hover:bg-white/10' : 'text-black/40 hover:text-black/80 hover:bg-black/10'}`}
+          className={`flex items-center gap-1.5 text-[11px] font-semibold transition-all duration-200 px-3 py-1.5 rounded-lg border ${
+            copied
+              ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400'
+              : darkMode
+                ? 'bg-white/10 border-white/20 text-white/70 hover:bg-white/20 hover:text-white hover:border-white/40'
+                : 'bg-black/8 border-black/20 text-black/60 hover:bg-black/15 hover:text-black hover:border-black/40'
+          }`}
         >
           {copied ? (
             <>
-              <Check size={11} className="text-emerald-400" />
-              <span className="text-emerald-400">copiado</span>
+              <Check size={12} />
+              <span>copiado!</span>
             </>
           ) : (
             <>
-              <Copy size={11} />
-              <span>copiar</span>
+              <Copy size={12} />
+              <span>copiar código</span>
             </>
           )}
         </button>
