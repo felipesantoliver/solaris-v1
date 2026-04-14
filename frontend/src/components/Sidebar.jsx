@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import {
   PencilLine, Search, FolderPlus, Folder, History, Trash2, Pencil, ChevronDown,
-  Settings, User, GripVertical, Check, X
+  Settings, User, GripVertical, Check, X, LayoutGrid
 } from 'lucide-react';
 import { SolarSystem } from './ui/SolarSystem';
 
@@ -34,6 +34,8 @@ export function Sidebar({
   onDragStart,
   onDragOver,
   onDragEnd,
+  activeView,
+  onNavigate,
 }) {
   const [isCreatingProject, setIsCreatingProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
@@ -59,7 +61,7 @@ export function Sidebar({
       onDragStart={e => onDragStart(e, project.id)}
       onDragOver={e => onDragOver(e, project.id)}
       onDragEnd={onDragEnd}
-      onClick={() => { setActiveProjectId(project.id); setShowMoreProjects(false); }}
+      onClick={() => { setActiveProjectId(project.id); setShowMoreProjects(false); if (onNavigate) onNavigate('chat'); }}
       className={`flex items-center justify-between p-2.5 -ml-2 rounded-lg cursor-grab active:cursor-grabbing transition-all group/item ${isActive ? theme.projectActive : theme.projectHover} ${draggedItemId === project.id ? 'bg-blue-500/10' : ''}`}
     >
       <div className="flex items-center gap-3 overflow-hidden pointer-events-none">
@@ -84,10 +86,29 @@ export function Sidebar({
     <aside className={`hidden lg:flex flex-col border-r ${theme.border} ${theme.bgAside} relative transition-all duration-500 ease-in-out shrink-0 ${isOpen ? 'w-72' : 'w-20'}`}>
       <div className={`flex flex-col h-full overflow-hidden transition-all duration-500 ${isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
         <div className="px-8 pt-12 pb-6 flex flex-col gap-5 shrink-0">
+          {/* New chat */}
           <button onClick={onNewChat} className={`flex items-center gap-3 w-full text-left transition-colors ${theme.textPrimary} group`}>
             <PencilLine size={18} strokeWidth={1.2} />
             <span className="text-sm font-light">Novo Chat</span>
           </button>
+
+          {/* Projects page nav */}
+          <button
+            onClick={() => onNavigate && onNavigate(activeView === 'projects' ? 'chat' : 'projects')}
+            className={`flex items-center gap-3 w-full text-left transition-colors group ${
+              activeView === 'projects'
+                ? (darkMode ? 'text-white' : 'text-black')
+                : theme.textSecondary
+            }`}
+          >
+            <LayoutGrid size={18} strokeWidth={1.2} className={activeView === 'projects' ? 'text-current' : ''} />
+            <span className="text-sm font-light">Projetos</span>
+            {activeView === 'projects' && (
+              <span className={`ml-auto w-1.5 h-1.5 rounded-full ${darkMode ? 'bg-white' : 'bg-black'}`} />
+            )}
+          </button>
+
+          {/* Search */}
           <div className="flex items-center gap-3 w-full">
             <Search size={18} strokeWidth={1.2} className={theme.textPrimary} />
             <input
@@ -103,6 +124,7 @@ export function Sidebar({
         <div className="px-8 flex flex-col flex-1 overflow-y-auto custom-scrollbar">
           <SolarSystem darkMode={darkMode} theme={theme} />
 
+          {/* Projects section */}
           <div className="flex flex-col gap-4 mb-8 shrink-0">
             <h2 className={`text-[10px] font-light tracking-[0.4em] uppercase ${theme.textSecondary}`}>PROJETOS</h2>
             {isCreatingProject ? (
@@ -143,6 +165,7 @@ export function Sidebar({
             )}
           </div>
 
+          {/* Chats section */}
           <div className="flex flex-col gap-4 mb-10 shrink-0">
             <h2 className={`text-[10px] font-light tracking-[0.4em] uppercase ${theme.textSecondary}`}>CONVERSAS</h2>
             {filteredChats.length === 0 && (
@@ -152,7 +175,7 @@ export function Sidebar({
               {filteredChats.map(chat => (
                 <div
                   key={chat.id}
-                  onClick={() => { if (editingChatTitleId !== chat.id) setActiveChatId(chat.id); }}
+                  onClick={() => { if (editingChatTitleId !== chat.id) { setActiveChatId(chat.id); if (onNavigate) onNavigate('chat'); } }}
                   className={`flex items-center justify-between p-2 -ml-2 rounded-lg cursor-pointer transition-all group/chat ${activeChatId === chat.id ? theme.projectActive : theme.projectHover}`}
                 >
                   <div className="flex items-center gap-3 overflow-hidden flex-1 min-w-0">

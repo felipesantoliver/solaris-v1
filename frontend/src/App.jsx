@@ -10,13 +10,13 @@ import { Sidebar } from './components/Sidebar';
 import { ChatWindow } from './components/ChatWindow';
 import { MessageInput } from './components/MessageInput';
 import { ProjectModal } from './components/ProjectModal';
+import { ProjectsView } from './components/ProjectsView';
 import { SettingsModal } from './components/SettingsModal';
 import { AuthModal } from './components/AuthModal';
 import { ConfirmDialog } from './components/ui/ConfirmDialog';
 import { ShareModal } from './components/ui/ShareModal';
 
 export default function App() {
-  // Global UI state
   const [darkMode, setDarkMode] = useState(() => localStorage.getItem('solaris_dark') !== 'false');
   const [programmingMode, setProgrammingMode] = useState(() => localStorage.getItem('solaris_programming_mode') === 'true');
   const [model, setModel] = useState('flash');
@@ -32,14 +32,12 @@ export default function App() {
   const [editingChatTitleId, setEditingChatTitleId] = useState(null);
   const [editingChatTitleValue, setEditingChatTitleValue] = useState('');
   const [showShareModal, setShowShareModal] = useState(false);
-
-  // ✅ CORREÇÃO 1: input e setInput estavam faltando
+  const [activeView, setActiveView] = useState('chat');
   const [input, setInput] = useState('');
 
   const fileInputRef = useRef(null);
   const moreProjectsRef = useRef(null);
 
-  // Hooks
   const {
     authUser, authReady, effectiveUserId, displayName,
     handleLogin, handleSignUp, handleGoogleLogin, handleLogout, updateDisplayName
@@ -56,39 +54,19 @@ export default function App() {
     statusMessage, sendError, setSendError, sendMessage, editMessage, loadMessages
   } = useChat(effectiveUserId, authUser, model, activeProjectId);
 
-  // Editing message state
   const [editingMsgIndex, setEditingMsgIndex] = useState(null);
   const [editValue, setEditValue] = useState('');
 
-  // Effects
-  useEffect(() => {
-    localStorage.setItem('solaris_dark', darkMode);
-  }, [darkMode]);
+  useEffect(() => { localStorage.setItem('solaris_dark', darkMode); }, [darkMode]);
+  useEffect(() => { localStorage.setItem('solaris_programming_mode', programmingMode); }, [programmingMode]);
+  useEffect(() => { if (!authUser && model === 'pro') setModel('flash'); }, [authUser, model]);
 
-  useEffect(() => {
-    localStorage.setItem('solaris_programming_mode', programmingMode);
-  }, [programmingMode]);
-
-  useEffect(() => {
-    if (!authUser && model === 'pro') setModel('flash');
-  }, [authUser, model]);
-
-  useEffect(() => {
-    const h = (e) => {
-      if (moreProjectsRef.current && !moreProjectsRef.current.contains(e.target)) {
-        // handled inside Sidebar
-      }
-    };
-    document.addEventListener('mousedown', h);
-    return () => document.removeEventListener('mousedown', h);
-  }, []);
-
-  // Handlers
   const handleNewChat = () => {
     setActiveChatId(null);
     setMessages([]);
     setSendError('');
     setInput('');
+    setActiveView('chat');
   };
 
   const handleSend = async () => {
@@ -99,15 +77,8 @@ export default function App() {
     setInput('');
   };
 
-  const handleEdit = (index, content) => {
-    setEditingMsgIndex(index);
-    setEditValue(content);
-  };
-
-  const handleEditCancel = () => {
-    setEditingMsgIndex(null);
-    setEditValue('');
-  };
+  const handleEdit = (index, content) => { setEditingMsgIndex(index); setEditValue(content); };
+  const handleEditCancel = () => { setEditingMsgIndex(null); setEditValue(''); };
 
   const handleEditSave = async () => {
     if (!editValue.trim() || isLoading || isStreaming || editingMsgIndex === null) return;
@@ -117,9 +88,7 @@ export default function App() {
     setEditValue('');
   };
 
-  const handleShare = () => {
-    setShowShareModal(true);
-  };
+  const handleShare = () => setShowShareModal(true);
 
   const handleFileUpload = async (e) => {
     const file = e.target.files?.[0];
@@ -165,20 +134,8 @@ export default function App() {
     e.dataTransfer.effectAllowed = 'move';
     setTimeout(() => { e.currentTarget.style.opacity = '0.4'; }, 0);
   };
-
-  const onDragOver = (e, id) => {
-    e.preventDefault();
-    if (!draggedItemId || draggedItemId === id) return;
-    const from = projects.findIndex(p => p.id === draggedItemId);
-    const to = projects.findIndex(p => p.id === id);
-    if (from === -1 || to === -1) return;
-    // Reorder projects (not persisted to backend in this version)
-  };
-
-  const onDragEnd = (e) => {
-    e.currentTarget.style.opacity = '1';
-    setDraggedItemId(null);
-  };
+  const onDragOver = (e, id) => { e.preventDefault(); };
+  const onDragEnd = (e) => { e.currentTarget.style.opacity = '1'; setDraggedItemId(null); };
 
   const startRenameChatTitle = (e, chat) => {
     e.stopPropagation();
@@ -194,11 +151,19 @@ export default function App() {
     await updateChatTitle(chatId, newTitle);
   };
 
-  const handleAuthUpdate = async (newDisplayName) => {
-    await updateDisplayName(newDisplayName);
+  const handleAuthUpdate = async (newDisplayName) => { await updateDisplayName(newDisplayName); };
+
+  const handleOpenProject = (project) => {
+    setActiveProjectId(project.id);
+    setActiveView('chat');
+    setActiveChatId(null);
+    setMessages([]);
   };
 
-  // Theme object
+  const handleCreateProjectFromView = async (name, description, instructions) => {
+    await createProject(name, description, instructions);
+  };
+
   const theme = {
     bgAside: darkMode ? 'bg-[#0a0a0a]' : 'bg-white',
     bgMain: darkMode ? 'bg-[#111111]' : 'bg-[#fdfdfd]',
@@ -220,88 +185,44 @@ export default function App() {
   return (
     <div className={`flex h-screen ${darkMode ? 'bg-[#050505] text-white' : 'bg-[#fafafa] text-[#1a1a1a]'} font-sans antialiased overflow-hidden transition-colors duration-500`}>
       {showAuthModal && (
-        <AuthModal
-          darkMode={darkMode}
-          onClose={() => setShowAuthModal(false)}
-          // ✅ CORREÇÃO 2: removido setAuthUser (não existe) — o useAuth já atualiza o estado internamente
-          onAuthSuccess={() => setShowAuthModal(false)}
-          onGoogleLogin={handleGoogleLogin}
-          onLogin={handleLogin}
-          onSignUp={handleSignUp}
-        />
+        <AuthModal darkMode={darkMode} onClose={() => setShowAuthModal(false)} onAuthSuccess={() => setShowAuthModal(false)} onGoogleLogin={handleGoogleLogin} onLogin={handleLogin} onSignUp={handleSignUp} />
       )}
       {showSettingsModal && authUser && (
-        <SettingsModal
-          darkMode={darkMode}
-          onClose={() => setShowSettingsModal(false)}
-          effectiveUserId={effectiveUserId}
-          authUser={authUser}
-          onAuthUpdate={handleAuthUpdate}
-          onDeleteAllChats={deleteAllChats}
-        />
+        <SettingsModal darkMode={darkMode} onClose={() => setShowSettingsModal(false)} effectiveUserId={effectiveUserId} authUser={authUser} onAuthUpdate={handleAuthUpdate} onDeleteAllChats={deleteAllChats} />
       )}
       {editingProject && (
-        <ProjectModal
-          project={editingProject}
-          onClose={() => setEditingProject(null)}
-          onUpdate={updateProject}
-          darkMode={darkMode}
-          effectiveUserId={effectiveUserId}
-        />
+        <ProjectModal project={editingProject} onClose={() => setEditingProject(null)} onUpdate={updateProject} darkMode={darkMode} effectiveUserId={effectiveUserId} />
       )}
       <ConfirmDialog
-        isOpen={!!itemToDelete}
-        onClose={() => setItemToDelete(null)}
-        onConfirm={handleDeleteConfirm}
-        title="Apagar?"
-        message={`Apagar "${itemToDelete?.data?.name || itemToDelete?.data?.title}"?`}
-        darkMode={darkMode}
-        theme={theme}
+        isOpen={!!itemToDelete} onClose={() => setItemToDelete(null)} onConfirm={handleDeleteConfirm}
+        title="Apagar?" message={`Apagar "${itemToDelete?.data?.name || itemToDelete?.data?.title}"?`}
+        darkMode={darkMode} theme={theme}
       />
-      <ShareModal
-        isOpen={showShareModal}
-        onClose={() => setShowShareModal(false)}
-        messages={messages}
-        darkMode={darkMode}
-        theme={theme}
-      />
+      <ShareModal isOpen={showShareModal} onClose={() => setShowShareModal(false)} messages={messages} darkMode={darkMode} theme={theme} />
+
       <div className={`fixed top-24 left-1/2 -translate-x-1/2 z-[110] px-6 py-3 rounded-full bg-emerald-500 text-white text-xs font-bold tracking-widest uppercase shadow-2xl transition-all duration-500 ${showShareToast ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-4 pointer-events-none'}`}>
         Copiado para a área de transferência
       </div>
 
       <Sidebar
-        isOpen={isSidebarOpen}
-        setIsOpen={setIsSidebarOpen}
-        darkMode={darkMode}
-        theme={theme}
-        projects={projects}
-        activeProjectId={activeProjectId}
-        setActiveProjectId={setActiveProjectId}
-        chatHistory={chatHistory}
-        activeChatId={activeChatId}
-        setActiveChatId={setActiveChatId}
+        isOpen={isSidebarOpen} setIsOpen={setIsSidebarOpen} darkMode={darkMode} theme={theme}
+        projects={projects} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId}
+        chatHistory={chatHistory} activeChatId={activeChatId} setActiveChatId={setActiveChatId}
         onCreateProject={createProject}
         onDeleteProject={(proj) => setItemToDelete({ type: 'project', data: proj })}
         onDeleteChat={(chat) => setItemToDelete({ type: 'chat', data: chat })}
-        onEditProject={setEditingProject}
-        onNewChat={handleNewChat}
+        onEditProject={setEditingProject} onNewChat={handleNewChat}
         onStartRenameChat={startRenameChatTitle}
-        editingChatTitleId={editingChatTitleId}
-        editingChatTitleValue={editingChatTitleValue}
-        setEditingChatTitleValue={setEditingChatTitleValue}
-        onConfirmRenameChat={confirmRenameChatTitle}
-        displayName={displayName}
-        onOpenSettings={() => setShowSettingsModal(true)}
-        searchQuery={searchQuery}
-        setSearchQuery={setSearchQuery}
-        draggedItemId={draggedItemId}
-        onDragStart={onDragStart}
-        onDragOver={onDragOver}
-        onDragEnd={onDragEnd}
+        editingChatTitleId={editingChatTitleId} editingChatTitleValue={editingChatTitleValue}
+        setEditingChatTitleValue={setEditingChatTitleValue} onConfirmRenameChat={confirmRenameChatTitle}
+        displayName={displayName} onOpenSettings={() => setShowSettingsModal(true)}
+        searchQuery={searchQuery} setSearchQuery={setSearchQuery}
+        draggedItemId={draggedItemId} onDragStart={onDragStart} onDragOver={onDragOver} onDragEnd={onDragEnd}
+        activeView={activeView} onNavigate={setActiveView}
       />
 
-      <main className={`flex-1 flex flex-col ${theme.bgMain} relative transition-colors duration-500`}>
-        <header className={`h-20 flex items-center justify-between px-6 md:px-10 border-b ${theme.border} transition-colors duration-500`}>
+      <main className={`flex-1 flex flex-col ${theme.bgMain} relative transition-colors duration-500 overflow-hidden`}>
+        <header className={`h-20 flex items-center justify-between px-6 md:px-10 border-b ${theme.border} transition-colors duration-500 shrink-0`}>
           <div className="flex items-center gap-4">
             <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className={`p-2 rounded-lg transition-all ${darkMode ? 'text-white/60 hover:text-white hover:bg-white/5' : 'text-black/40 hover:text-black hover:bg-black/5'}`}>
               <PanelLeft size={20} strokeWidth={1.5} />
@@ -310,7 +231,7 @@ export default function App() {
               <span className="text-base font-medium tracking-tight">SOLARIS</span>
               <span className={`text-[10px] font-bold ${theme.textMuted} tracking-tighter`}>V1</span>
             </div>
-            {activeProjectId && (
+            {activeProjectId && activeView === 'chat' && (
               <div className={`hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-lg ${darkMode ? 'bg-white/5' : 'bg-black/5'}`}>
                 <span className={`text-xs font-light ${theme.textSecondary}`}>{projects.find(p => p.id === activeProjectId)?.name}</span>
                 <button onClick={() => setActiveProjectId(null)} className={`ml-1 ${theme.textMuted} hover:text-red-400 transition-colors`} title="Sair do projeto">✕</button>
@@ -318,12 +239,8 @@ export default function App() {
             )}
           </div>
           <div className="flex items-center gap-3">
-            {hasUserStartedChat && (
-              <button
-                onClick={handleShare}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border transition-all duration-200 ${theme.border} ${theme.textSecondary} hover:text-current hover:border-current opacity-60 hover:opacity-100`}
-                title="Copiar conversa"
-              >
+            {hasUserStartedChat && activeView === 'chat' && (
+              <button onClick={handleShare} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border transition-all duration-200 ${theme.border} ${theme.textSecondary} hover:text-current hover:border-current opacity-60 hover:opacity-100`} title="Copiar conversa">
                 <Share2 size={13} strokeWidth={1.5} />
                 <span className={`hidden sm:inline text-[10px] font-light tracking-widest uppercase`}>Compartilhar</span>
               </button>
@@ -355,42 +272,35 @@ export default function App() {
           </div>
         </header>
 
-        <ChatWindow
-          messages={messages}
-          darkMode={darkMode}
-          theme={theme}
-          isLoading={isLoading}
-          isStreaming={isStreaming}
-          statusMessage={statusMessage}
-          displayName={displayName}
-          activeProjectId={activeProjectId}
-          onEdit={handleEdit}
-          editingMsgIndex={editingMsgIndex}
-          editValue={editValue}
-          setEditValue={setEditValue}
-          onEditSave={handleEditSave}
-          onEditCancel={handleEditCancel}
-          programmingMode={programmingMode}
-        />
-
-        <MessageInput
-          input={input}
-          setInput={setInput}
-          onSend={handleSend}
-          isLoading={isLoading}
-          isStreaming={isStreaming}
-          darkMode={darkMode}
-          theme={theme}
-          model={model}
-          setModel={setModel}
-          authUser={authUser}
-          programmingMode={programmingMode}
-          setProgrammingMode={setProgrammingMode}
-          sendError={sendError}
-          uploadStatus={uploadStatus}
-          onFileUpload={handleFileUpload}
-          fileInputRef={fileInputRef}
-        />
+        {activeView === 'projects' ? (
+          <ProjectsView
+            darkMode={darkMode} theme={theme} projects={projects}
+            onCreateProject={handleCreateProjectFromView}
+            onOpenProject={handleOpenProject}
+            onEditProject={setEditingProject}
+            onDeleteProject={(proj) => setItemToDelete({ type: 'project', data: proj })}
+          />
+        ) : (
+          <>
+            <ChatWindow
+              messages={messages} darkMode={darkMode} theme={theme}
+              isLoading={isLoading} isStreaming={isStreaming} statusMessage={statusMessage}
+              displayName={displayName} activeProjectId={activeProjectId}
+              onEdit={handleEdit} editingMsgIndex={editingMsgIndex}
+              editValue={editValue} setEditValue={setEditValue}
+              onEditSave={handleEditSave} onEditCancel={handleEditCancel}
+              programmingMode={programmingMode}
+            />
+            <MessageInput
+              input={input} setInput={setInput} onSend={handleSend}
+              isLoading={isLoading} isStreaming={isStreaming}
+              darkMode={darkMode} theme={theme} model={model} setModel={setModel}
+              authUser={authUser} programmingMode={programmingMode}
+              setProgrammingMode={setProgrammingMode} sendError={sendError}
+              uploadStatus={uploadStatus} onFileUpload={handleFileUpload} fileInputRef={fileInputRef}
+            />
+          </>
+        )}
       </main>
 
       <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileUpload} accept=".pdf,.txt,.md,.json,.js,.ts,.py,.css,.html,.csv" />
