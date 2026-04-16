@@ -99,8 +99,8 @@ export function Sidebar({
   );
 
   // ─── Conteúdo da sidebar (compartilhado entre desktop e mobile) ────────────
-  const SidebarContent = () => (
-    <div className={`flex flex-col h-full overflow-hidden transition-all duration-500 ${isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+  const SidebarContent = ({ isMobile = false }) => (
+    <div className={`flex flex-col h-full overflow-hidden transition-all duration-500 ${isMobile || isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
       <div className="px-8 pt-12 pb-6 flex flex-col gap-5 shrink-0">
         {/* New chat */}
         <button
@@ -287,7 +287,7 @@ export function Sidebar({
           ${isOpen ? 'translate-x-0' : '-translate-x-full'}
         `}
       >
-        <SidebarContent />
+        <SidebarContent isMobile={true} />
       </aside>
     </>
   );
