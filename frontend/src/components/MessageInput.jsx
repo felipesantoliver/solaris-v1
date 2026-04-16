@@ -207,7 +207,7 @@ export function MessageInput({
 
         <div className={`relative flex items-end border-b pb-6 md:pb-8 transition-all duration-500 ${
           programmingMode
-            ? 'border-blue-400/30'
+            ? 'border-blue-400/70'
             : theme.inputBorder
         } ${theme.inputFocus}`}>
           <textarea
@@ -271,16 +271,16 @@ export function MessageInput({
           <span className="hidden sm:inline">enter para enviar · shift+enter nova linha</span>
           <span className="sm:hidden" />
           <div className="flex items-center gap-4">
-            {/* Botão Code — associado às ações técnicas junto ao Anexo */}
-            <span
+            {/* Botão Code — pill igual ao Flash/Pro */}
+            <button
               onClick={() => setProgrammingMode(!programmingMode)}
               title={programmingMode ? 'Desativar modo code' : 'Ativar modo code'}
-              className={`flex items-center gap-1.5 cursor-pointer transition-all duration-300 mb-2 ${
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[10px] font-medium uppercase tracking-widest transition-all duration-300 mb-2 ${
                 programmingMode
-                  ? 'text-blue-400'
+                  ? 'border-blue-400/80 text-blue-400 bg-blue-400/10'
                   : darkMode
-                    ? 'hover:text-white/70'
-                    : 'hover:text-black/70'
+                    ? 'border-white/10 text-white/30 hover:text-blue-400/60 hover:border-blue-400/30'
+                    : 'border-black/10 text-black/30 hover:text-blue-500/60 hover:border-blue-400/30'
               }`}
             >
               <Code size={10} />
@@ -288,7 +288,7 @@ export function MessageInput({
               {programmingMode && (
                 <span className="w-1 h-1 rounded-full bg-blue-400 animate-pulse" />
               )}
-            </span>
+            </button>
             <span
               onClick={() => fileInputRef.current?.click()}
               className={`flex items-center gap-3 cursor-pointer ${darkMode ? 'hover:text-white' : 'hover:text-black'} transition-colors mb-2`}
