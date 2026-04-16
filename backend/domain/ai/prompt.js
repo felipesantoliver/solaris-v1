@@ -1,9 +1,9 @@
 // domain/ai/prompt.js — System prompt, cache em memória e extração de memórias
 
 import { getAsync, allAsync, runAsync } from '../../db/database.js';
+import { generateEmbedding, cosineSimilarity } from './embeddings.js';
 
 // ─── Cache em memória (Map) ────────────────────────────────────────────────
-// TTL de 60s. Single-instance no Render: Map é mais rápido que qualquer DB.
 const SYSTEM_PROMPT_CACHE_TTL = 60_000;
 const systemPromptCache = new Map();
 
@@ -38,7 +38,6 @@ export function invalidateSystemPromptCache(userId, projectId) {
   }
 }
 
-// Limpeza periódica a cada 5 minutos
 setInterval(() => {
   const now = Date.now();
   let deleted = 0;
@@ -59,7 +58,6 @@ const PERSONALITY_GUIDE = {
   empatico:     'Seja caloroso, empático e encorajador. Valide sentimentos antes de resolver problemas.',
 };
 
-// ─── Instrução de identidade ───────────────────────────────────────────────
 const BASE_IDENTITY_INSTRUCTION = `
 Identidade:
 
@@ -74,31 +72,22 @@ Nunca use "Solaris:" como prefixo nem se identifique a cada parágrafo — respo
 `;
 
 // ─── Sanitização de resposta ───────────────────────────────────────────────
-/**
- * Remove referências acidentais a provedores de IA na resposta do modelo.
- * Aplicar após cleanAssistantMessage() em messages.js.
- */
 export function sanitizeModelResponse(text) {
   if (!text) return text;
-
   const patterns = [
     { pattern: /\b(Google|Gemini|OpenAI|GPT|Claude|Anthropic|Cohere|Llama|Meta AI)\b/gi, replacement: 'Solaris' },
     { pattern: /(como um modelo de linguagem|modelo de IA da?)\s*(Google|Gemini|OpenAI|etc)/gi, replacement: 'como Solaris' },
     { pattern: /treinado pela?\s*(Google|OpenAI|Anthropic)/gi, replacement: "desenvolvido por Felipe Sant'Oliver" },
     { pattern: /(?:sou|eu sou) o?\s*(?:modelo\s*)?(?:gemini|gpt|claude)[\w\s]*/gi, replacement: 'sou o Solaris' },
   ];
-
   let cleaned = text;
   for (const { pattern, replacement } of patterns) {
     cleaned = cleaned.replace(pattern, replacement);
   }
-
-  // Segunda passada para garantir
   const suspicious = ['Google', 'Gemini', 'OpenAI', 'GPT', 'Claude', 'Anthropic'];
   for (const word of suspicious) {
     cleaned = cleaned.replace(new RegExp(`\\b${word}\\b`, 'gi'), 'Solaris');
   }
-
   return cleaned;
 }
 
@@ -152,7 +141,6 @@ export async function getBaseSystemPromptWithCache(userId, projectId, memoryMode
     return assembleBaseSystemPrompt({ settings: null, project, memories, memoryMode });
   }
 
-  // Cache síncrono — zero latência quando há hit
   const cached = getCachedSystemPrompt(userId, projectId, memoryMode);
   if (cached) return cached;
 
@@ -172,41 +160,122 @@ export async function getBaseSystemPromptWithCache(userId, projectId, memoryMode
   return systemPrompt;
 }
 
-// ─── Extração de memórias ──────────────────────────────────────────────────
-const MEMORY_KEYWORDS = [
-  'importante', 'lembre-se', 'concluímos', 'aprendemos', 'descobrimos',
-  'fato', 'sabemos que', 'definimos', 'decidimos', 'sempre', 'nunca',
-  'padrão', 'regra', 'convenção', 'arquitetura', 'estrutura', 'configuração',
+// ─── Heurísticas de extração de memórias (sem custo de tokens) ────────────
+
+// Padrões positivos: frases que indicam fatos relevantes, decisões ou convenções
+const MEMORY_POSITIVE_PATTERNS = [
+  /\b(sempre|nunca|precisa|deve|é importante|é essencial|é necessário)\b/i,
+  /\b(definimos|decidimos|concluímos|aprendemos|descobrimos|estabelecemos)\b/i,
+  /\b(o padrão é|a regra é|a convenção é|usamos|utilizamos|preferimos|adotamos)\b/i,
+  /\b(arquitetura|stack|tecnologia|framework|biblioteca|banco de dados|configuração)\b/i,
+  /\b(o projeto|o sistema|a api|o backend|o frontend|o modelo|a aplicação)\b.{0,30}\b(usa|utiliza|foi|é|tem|precisa|segue)\b/i,
+  /\b(estrutura|convenção|padrão|fluxo|pipeline|processo)\b.{0,20}\b(é|foi|segue|utiliza)\b/i,
 ];
 
-export async function extractMemories(projectId, userId, response, memoryMode) {
-  if (!projectId && memoryMode !== 'global') return;
-  const candidates = response
-    .split(/[.!?]+\s+/)
-    .filter(s => s.length > 50 && MEMORY_KEYWORDS.some(k => s.toLowerCase().includes(k)))
-    .slice(0, 2);
-  if (!candidates.length) return;
+// Padrões negativos: frases que NÃO devem virar memória
+const MEMORY_NEGATIVE_PATTERNS = [
+  /\?/,
+  /^(ok|certo|entendi|claro|sim|não|show|ótimo|perfeito|beleza)\b/i,
+  /\b(talvez|pode ser|não sei|acho que|provavelmente|possivelmente)\b/i,
+  /\b(por exemplo|ex:|e\.g\.|como por exemplo|suponha que|imagine que)\b/i,
+  /\b(você poderia|você pode|podemos|vamos tentar|que tal)\b/i,
+];
 
-  const insertPromises = candidates.map(content => {
-    if (memoryMode === 'projeto' && projectId)
-      return runAsync('INSERT INTO memories (project_id, user_id, content, source) VALUES ($1, $2, $3, $4)', [projectId, userId, content.trim(), 'auto']);
-    if (memoryMode === 'global' && userId)
-      return runAsync('INSERT INTO memories (project_id, user_id, content, source) VALUES ($1, $2, $3, $4)', [null, userId, content.trim(), 'auto']);
-    return Promise.resolve();
-  });
-  await Promise.all(insertPromises);
+function isGoodMemoryCandidate(sentence) {
+  const s = sentence.trim();
+  if (s.length < 40 || s.length > 300) return false;
+  if (MEMORY_NEGATIVE_PATTERNS.some(p => p.test(s))) return false;
+  return MEMORY_POSITIVE_PATTERNS.some(p => p.test(s));
+}
+
+// ─── Deduplicação semântica via embedding (zero tokens de LLM) ────────────
+const DEDUP_SIMILARITY_THRESHOLD = 0.85;
+
+async function upsertMemoryWithDedup(projectId, userId, content, memoryMode) {
+  let existing = [];
+  try {
+    if (memoryMode === 'projeto' && projectId) {
+      existing = await allAsync(
+        'SELECT id, content, embedding FROM memories WHERE project_id = $1 AND embedding IS NOT NULL',
+        [projectId]
+      );
+    } else if (memoryMode === 'global' && userId) {
+      existing = await allAsync(
+        'SELECT id, content, embedding FROM memories WHERE project_id IS NULL AND user_id = $1 AND embedding IS NOT NULL',
+        [userId]
+      );
+    }
+  } catch {
+    existing = [];
+  }
+
+  let newEmbedding = null;
+  try {
+    newEmbedding = await generateEmbedding(content);
+  } catch (err) {
+    console.warn('⚠️ Embedding falhou na deduplicação, inserindo sem dedup:', err.message);
+  }
+
+  if (newEmbedding && existing.length > 0) {
+    for (const mem of existing) {
+      try {
+        const existingVec = typeof mem.embedding === 'string'
+          ? JSON.parse(mem.embedding)
+          : mem.embedding;
+        const sim = cosineSimilarity(newEmbedding, existingVec);
+        if (sim >= DEDUP_SIMILARITY_THRESHOLD) {
+          await runAsync(
+            'UPDATE memories SET content = $1, embedding = $2, created_at = NOW() WHERE id = $3',
+            [content.trim(), JSON.stringify(newEmbedding), mem.id]
+          );
+          console.log(`🔄 Memória deduplicada (sim=${sim.toFixed(2)}): "${content.substring(0, 60)}..."`);
+          return;
+        }
+      } catch { /* ignora erro em embedding individual */ }
+    }
+  }
 
   if (memoryMode === 'projeto' && projectId) {
     await runAsync(
-      `DELETE FROM memories WHERE project_id = $1 AND id NOT IN (SELECT id FROM memories WHERE project_id = $1 ORDER BY created_at DESC LIMIT 20)`,
-      [projectId]
-    ).catch(() => {});
+      'INSERT INTO memories (project_id, user_id, content, source, embedding) VALUES ($1, $2, $3, $4, $5)',
+      [projectId, userId, content.trim(), 'auto', newEmbedding ? JSON.stringify(newEmbedding) : null]
+    );
   } else if (memoryMode === 'global' && userId) {
     await runAsync(
-      `DELETE FROM memories WHERE project_id IS NULL AND user_id = $1 AND id NOT IN (SELECT id FROM memories WHERE project_id IS NULL AND user_id = $1 ORDER BY created_at DESC LIMIT 20)`,
-      [userId]
-    ).catch(() => {});
+      'INSERT INTO memories (project_id, user_id, content, source, embedding) VALUES ($1, $2, $3, $4, $5)',
+      [null, userId, content.trim(), 'auto', newEmbedding ? JSON.stringify(newEmbedding) : null]
+    );
   }
+}
+
+// ─── Extração de memórias ──────────────────────────────────────────────────
+export async function extractMemories(projectId, userId, response, memoryMode) {
+  if (!projectId && memoryMode !== 'global') return;
+
+  const candidates = response
+    .split(/[.!]\s+/)
+    .filter(isGoodMemoryCandidate)
+    .slice(0, 2);
+
+  if (!candidates.length) return;
+
+  await Promise.all(
+    candidates.map(content => upsertMemoryWithDedup(projectId, userId, content, memoryMode))
+  );
+
+  try {
+    if (memoryMode === 'projeto' && projectId) {
+      await runAsync(
+        `DELETE FROM memories WHERE project_id = $1 AND id NOT IN (SELECT id FROM memories WHERE project_id = $1 ORDER BY created_at DESC LIMIT 20)`,
+        [projectId]
+      );
+    } else if (memoryMode === 'global' && userId) {
+      await runAsync(
+        `DELETE FROM memories WHERE project_id IS NULL AND user_id = $1 AND id NOT IN (SELECT id FROM memories WHERE project_id IS NULL AND user_id = $1 ORDER BY created_at DESC LIMIT 20)`,
+        [userId]
+      );
+    }
+  } catch { /* não crítico */ }
 }
 
 // ─── Janela de contexto ────────────────────────────────────────────────────

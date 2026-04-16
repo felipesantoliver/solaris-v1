@@ -1,7 +1,7 @@
 // domain/ai/gemini.js — Comunicação com Gemini
 
 const GEMINI_FLASH_API_KEY = process.env.GEMINI_FLASH_API_KEY;
-const GEMINI_PRO_API_KEY = process.env.GEMINI_PRO_API_KEY;
+const GEMINI_PRO_API_KEY   = process.env.GEMINI_PRO_API_KEY;
 
 if (!GEMINI_FLASH_API_KEY) throw new Error('❌ GEMINI_FLASH_API_KEY não definida');
 
@@ -15,7 +15,9 @@ export function getGeminiConfig(modelKey) {
 
 export function geminiUrl(modelKey, stream = false) {
   const { baseUrl, key } = getGeminiConfig(modelKey);
-  return stream ? `${baseUrl}:streamGenerateContent?key=${key}&alt=sse` : `${baseUrl}:generateContent?key=${key}`;
+  return stream
+    ? `${baseUrl}:streamGenerateContent?key=${key}&alt=sse`
+    : `${baseUrl}:generateContent?key=${key}`;
 }
 
 const MAX_OUTPUT_TOKENS = {
@@ -52,55 +54,94 @@ export async function withRetry(fn, maxRetries = 3, baseDelay = 3000) {
   }
 }
 
+// ─── Stream com detecção de MAX_TOKENS ────────────────────────────────────
+// Retorna { chunk } normalmente e sinaliza { maxTokens: true } no último evento
+// quando o Gemini interrompe por limite de tokens (finishReason === "MAX_TOKENS").
 export async function* streamGeminiChat(messages, systemPrompt, modelKey = 'flash') {
-  const url = geminiUrl(modelKey, true);
+  const url  = geminiUrl(modelKey, true);
   const body = buildGeminiBody(messages, systemPrompt, modelKey);
+
   const response = await withRetry(() =>
-    fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
   );
+
   if (!response.ok) {
     const errorText = await response.text();
     throw new Error(`Gemini streaming error: ${response.status} - ${errorText}`);
   }
-  const reader = response.body.getReader();
+
+  const reader  = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+  let hitMaxTokens = false;
+
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
+
     buffer += decoder.decode(value, { stream: true });
     const lines = buffer.split('\n');
     buffer = lines.pop() || '';
+
     for (const line of lines) {
-      if (line.startsWith('data: ')) {
-        const data = line.slice(6);
-        if (data === '[DONE]') return;
-        try {
-          const parsed = JSON.parse(data);
-          const chunk = parsed.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (chunk) yield chunk;
-        } catch (e) { }
-      }
+      if (!line.startsWith('data: ')) continue;
+      const data = line.slice(6);
+      if (data === '[DONE]') return;
+
+      try {
+        const parsed = JSON.parse(data);
+        const candidate   = parsed.candidates?.[0];
+        const chunk       = candidate?.content?.parts?.[0]?.text;
+        const finishReason = candidate?.finishReason;
+
+        if (chunk) yield { chunk };
+
+        // Gemini sinaliza "MAX_TOKENS" quando trunca a resposta
+        if (finishReason === 'MAX_TOKENS') {
+          hitMaxTokens = true;
+        }
+      } catch { /* ignora linha malformada */ }
     }
+  }
+
+  // Emite sinal de corte após esgotar o stream
+  if (hitMaxTokens) {
+    yield { maxTokens: true };
   }
 }
 
 export async function geminiChat(messages, systemPrompt, modelKey = 'flash') {
-  const url = geminiUrl(modelKey, false);
+  const url  = geminiUrl(modelKey, false);
   const body = buildGeminiBody(messages, systemPrompt, modelKey);
+
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 30000);
+  const timeout    = setTimeout(() => controller.abort(), 30000);
+
   try {
     const res = await withRetry(() =>
-      fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: controller.signal })
+      fetch(url, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(body),
+        signal:  controller.signal,
+      })
     );
     if (!res.ok) {
       const err = new Error(`Erro na IA: ${res.status}`);
       err.status = res.status;
       throw err;
     }
-    const data = await res.json();
-    return data.candidates[0].content.parts[0].text;
+    const data         = await res.json();
+    const candidate    = data.candidates[0];
+    const text         = candidate.content.parts[0].text;
+    const finishReason = candidate.finishReason;
+
+    // Retorna também se a resposta foi cortada por limite de tokens
+    return { text, maxTokens: finishReason === 'MAX_TOKENS' };
   } catch (err) {
     if (err.name === 'AbortError') {
       const timeoutErr = new Error('Timeout ao chamar IA');

@@ -1,5 +1,6 @@
 import React, { useRef, useEffect } from 'react';
 import { MessageBubble } from './ui/MessageBubble';
+import { ChevronRight, Loader2 } from 'lucide-react';
 
 export function ChatWindow({
   messages,
@@ -17,17 +18,16 @@ export function ChatWindow({
   onEditSave,
   onEditCancel,
   programmingMode,
+  maxTokensReached,
+  onContinue,
 }) {
   const messagesEndRef = useRef(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, isLoading, isStreaming]);
+  }, [messages, isLoading, isStreaming, maxTokensReached]);
 
-  // Mostra os pontinhos apenas quando está carregando OU quando o streaming
-  // ainda não começou a produzir conteúdo (última msg do assistente ainda vazia)
   const lastMsg = messages[messages.length - 1];
-  // Dots aparecem enquanto: está carregando OU enquanto o streaming ainda não produziu conteúdo
   const assistantPlaceholderEmpty = lastMsg?.role === 'assistant' && !lastMsg?.content;
   const showDots = isLoading || (isStreaming && assistantPlaceholderEmpty);
 
@@ -50,9 +50,8 @@ export function ChatWindow({
       ) : (
         <div className="space-y-12">
           {messages.map((msg, i) => {
-            // Índice da última mensagem do assistente
             const lastAssistantIdx = messages.reduce((acc, m, idx) => m.role === 'assistant' ? idx : acc, -1);
-            const isLastAssistant = msg.role === 'assistant' && i === lastAssistantIdx;
+            const isLastAssistant  = msg.role === 'assistant' && i === lastAssistantIdx;
             return (
               <MessageBubble
                 key={msg.id || i}
@@ -76,7 +75,7 @@ export function ChatWindow({
         </div>
       )}
 
-      {/* Pontinhos: só aparecem antes do primeiro chunk chegar */}
+      {/* Pontinhos de carregamento */}
       {showDots && (
         <div className="flex items-center gap-3 mt-12">
           <div className="flex gap-1">
@@ -87,6 +86,29 @@ export function ChatWindow({
           {statusMessage && (
             <span className={`text-xs font-light tracking-wide ${theme.textSecondary} animate-pulse`}>{statusMessage}</span>
           )}
+        </div>
+      )}
+
+      {/* Botão "Continuar" — aparece quando a resposta foi cortada por limite de tokens */}
+      {maxTokensReached && !isStreaming && !isLoading && (
+        <div className="mt-8 flex justify-start animate-in fade-in slide-in-from-bottom-2 duration-500">
+          <button
+            onClick={onContinue}
+            className={`
+              group flex items-center gap-2 px-4 py-2 rounded-full text-xs font-medium
+              border transition-all duration-200
+              ${darkMode
+                ? 'border-white/15 text-white/50 hover:border-white/30 hover:text-white/80 hover:bg-white/5'
+                : 'border-black/15 text-black/40 hover:border-black/25 hover:text-black/70 hover:bg-black/5'
+              }
+            `}
+          >
+            {isLoading
+              ? <Loader2 size={12} className="animate-spin" />
+              : <ChevronRight size={12} className="transition-transform group-hover:translate-x-0.5" />
+            }
+            continuar resposta
+          </button>
         </div>
       )}
 

@@ -11,16 +11,12 @@ async function safeJson(res) {
 export const api = {
   // ─── Projects ─────────────────────────────────────────────────────────────
   async getProjects() {
-    const res = await fetch(`${API_BASE}/projects`, {
-      headers: await getAuthHeaders(),
-    });
+    const res = await fetch(`${API_BASE}/projects`, { headers: await getAuthHeaders() });
     return safeJson(res);
   },
 
   async getProject(id) {
-    const res = await fetch(`${API_BASE}/projects/${id}`, {
-      headers: await getAuthHeaders(),
-    });
+    const res = await fetch(`${API_BASE}/projects/${id}`, { headers: await getAuthHeaders() });
     return safeJson(res);
   },
 
@@ -67,10 +63,7 @@ export const api = {
     const endpoint = projectId
       ? `${API_BASE}/projects/${projectId}/chats/${chatId}`
       : `${API_BASE}/projects/none/chats/${chatId}`;
-    const res = await fetch(endpoint, {
-      method: 'DELETE',
-      headers: await getAuthHeaders(),
-    });
+    const res = await fetch(endpoint, { method: 'DELETE', headers: await getAuthHeaders() });
     return safeJson(res);
   },
 
@@ -84,45 +77,36 @@ export const api = {
   },
 
   async getUserChats() {
-    const res = await fetch(`${API_BASE}/user/chats`, {
-      headers: await getAuthHeaders(),
-    });
+    const res = await fetch(`${API_BASE}/user/chats`, { headers: await getAuthHeaders() });
     return safeJson(res);
   },
 
   async deleteAllUserChats() {
-    const res = await fetch(`${API_BASE}/user/chats`, {
-      method: 'DELETE',
-      headers: await getAuthHeaders(),
-    });
+    const res = await fetch(`${API_BASE}/user/chats`, { method: 'DELETE', headers: await getAuthHeaders() });
     return safeJson(res);
   },
 
   // ─── Messages ─────────────────────────────────────────────────────────────
   async getMessages(chatId) {
-    const res = await fetch(`${API_BASE}/messages/chat/${chatId}`, {
-      headers: await getAuthHeaders(),
-    });
+    const res = await fetch(`${API_BASE}/messages/chat/${chatId}`, { headers: await getAuthHeaders() });
     return safeJson(res);
   },
 
-  async sendMessageStream(chatId, projectId, message, _userId, model, onChunk, onTitle, onError, onDone) {
+  async sendMessageStream(chatId, projectId, message, _userId, model, onChunk, onTitle, onError, onDone, onMaxTokens) {
     const response = await fetch(`${API_BASE}/messages/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-model': model, ...(await getAuthHeaders()) },
       body: JSON.stringify({ project_id: projectId || null, chat_id: chatId, message }),
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const reader = response.body.getReader();
+
+    const reader  = response.body.getReader();
     const decoder = new TextDecoder();
-    let buffer = '';
+    let buffer     = '';
     let doneCalled = false;
 
     const safeDone = () => {
-      if (!doneCalled) {
-        doneCalled = true;
-        onDone?.();
-      }
+      if (!doneCalled) { doneCalled = true; onDone?.(); }
     };
 
     try {
@@ -133,22 +117,20 @@ export const api = {
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
         for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const data = line.slice(6).trim();
-            if (data === '[DONE]') { safeDone(); continue; }
-            try {
-              const parsed = JSON.parse(data);
-              if (parsed.error) { onError?.(parsed.error); return; }
-              if (parsed.title && parsed.chat_id) onTitle?.(parsed.title, parsed.chat_id);
-              if (parsed.chunk) onChunk?.(parsed.chunk);
-              if (parsed.done) safeDone();
-            } catch (e) { console.warn('SSE parse error:', e); }
-          }
+          if (!line.startsWith('data: ')) continue;
+          const data = line.slice(6).trim();
+          if (data === '[DONE]') { safeDone(); continue; }
+          try {
+            const parsed = JSON.parse(data);
+            if (parsed.error)              { onError?.(parsed.error); return; }
+            if (parsed.title && parsed.chat_id) onTitle?.(parsed.title, parsed.chat_id);
+            if (parsed.chunk)              onChunk?.(parsed.chunk);
+            if (parsed.maxTokens)          onMaxTokens?.();
+            if (parsed.done)               safeDone();
+          } catch (e) { console.warn('SSE parse error:', e); }
         }
       }
     } finally {
-      // Garante que onDone é sempre chamado ao final do stream,
-      // independente do navegador, extensões ou fechamento abrupto da conexão
       safeDone();
     }
   },
@@ -164,9 +146,7 @@ export const api = {
 
   // ─── Settings ─────────────────────────────────────────────────────────────
   async getSettings() {
-    const res = await fetch(`${API_BASE}/settings`, {
-      headers: await getAuthHeaders(),
-    });
+    const res = await fetch(`${API_BASE}/settings`, { headers: await getAuthHeaders() });
     return safeJson(res);
   },
 
@@ -202,9 +182,7 @@ export const api = {
 
   // ─── Sources ──────────────────────────────────────────────────────────────
   async getSources(projectId) {
-    const res = await fetch(`${API_BASE}/projects/${projectId}/sources`, {
-      headers: await getAuthHeaders(),
-    });
+    const res = await fetch(`${API_BASE}/projects/${projectId}/sources`, { headers: await getAuthHeaders() });
     return safeJson(res);
   },
 

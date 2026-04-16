@@ -51,7 +51,7 @@ export default function App() {
 
   const {
     messages, setMessages, activeChatId, setActiveChatId, isLoading, isStreaming,
-    statusMessage, sendError, setSendError, sendMessage, editMessage, loadMessages
+    statusMessage, sendError, setSendError, sendMessage, continueResponse, maxTokensReached, editMessage, loadMessages
   } = useChat(effectiveUserId, authUser, model, activeProjectId);
 
   const [editingMsgIndex, setEditingMsgIndex] = useState(null);
@@ -290,6 +290,12 @@ export default function App() {
               editValue={editValue} setEditValue={setEditValue}
               onEditSave={handleEditSave} onEditCancel={handleEditCancel}
               programmingMode={programmingMode}
+              maxTokensReached={maxTokensReached}
+              onContinue={() => continueResponse(async (projectId) => {
+                const nc = await api.createChat(projectId, effectiveUserId, model);
+                setActiveChatId(nc.id);
+                return nc;
+              })}
             />
             <MessageInput
               input={input} setInput={setInput} onSend={handleSend}

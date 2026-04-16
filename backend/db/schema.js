@@ -2,10 +2,8 @@
 
 import { getPool } from './database.js';
 
-// Versão atual do esquema do banco de dados
-const CURRENT_SCHEMA_VERSION = 2;
+const CURRENT_SCHEMA_VERSION = 3;
 
-// Tabela de controle de versão
 async function ensureSchemaVersionTable(client) {
   await client.query(`
     CREATE TABLE IF NOT EXISTS schema_version (
@@ -14,8 +12,6 @@ async function ensureSchemaVersionTable(client) {
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
   `);
-  
-  // Garante que existe uma linha única
   await client.query(`
     INSERT INTO schema_version (id, version)
     VALUES (1, 0)
@@ -36,25 +32,20 @@ export async function initDb() {
   const p = await getPool();
   const client = await p.connect();
   try {
-    // Cria tabela de controle de versão
     await ensureSchemaVersionTable(client);
     const currentVersion = await getCurrentSchemaVersion(client);
-    
+
     console.log(`📌 Versão atual do schema: ${currentVersion} (target: ${CURRENT_SCHEMA_VERSION})`);
 
-    // Se já está na versão mais recente, não faz nada
     if (currentVersion >= CURRENT_SCHEMA_VERSION) {
       console.log('✅ Schema já está atualizado.');
       return;
     }
 
-    // ========== MIGRAÇÕES ORDENADAS ==========
-    // Cada bloco é executado apenas se a versão atual for menor que a versão alvo da migração
-
-    // Migração inicial (versão 1) – cria tabelas base
+    // ========== MIGRAÇÃO v1 ==========
     if (currentVersion < 1) {
       console.log('🔄 Aplicando migração v1 (criação de tabelas)...');
-      
+
       await client.query(`
         CREATE TABLE IF NOT EXISTS projects (
           id                 TEXT PRIMARY KEY,
@@ -103,6 +94,7 @@ export async function initDb() {
           user_id    TEXT,
           content    TEXT NOT NULL,
           source     TEXT DEFAULT 'auto',
+          embedding  JSONB,
           created_at TIMESTAMPTZ DEFAULT NOW()
         );
       `);
@@ -172,10 +164,10 @@ export async function initDb() {
       console.log('✅ Migração v1 aplicada.');
     }
 
-    // Migração v2 – alterações incrementais e índices
+    // ========== MIGRAÇÃO v2 ==========
     if (currentVersion < 2) {
       console.log('🔄 Aplicando migração v2 (alterações e índices)...');
-      
+
       const migrations = [
         `ALTER TABLE chats ALTER COLUMN project_id DROP NOT NULL`,
         `ALTER TABLE messages ADD COLUMN IF NOT EXISTS edited BOOLEAN DEFAULT FALSE`,
@@ -198,7 +190,7 @@ export async function initDb() {
           ) THEN
             ALTER TABLE projects ALTER COLUMN memory_mode SET DEFAULT 'projeto';
           END IF;
-        END $$;`
+        END $$;`,
       ];
 
       for (const sql of migrations) {
@@ -211,6 +203,36 @@ export async function initDb() {
 
       await setSchemaVersion(client, 2);
       console.log('✅ Migração v2 aplicada.');
+    }
+
+    // ========== MIGRAÇÃO v3 ==========
+    // Adiciona coluna embedding na tabela memories para deduplicação semântica
+    if (currentVersion < 3) {
+      console.log('🔄 Aplicando migração v3 (embedding em memories)...');
+
+      await client.query(
+        `ALTER TABLE memories ADD COLUMN IF NOT EXISTS embedding JSONB`
+      ).catch(err => {
+        if (!err.message?.includes('already exists') && !err.message?.includes('duplicate column')) {
+          console.warn(`⚠️ Migração v3 ignorada: ${err.message}`);
+        }
+      });
+
+      // Índice parcial para acelerar a busca de memórias com embedding
+      await client.query(
+        `CREATE INDEX IF NOT EXISTS idx_memories_project_embedding
+         ON memories(project_id)
+         WHERE embedding IS NOT NULL`
+      ).catch(() => {});
+
+      await client.query(
+        `CREATE INDEX IF NOT EXISTS idx_memories_user_embedding
+         ON memories(user_id)
+         WHERE embedding IS NOT NULL AND project_id IS NULL`
+      ).catch(() => {});
+
+      await setSchemaVersion(client, 3);
+      console.log('✅ Migração v3 aplicada.');
     }
 
     console.log(`✅ Schema atualizado para versão ${CURRENT_SCHEMA_VERSION}`);

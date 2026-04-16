@@ -99,7 +99,7 @@ async function searchRelevantChunks(projectId, query, limit = 3) {
   );
   if (!chunks.length) return [];
   const withScores = chunks.map(c => ({
-    text: c.chunk_text,
+    text:  c.chunk_text,
     score: cosineSimilarity(queryEmbedding, JSON.parse(c.embedding)),
   }));
   return withScores
@@ -150,9 +150,9 @@ router.post('/messages/stream', extractUserId, async (req, res, next) => {
   }
 
   res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive',
+    'Content-Type':                'text/event-stream',
+    'Cache-Control':               'no-cache',
+    'Connection':                  'keep-alive',
     'Access-Control-Allow-Origin': process.env.FRONTEND_URL || '*',
   });
 
@@ -179,10 +179,16 @@ router.post('/messages/stream', extractUserId, async (req, res, next) => {
 
     const apiHistory = selectContextWindow(history);
     let fullResponse = '';
+    let wasMaxTokens = false;
 
-    for await (const chunk of streamGeminiChat(apiHistory, finalSystemPrompt, modelKey)) {
-      fullResponse += chunk;
-      sendEvent({ chunk });
+    for await (const event of streamGeminiChat(apiHistory, finalSystemPrompt, modelKey)) {
+      if (event.chunk) {
+        fullResponse += event.chunk;
+        sendEvent({ chunk: event.chunk });
+      }
+      if (event.maxTokens) {
+        wasMaxTokens = true;
+      }
     }
 
     const cleanedResponse = processResponse(fullResponse);
@@ -199,6 +205,11 @@ router.post('/messages/stream', extractUserId, async (req, res, next) => {
     if (projectId || memoryMode === 'global') {
       extractMemories(projectId, userId, cleanedResponse, memoryMode).catch(console.error);
       invalidateSystemPromptCache(userId, projectId);
+    }
+
+    // Sinaliza se a resposta foi cortada por limite de tokens
+    if (wasMaxTokens) {
+      sendEvent({ maxTokens: true });
     }
 
     sendEvent({ done: true });
@@ -251,8 +262,8 @@ router.post('/messages', extractUserId, async (req, res, next) => {
     }
 
     const apiHistory = selectContextWindow(history);
-    let responseText = await geminiChat(apiHistory, finalSystemPrompt, modelKey);
-    responseText = processResponse(responseText);
+    const { text, maxTokens } = await geminiChat(apiHistory, finalSystemPrompt, modelKey);
+    const responseText = processResponse(text);
 
     await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'assistant', responseText]);
     await runAsync('UPDATE chats SET updated_at = NOW() WHERE id = $1', [chat_id]);
@@ -268,7 +279,7 @@ router.post('/messages', extractUserId, async (req, res, next) => {
       invalidateSystemPromptCache(userId, projectId);
     }
 
-    res.json({ response: responseText, model: modelKey });
+    res.json({ response: responseText, model: modelKey, maxTokens: maxTokens ?? false });
   } catch (err) { next(err); }
 });
 
