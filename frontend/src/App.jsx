@@ -20,7 +20,7 @@ export default function App() {
   const [darkMode, setDarkMode] = useState(() => localStorage.getItem('solaris_dark') !== 'false');
   const [programmingMode, setProgrammingMode] = useState(() => localStorage.getItem('solaris_programming_mode') === 'true');
   const [model, setModel] = useState('flash');
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(() => window.innerWidth >= 1024);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showShareToast, setShowShareToast] = useState(false);
@@ -51,7 +51,7 @@ export default function App() {
 
   const {
     messages, setMessages, activeChatId, setActiveChatId, isLoading, isStreaming,
-    statusMessage, sendError, setSendError, sendMessage, continueResponse, maxTokensReached, editMessage, loadMessages
+    statusMessage, sendError, setSendError, sendMessage, editMessage, loadMessages
   } = useChat(effectiveUserId, authUser, model, activeProjectId);
 
   const [editingMsgIndex, setEditingMsgIndex] = useState(null);
@@ -67,6 +67,11 @@ export default function App() {
     setSendError('');
     setInput('');
     setActiveView('chat');
+  };
+
+  // Fecha sidebar em mobile após ação
+  const closeSidebarOnMobile = () => {
+    if (window.innerWidth < 1024) setIsSidebarOpen(false);
   };
 
   const handleSend = async () => {
@@ -222,7 +227,7 @@ export default function App() {
       />
 
       <main className={`flex-1 flex flex-col ${theme.bgMain} relative transition-colors duration-500 overflow-hidden`}>
-        <header className={`h-20 flex items-center justify-between px-6 md:px-10 border-b ${theme.border} transition-colors duration-500 shrink-0`}>
+        <header className={`h-16 md:h-20 flex items-center justify-between px-4 md:px-10 border-b ${theme.border} transition-colors duration-500 shrink-0`}>
           <div className="flex items-center gap-4">
             <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className={`p-2 rounded-lg transition-all ${darkMode ? 'text-white/60 hover:text-white hover:bg-white/5' : 'text-black/40 hover:text-black hover:bg-black/5'}`}>
               <PanelLeft size={20} strokeWidth={1.5} />
@@ -290,12 +295,6 @@ export default function App() {
               editValue={editValue} setEditValue={setEditValue}
               onEditSave={handleEditSave} onEditCancel={handleEditCancel}
               programmingMode={programmingMode}
-              maxTokensReached={maxTokensReached}
-              onContinue={() => continueResponse(async (projectId) => {
-                const nc = await api.createChat(projectId, effectiveUserId, model);
-                setActiveChatId(nc.id);
-                return nc;
-              })}
             />
             <MessageInput
               input={input} setInput={setInput} onSend={handleSend}
