@@ -21,6 +21,7 @@ import messagesRouter from './domain/routers/messages.js';
 import filesRouter from './domain/routers/files.js';
 import sourcesRouter from './domain/routers/sources.js';
 import settingsRouter from './domain/routers/settings.js';
+import voiceRouter from './domain/routers/voice.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -50,6 +51,7 @@ app.use('/api', messagesRouter);
 app.use('/api', filesRouter);       // agora inclui rota autenticada para download
 app.use('/api', sourcesRouter);
 app.use('/api', settingsRouter);
+app.use('/api', voiceRouter);
 
 // ─── Error handler (deve ser o último) ────────────────────────────────
 app.use(errorHandler);
