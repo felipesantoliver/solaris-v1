@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
-import { Send, Loader2, Mic, MicOff, Plus, AlertTriangle, Check } from 'lucide-react';
+import { Send, Loader2, Mic, MicOff, Plus, AlertTriangle, Check, Code } from 'lucide-react';
 import { ModelToggle } from './ui/ModelToggle';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
@@ -205,7 +205,11 @@ export function MessageInput({
           </div>
         )}
 
-        <div className={`relative flex items-end border-b ${theme.inputBorder} pb-6 md:pb-8 ${theme.inputFocus} transition-all duration-500`}>
+        <div className={`relative flex items-end border-b pb-6 md:pb-8 transition-all duration-500 ${
+          programmingMode
+            ? 'border-blue-400/30'
+            : theme.inputBorder
+        } ${theme.inputFocus}`}>
           <textarea
             ref={textareaRef}
             value={input}
@@ -267,6 +271,24 @@ export function MessageInput({
           <span className="hidden sm:inline">enter para enviar · shift+enter nova linha</span>
           <span className="sm:hidden" />
           <div className="flex items-center gap-4">
+            {/* Botão Code — associado às ações técnicas junto ao Anexo */}
+            <span
+              onClick={() => setProgrammingMode(!programmingMode)}
+              title={programmingMode ? 'Desativar modo code' : 'Ativar modo code'}
+              className={`flex items-center gap-1.5 cursor-pointer transition-all duration-300 mb-2 ${
+                programmingMode
+                  ? 'text-blue-400'
+                  : darkMode
+                    ? 'hover:text-white/70'
+                    : 'hover:text-black/70'
+              }`}
+            >
+              <Code size={10} />
+              <span>Code</span>
+              {programmingMode && (
+                <span className="w-1 h-1 rounded-full bg-blue-400 animate-pulse" />
+              )}
+            </span>
             <span
               onClick={() => fileInputRef.current?.click()}
               className={`flex items-center gap-3 cursor-pointer ${darkMode ? 'hover:text-white' : 'hover:text-black'} transition-colors mb-2`}

@@ -111,6 +111,18 @@ export function Sidebar({
           <span className="text-sm font-light">Novo Chat</span>
         </button>
 
+        {/* Search — logo abaixo de Novo Chat */}
+        <div className="flex items-center gap-3 w-full">
+          <Search size={18} strokeWidth={1.2} className={theme.textPrimary} />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            placeholder="Buscar conversa"
+            className={`bg-transparent border-none p-0 text-sm font-light w-full focus:outline-none ${darkMode ? 'text-white placeholder:text-white/20' : 'text-black placeholder:text-black/30'}`}
+          />
+        </div>
+
         {/* Projects page nav */}
         <button
           onClick={() => {
@@ -129,18 +141,6 @@ export function Sidebar({
             <span className={`ml-auto w-1.5 h-1.5 rounded-full ${darkMode ? 'bg-white' : 'bg-black'}`} />
           )}
         </button>
-
-        {/* Search */}
-        <div className="flex items-center gap-3 w-full">
-          <Search size={18} strokeWidth={1.2} className={theme.textPrimary} />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-            placeholder="Buscar conversa"
-            className={`bg-transparent border-none p-0 text-sm font-light w-full focus:outline-none ${darkMode ? 'text-white placeholder:text-white/20' : 'text-black placeholder:text-black/30'}`}
-          />
-        </div>
       </div>
 
       <div className="px-8 flex flex-col flex-1 overflow-y-auto custom-scrollbar">

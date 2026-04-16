@@ -44,7 +44,13 @@ export function ChatWindow({
   );
 
   return (
-    <div className="flex-1 relative overflow-y-auto px-6 md:px-20 py-10 custom-scrollbar transition-colors duration-500">
+    <div className={`flex-1 relative overflow-y-auto px-6 md:px-20 py-10 custom-scrollbar transition-all duration-500 ${
+      programmingMode
+        ? darkMode
+          ? 'shadow-[inset_0_0_0_1px_rgba(59,130,246,0.12),inset_0_0_40px_rgba(59,130,246,0.03)]'
+          : 'shadow-[inset_0_0_0_1px_rgba(59,130,246,0.10),inset_0_0_40px_rgba(59,130,246,0.04)]'
+        : ''
+    }`}>
       {messages.length === 0 ? (
         <WelcomeScreen />
       ) : (
