@@ -205,11 +205,7 @@ export function MessageInput({
           </div>
         )}
 
-        <div className={`relative flex items-end border-b pb-6 md:pb-8 transition-all duration-500 ${
-          programmingMode
-            ? 'border-blue-400/70'
-            : theme.inputBorder
-        } ${theme.inputFocus}`}>
+        <div className={`relative flex items-end border-b pb-6 md:pb-8 transition-all duration-500 ${theme.inputBorder} ${theme.inputFocus}`}>
           <textarea
             ref={textareaRef}
             value={input}
