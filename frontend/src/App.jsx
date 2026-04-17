@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import {
   Moon, Sun, LogOut, LogIn, Settings, Share2, PanelLeft, Star
 } from 'lucide-react';
@@ -61,18 +61,18 @@ export default function App() {
   useEffect(() => { localStorage.setItem('solaris_programming_mode', programmingMode); }, [programmingMode]);
   useEffect(() => { if (!authUser && model === 'pro') setModel('flash'); }, [authUser, model]);
 
-  const handleNewChat = () => {
+  const handleNewChat = useCallback(() => {
     setActiveChatId(null);
     setMessages([]);
     setSendError('');
     setInput('');
     setActiveView('chat');
-  };
+  }, [setActiveChatId, setMessages, setSendError]);
 
   // Fecha sidebar em mobile após ação
-  const closeSidebarOnMobile = () => {
+  const closeSidebarOnMobile = useCallback(() => {
     if (window.innerWidth < 1024) setIsSidebarOpen(false);
-  };
+  }, []);
 
   const handleSend = async () => {
     await sendMessage(input, activeChatId, activeProjectId, async (projectId) => {
@@ -93,7 +93,7 @@ export default function App() {
     setEditValue('');
   };
 
-  const handleShare = () => setShowShareModal(true);
+  const handleShare = useCallback(() => setShowShareModal(true), []);
 
   const handleFileUpload = async (e) => {
     const file = e.target.files?.[0];
@@ -134,42 +134,47 @@ export default function App() {
     setItemToDelete(null);
   };
 
-  const onDragStart = (e, id) => {
+  const onDragStart = useCallback((e, id) => {
     setDraggedItemId(id);
     e.dataTransfer.effectAllowed = 'move';
     setTimeout(() => { e.currentTarget.style.opacity = '0.4'; }, 0);
-  };
-  const onDragOver = (e, id) => { e.preventDefault(); };
-  const onDragEnd = (e) => { e.currentTarget.style.opacity = '1'; setDraggedItemId(null); };
+  }, []);
+  const onDragOver = useCallback((e, id) => { e.preventDefault(); }, []);
+  const onDragEnd = useCallback((e) => { e.currentTarget.style.opacity = '1'; setDraggedItemId(null); }, []);
 
-  const startRenameChatTitle = (e, chat) => {
+  const startRenameChatTitle = useCallback((e, chat) => {
     e.stopPropagation();
     setEditingChatTitleId(chat.id);
     setEditingChatTitleValue(chat.title || '');
-  };
+  }, []);
 
-  const confirmRenameChatTitle = async (chatId) => {
+  const confirmRenameChatTitle = useCallback(async (chatId) => {
     const newTitle = editingChatTitleValue.trim();
     setEditingChatTitleId(null);
     setEditingChatTitleValue('');
     if (!newTitle) return;
     await updateChatTitle(chatId, newTitle);
-  };
+  }, [editingChatTitleValue, updateChatTitle]);
 
-  const handleAuthUpdate = async (newDisplayName) => { await updateDisplayName(newDisplayName); };
+  const handleAuthUpdate = useCallback(async (newDisplayName) => { await updateDisplayName(newDisplayName); }, [updateDisplayName]);
 
-  const handleOpenProject = (project) => {
+  const handleOpenProject = useCallback((project) => {
     setActiveProjectId(project.id);
     setActiveView('chat');
     setActiveChatId(null);
     setMessages([]);
-  };
+  }, [setActiveProjectId, setActiveChatId, setMessages]);
 
-  const handleCreateProjectFromView = async (name, description, instructions) => {
+  const handleCreateProjectFromView = useCallback(async (name, description, instructions) => {
     await createProject(name, description, instructions);
-  };
+  }, [createProject]);
 
-  const theme = {
+  // Callbacks inline que iam para a Sidebar como arrow functions — agora estáveis
+  const handleDeleteProject = useCallback((proj) => setItemToDelete({ type: 'project', data: proj }), []);
+  const handleDeleteChat    = useCallback((chat) => setItemToDelete({ type: 'chat',    data: chat }), []);
+  const handleOpenSettings  = useCallback(() => setShowSettingsModal(true), []);
+
+  const theme = useMemo(() => ({
     bgAside: darkMode ? 'bg-[#0a0a0a]' : 'bg-white',
     bgMain: darkMode ? 'bg-[#111111]' : 'bg-[#fdfdfd]',
     border: darkMode ? 'border-white/10' : 'border-black/5',
@@ -183,7 +188,7 @@ export default function App() {
     projectHover: darkMode ? 'hover:bg-white/5' : 'hover:bg-black/5',
     projectActive: darkMode ? 'bg-white/10 text-white shadow-sm' : 'bg-black/5 text-black shadow-sm',
     modalBg: darkMode ? 'bg-[#1a1a1a]' : 'bg-white',
-  };
+  }), [darkMode]);
 
   const hasUserStartedChat = messages.some(m => m.role === 'user');
 
@@ -214,22 +219,20 @@ export default function App() {
         projects={projects} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId}
         chatHistory={chatHistory} activeChatId={activeChatId} setActiveChatId={setActiveChatId}
         onCreateProject={createProject}
-        onDeleteProject={(proj) => setItemToDelete({ type: 'project', data: proj })}
-        onDeleteChat={(chat) => setItemToDelete({ type: 'chat', data: chat })}
+        onDeleteProject={handleDeleteProject}
+        onDeleteChat={handleDeleteChat}
         onEditProject={setEditingProject} onNewChat={handleNewChat}
         onStartRenameChat={startRenameChatTitle}
         editingChatTitleId={editingChatTitleId} editingChatTitleValue={editingChatTitleValue}
         setEditingChatTitleValue={setEditingChatTitleValue} onConfirmRenameChat={confirmRenameChatTitle}
-        displayName={displayName} onOpenSettings={() => setShowSettingsModal(true)}
+        displayName={displayName} onOpenSettings={handleOpenSettings}
         searchQuery={searchQuery} setSearchQuery={setSearchQuery}
         draggedItemId={draggedItemId} onDragStart={onDragStart} onDragOver={onDragOver} onDragEnd={onDragEnd}
         activeView={activeView} onNavigate={setActiveView}
       />
 
       <main className={`flex-1 flex flex-col ${theme.bgMain} relative transition-colors duration-500 overflow-hidden`}>
-        <header className={`flex flex-col border-b ${theme.border} transition-colors duration-500 shrink-0`}>
-          {/* Linha principal do header */}
-          <div className="h-16 md:h-20 flex items-center justify-between px-4 md:px-10">
+        <header className={`h-16 md:h-20 flex items-center justify-between px-4 md:px-10 border-b ${theme.border} transition-colors duration-500 shrink-0`}>
           <div className="flex items-center gap-4">
             <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className={`p-2 rounded-lg transition-all ${darkMode ? 'text-white/60 hover:text-white hover:bg-white/5' : 'text-black/40 hover:text-black hover:bg-black/5'}`}>
               <PanelLeft size={20} strokeWidth={1.5} />
@@ -253,7 +256,7 @@ export default function App() {
               </button>
             )}
             {authUser && (
-              <button onClick={() => setShowSettingsModal(true)} className={`p-2 rounded-lg transition-all ${darkMode ? 'text-white/40 hover:text-white hover:bg-white/5' : 'text-black/40 hover:text-black hover:bg-black/5'}`} title="Configurações">
+              <button onClick={handleOpenSettings} className={`p-2 rounded-lg transition-all ${darkMode ? 'text-white/40 hover:text-white hover:bg-white/5' : 'text-black/40 hover:text-black hover:bg-black/5'}`} title="Configurações">
                 <Settings size={18} strokeWidth={1.5} />
               </button>
             )}
@@ -277,17 +280,6 @@ export default function App() {
               </span>
             )}
           </div>
-          </div>
-
-          {/* Indicador de Modo Code — aparece abaixo da linha do header */}
-          {programmingMode && (
-            <div className={`px-4 md:px-10 py-1.5 flex items-center gap-2 border-t ${theme.border} transition-all duration-300`}>
-              <span className={darkMode ? 'code-mode-dot-dark' : 'code-mode-dot-light'} />
-              <span className={`text-[9px] font-medium uppercase tracking-[0.35em] ${darkMode ? 'text-cyan-400/70' : 'text-cyan-700/70'}`}>
-                Modo Code: Ativado
-              </span>
-            </div>
-          )}
         </header>
 
         {activeView === 'projects' ? (

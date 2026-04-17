@@ -1,11 +1,11 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, memo } from 'react';
 import {
   PencilLine, Search, FolderPlus, Folder, History, Trash2, Pencil, ChevronDown,
   Settings, User, GripVertical, Check, X, LayoutGrid
 } from 'lucide-react';
 import { SolarSystem } from './ui/SolarSystem';
 
-export function Sidebar({
+export const Sidebar = memo(function Sidebar({
   isOpen,
   setIsOpen,
   darkMode,
@@ -296,4 +296,4 @@ export function Sidebar({
       </aside>
     </>
   );
-}
+});
