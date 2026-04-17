@@ -282,6 +282,18 @@ export default function App() {
           </div>
         </header>
 
+        {/* Badge modo code — abaixo da linha do header */}
+        {programmingMode && (
+          <div className={`flex justify-center py-1.5 border-b ${theme.border}`}>
+            <p
+              className="code-mode-dot text-[9px] font-medium uppercase tracking-[0.25em]"
+              style={{ color: darkMode ? 'rgb(103 232 249)' : 'rgb(8 145 178)' }}
+            >
+              modo code: ativado
+            </p>
+          </div>
+        )}
+
         {activeView === 'projects' ? (
           <ProjectsView
             darkMode={darkMode} theme={theme} projects={projects}

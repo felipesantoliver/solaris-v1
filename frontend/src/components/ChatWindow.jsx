@@ -40,15 +40,6 @@ export function ChatWindow({
       >✦</div>
       <div>
         <p className={`text-base font-light ${theme.textSecondary}`}>Olá{displayName ? `, ${displayName}` : ''}.</p>
-        {/* Badge modo code */}
-        {programmingMode && (
-          <p
-            className="code-mode-dot text-[10px] font-medium uppercase tracking-[0.2em] mt-1"
-            style={{ color: darkMode ? 'rgb(103 232 249)' : 'rgb(8 145 178)' }}
-          >
-            modo code: ativado
-          </p>
-        )}
         <p className={`text-sm font-light mt-1 ${theme.textMuted}`}>
           {activeProjectId ? 'Nenhuma conversa ainda. Comece digitando.' : 'Como posso ajudar hoje?'}
         </p>
