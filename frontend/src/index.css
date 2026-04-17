@@ -1,3 +1,37 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* ─── Animação do sistema solar ────────────────────────────────────────────
+   Definida aqui (fora do React) para que nunca seja recriada em
+   re-renderizações. A animation-play-state continua rodando enquanto
+   a aba estiver aberta, independente de qualquer evento de UI.
+──────────────────────────────────────────────────────────────────────────── */
+@keyframes rotate-slow {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+.orbit-rotate {
+  animation: rotate-slow linear infinite;
+  /* will-change evita que o browser destrua o contexto de composição */
+  will-change: transform;
+}
+
+/* ─── Scrollbar customizada ─────────────────────────────────────────────── */
+.custom-scrollbar::-webkit-scrollbar       { width: 3px; }
+.custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(128,128,128,0.2);
+  border-radius: 10px;
+}
+
+/* ─── Indicador "Code Mode" — pulso tech ────────────────────────────────── */
+@keyframes code-pulse {
+  0%, 100% { opacity: 1;    box-shadow: 0 0 0   0   currentColor; }
+  50%       { opacity: 0.6; box-shadow: 0 0 6px 2px currentColor; }
+}
+
+.code-mode-dot {
+  animation: code-pulse 1.8s ease-in-out infinite;
+}

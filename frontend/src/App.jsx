@@ -310,13 +310,8 @@ export default function App() {
 
       <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileUpload} accept=".pdf,.txt,.md,.json,.js,.ts,.py,.css,.html,.csv" />
 
-      <style dangerouslySetInnerHTML={{ __html: `
-        @keyframes rotate-slow { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-        .orbit-rotate { animation: rotate-slow linear infinite; }
-        .custom-scrollbar::-webkit-scrollbar { width: 3px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: ${theme.scrollbar}; border-radius: 10px; }
-      `}} />
+      {/* Scrollbar thumb color varia com o tema — apenas esta regra dinâmica fica aqui */}
+      <style dangerouslySetInnerHTML={{ __html: `.custom-scrollbar::-webkit-scrollbar-thumb { background: ${theme.scrollbar}; }` }} />
     </div>
   );
 }
