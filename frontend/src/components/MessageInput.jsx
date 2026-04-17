@@ -285,8 +285,7 @@ export function MessageInput({
               <span>Code</span>
               {programmingMode && (
                 <span
-                  className="code-mode-dot w-1 h-1 rounded-full"
-                  style={{ color: darkMode ? 'rgb(103 232 249)' : 'rgb(8 145 178)' }}
+                  className={darkMode ? 'code-mode-dot-dark' : 'code-mode-dot-light'}
                 />
               )}
             </button>

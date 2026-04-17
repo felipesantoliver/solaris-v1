@@ -143,8 +143,13 @@ export function Sidebar({
         </button>
       </div>
 
-      <div className="px-8 flex flex-col flex-1 overflow-y-auto custom-scrollbar">
+      {/* SolarSystem fora do overflow-y-auto para que as animações CSS nunca sejam
+          interrompidas por scroll ou re-renders do container pai */}
+      <div className="px-8 pt-2 pb-2 shrink-0">
         <SolarSystem darkMode={darkMode} theme={theme} />
+      </div>
+
+      <div className="px-8 flex flex-col flex-1 overflow-y-auto custom-scrollbar">
 
         {/* Projects section */}
         <div className="flex flex-col gap-4 mb-8 shrink-0">

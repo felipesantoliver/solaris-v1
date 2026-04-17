@@ -31,11 +31,32 @@
 }
 
 /* ─── Indicador "Code Mode" — pulso tech ────────────────────────────────── */
-@keyframes code-pulse {
-  0%, 100% { opacity: 1;    box-shadow: 0 0 0   0   currentColor; }
-  50%       { opacity: 0.6; box-shadow: 0 0 6px 2px currentColor; }
+@keyframes code-pulse-dark {
+  0%, 100% { opacity: 1;    box-shadow: 0 0 0   0   rgba(103, 232, 249, 0); }
+  50%       { opacity: 0.7; box-shadow: 0 0 5px 2px rgba(103, 232, 249, 0.7); }
 }
 
-.code-mode-dot {
-  animation: code-pulse 1.8s ease-in-out infinite;
+@keyframes code-pulse-light {
+  0%, 100% { opacity: 1;    box-shadow: 0 0 0   0   rgba(8, 145, 178, 0); }
+  50%       { opacity: 0.7; box-shadow: 0 0 5px 2px rgba(8, 145, 178, 0.6); }
+}
+
+.code-mode-dot-dark {
+  animation: code-pulse-dark 1.8s ease-in-out infinite;
+  display: inline-block;
+  border-radius: 50%;
+  width: 4px;
+  height: 4px;
+  background-color: rgb(103, 232, 249);
+  flex-shrink: 0;
+}
+
+.code-mode-dot-light {
+  animation: code-pulse-light 1.8s ease-in-out infinite;
+  display: inline-block;
+  border-radius: 50%;
+  width: 4px;
+  height: 4px;
+  background-color: rgb(8, 145, 178);
+  flex-shrink: 0;
 }

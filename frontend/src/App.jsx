@@ -227,7 +227,9 @@ export default function App() {
       />
 
       <main className={`flex-1 flex flex-col ${theme.bgMain} relative transition-colors duration-500 overflow-hidden`}>
-        <header className={`h-16 md:h-20 flex items-center justify-between px-4 md:px-10 border-b ${theme.border} transition-colors duration-500 shrink-0`}>
+        <header className={`flex flex-col border-b ${theme.border} transition-colors duration-500 shrink-0`}>
+          {/* Linha principal do header */}
+          <div className="h-16 md:h-20 flex items-center justify-between px-4 md:px-10">
           <div className="flex items-center gap-4">
             <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className={`p-2 rounded-lg transition-all ${darkMode ? 'text-white/60 hover:text-white hover:bg-white/5' : 'text-black/40 hover:text-black hover:bg-black/5'}`}>
               <PanelLeft size={20} strokeWidth={1.5} />
@@ -275,6 +277,17 @@ export default function App() {
               </span>
             )}
           </div>
+          </div>
+
+          {/* Indicador de Modo Code — aparece abaixo da linha do header */}
+          {programmingMode && (
+            <div className={`px-4 md:px-10 py-1.5 flex items-center gap-2 border-t ${theme.border} transition-all duration-300`}>
+              <span className={darkMode ? 'code-mode-dot-dark' : 'code-mode-dot-light'} />
+              <span className={`text-[9px] font-medium uppercase tracking-[0.35em] ${darkMode ? 'text-cyan-400/70' : 'text-cyan-700/70'}`}>
+                Modo Code: Ativado
+              </span>
+            </div>
+          )}
         </header>
 
         {activeView === 'projects' ? (
