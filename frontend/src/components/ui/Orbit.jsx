@@ -1,16 +1,37 @@
-import React from 'react';
+import React, { memo } from 'react';
 
-export function OrbitLine({ size, themeColor }) {
-  return <div className={`absolute border ${themeColor} rounded-full ${size} transition-colors duration-500`} />;
-}
-
-export function PlanetDot({ size, duration, color, glow, dotSize = 'w-1.5 h-1.5', hasRing = false, darkMode = true }) {
+// memo com comparação profunda de props — evita re-render quando o pai atualiza
+// por razões não relacionadas (digitação, estado de mensagem, etc.)
+export const OrbitLine = memo(function OrbitLine({ size, themeColor }) {
   return (
-    <div className={`absolute orbit-rotate ${size}`} style={{ animationDuration: duration }}>
+    <div className={`absolute border ${themeColor} rounded-full ${size} transition-colors duration-500`} />
+  );
+}, (prev, next) => prev.size === next.size && prev.themeColor === next.themeColor);
+
+export const PlanetDot = memo(function PlanetDot({
+  size,
+  duration,
+  color,
+  glow,
+  dotSize = 'w-1.5 h-1.5',
+  hasRing = false,
+  darkMode = true,
+}) {
+  return (
+    /*
+      animation-duration definida via CSS var injetada no elemento pai —
+      não via style inline no elemento com orbit-rotate.
+      Isso impede que o browser interprete cada render como "novo estilo"
+      e reinicie a animação do zero.
+    */
+    <div
+      className={`absolute orbit-rotate ${size}`}
+      style={{ '--orbit-duration': duration }}
+    >
       <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center justify-center">
         <div
           className={`relative z-10 rounded-full ${color} ${dotSize} shadow-sm transition-colors duration-500`}
-          style={glow ? { boxShadow: glow } : {}}
+          style={glow ? { boxShadow: glow } : undefined}
         />
         {hasRing && (
           <div style={{
@@ -26,4 +47,12 @@ export function PlanetDot({ size, duration, color, glow, dotSize = 'w-1.5 h-1.5'
       </div>
     </div>
   );
-}
+}, (prev, next) =>
+  prev.size === next.size &&
+  prev.duration === next.duration &&
+  prev.color === next.color &&
+  prev.glow === next.glow &&
+  prev.dotSize === next.dotSize &&
+  prev.hasRing === next.hasRing &&
+  prev.darkMode === next.darkMode
+);

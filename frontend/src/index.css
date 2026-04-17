@@ -12,9 +12,13 @@
   to   { transform: rotate(360deg); }
 }
 
+/*
+  animation-duration lida via --orbit-duration (CSS var definida no
+  elemento pai pelo PlanetDot). Isso evita que o browser interprete
+  um style inline novo como razão para reiniciar a animação.
+*/
 .orbit-rotate {
-  animation: rotate-slow linear infinite;
-  /* will-change evita que o browser destrua o contexto de composição */
+  animation: rotate-slow var(--orbit-duration, 10s) linear infinite;
   will-change: transform;
 }
 
