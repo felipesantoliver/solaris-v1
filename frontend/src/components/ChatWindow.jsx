@@ -33,9 +33,22 @@ export function ChatWindow({
 
   const WelcomeScreen = () => (
     <div className="flex flex-col items-center justify-center h-full gap-6 px-8 text-center animate-in fade-in duration-700">
-      <div className={`text-3xl font-extralight ${darkMode ? 'text-white/10' : 'text-black/10'}`}>✦</div>
+      {/* Estrela — ciano quando code mode ativo, padrão caso contrário */}
+      <div
+        className={programmingMode ? 'code-mode-dot text-3xl font-extralight' : `text-3xl font-extralight ${darkMode ? 'text-white/10' : 'text-black/10'}`}
+        style={programmingMode ? { color: darkMode ? 'rgb(103 232 249)' : 'rgb(8 145 178)' } : {}}
+      >✦</div>
       <div>
         <p className={`text-base font-light ${theme.textSecondary}`}>Olá{displayName ? `, ${displayName}` : ''}.</p>
+        {/* Badge modo code */}
+        {programmingMode && (
+          <p
+            className="code-mode-dot text-[10px] font-medium uppercase tracking-[0.2em] mt-1"
+            style={{ color: darkMode ? 'rgb(103 232 249)' : 'rgb(8 145 178)' }}
+          >
+            modo code: ativado
+          </p>
+        )}
         <p className={`text-sm font-light mt-1 ${theme.textMuted}`}>
           {activeProjectId ? 'Nenhuma conversa ainda. Comece digitando.' : 'Como posso ajudar hoje?'}
         </p>
@@ -45,19 +58,7 @@ export function ChatWindow({
 
   return (
     <div className={`flex-1 relative overflow-y-auto px-6 md:px-20 py-10 custom-scrollbar transition-colors duration-500`}>
-      {/* Gradiente de canto — modo Code */}
-      {programmingMode && (
-        <div
-          aria-hidden="true"
-          className="pointer-events-none fixed bottom-0 left-0 w-[480px] h-[480px] transition-opacity duration-700"
-          style={{
-            background: darkMode
-              ? 'radial-gradient(ellipse at bottom left, rgba(59,130,246,0.10) 0%, rgba(99,102,241,0.05) 40%, transparent 70%)'
-              : 'radial-gradient(ellipse at bottom left, rgba(59,130,246,0.08) 0%, rgba(99,102,241,0.04) 40%, transparent 70%)',
-            zIndex: 0,
-          }}
-        />
-      )}
+
       {messages.length === 0 ? (
         <WelcomeScreen />
       ) : (
