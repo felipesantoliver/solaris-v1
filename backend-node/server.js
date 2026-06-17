@@ -1,6 +1,6 @@
 // ============================================================
 //  server.js — Solaris Backend Bootstrap
-//  (apenas configuração de middlewares, rotas e listen)
+//  (ajustado para deploy integrado Vercel + Render)
 // ============================================================
 
 import { setDefaultResultOrder } from 'dns';
@@ -27,8 +27,10 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 // ─── CORS ─────────────────────────────────────────────────────────────
+// 🔥 Altere a origem para a URL do seu frontend na Vercel
+const allowedOrigin = process.env.FRONTEND_URL || 'http://localhost:5173';
 const corsOptions = {
-  origin: process.env.FRONTEND_URL || false,
+  origin: allowedOrigin,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'x-user-id', 'x-model', 'Authorization'],
   credentials: true,

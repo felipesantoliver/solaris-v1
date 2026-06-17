@@ -1,0 +1,45 @@
+# render.yaml
+services:
+  # Serviço Node.js (backend principal)
+  - type: web
+    name: solaris-node
+    env: node
+    rootDir: backend                     # ← pasta onde está o package.json
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: GEMINI_FLASH_API_KEY
+        sync: false
+      - key: GEMINI_PRO_API_KEY
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: PYTHON_SERVICE_URL
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+
+  # Serviço Python (microsserviço FastAPI)
+  - type: web
+    name: solaris-python
+    env: python
+    rootDir: python-services             # ← pasta onde está o requirements.txt
+    buildCommand: |
+      pip install -r requirements.txt
+      python -m spacy download pt_core_news_sm
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: WHISPER_MODEL
+        value: tiny
+      - key: EMBEDDING_MODEL
+        value: sentence-transformers/all-MiniLM-L6-v2

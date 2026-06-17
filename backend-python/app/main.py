@@ -10,11 +10,20 @@ load_dotenv()
 
 app = FastAPI(title="Solaris Python Microservice", version="1.0.0")
 
-# Configuração CORS
+# ─── CORS ─────────────────────────────────────────────────────────────
+# 🔥 Permitir origens: frontend (Vercel) e também o Node (Render)
+#    (embora o Node não precise de CORS, não faz mal)
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
+NODE_URL = os.getenv("NODE_URL", "http://localhost:3001")  # opcional, mas incluímos
+origins = [
+    FRONTEND_URL,
+    NODE_URL,
+    # Se quiser, pode adicionar também o domínio do Render do Node
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[FRONTEND_URL],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -33,9 +42,10 @@ async def health_check():
 
 if __name__ == "__main__":
     import uvicorn
+    port = int(os.getenv("PORT", 8000))
     uvicorn.run(
         "app.main:app",
         host="0.0.0.0",
-        port=int(os.getenv("PORT", 8000)),
-        reload=True
+        port=port,
+        reload=False   # em produção, não use reload
     )
