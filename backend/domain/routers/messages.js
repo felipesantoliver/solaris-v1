@@ -1,4 +1,4 @@
-// domain/routers/messages.js — Streaming SSE, fallback, busca semântica, rate limit
+// domain/routers/messages.js — Streaming SSE, fallback, busca RAG via Python, rate limit
 
 import { Router } from 'express';
 import { runAsync, getAsync, allAsync } from '../../db/database.js';
@@ -10,7 +10,6 @@ import {
   invalidateSystemPromptCache,
   sanitizeModelResponse,
 } from '../ai/prompt.js';
-import { generateEmbedding, cosineSimilarity } from '../ai/embeddings.js';
 import { resolveModelForRequest } from './projects.js';
 import { extractUserId } from '../../middleware/auth.js';
 
@@ -84,29 +83,32 @@ function generateLocalTitle(firstMessage) {
   return title.substring(0, 50);
 }
 
-// ─── RAG: threshold de similaridade ───────────────────────────────────────
-const RAG_SIMILARITY_THRESHOLD = 0.65;
+// ─── RAG: busca via microsserviço Python ───────────────────────────────────
+const PYTHON_SERVICE_URL = process.env.PYTHON_SERVICE_URL || 'http://localhost:8000';
 
 async function searchRelevantChunks(projectId, query, limit = 3) {
   if (!projectId) return [];
-  const queryEmbedding = await generateEmbedding(query);
-  const chunks = await allAsync(
-    `SELECT fc.chunk_text, fc.embedding
-     FROM file_chunks fc
-     JOIN files f ON f.id = fc.file_id
-     WHERE f.project_id = $1`,
-    [projectId]
-  );
-  if (!chunks.length) return [];
-  const withScores = chunks.map(c => ({
-    text:  c.chunk_text,
-    score: cosineSimilarity(queryEmbedding, JSON.parse(c.embedding)),
-  }));
-  return withScores
-    .filter(c => c.score > RAG_SIMILARITY_THRESHOLD)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit)
-    .map(c => c.text);
+
+  try {
+    const response = await fetch(`${PYTHON_SERVICE_URL}/search/rag`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: projectId, query }),
+    });
+
+    if (!response.ok) {
+      console.error(`Erro no serviço RAG: ${response.status}`);
+      return [];
+    }
+
+    const data = await response.json();
+    // O Python retorna array com {text, score}, já ordenado e limitado a top 3
+    // Filtra por score > 0.65 (já feito no Python, mas garantimos)
+    return data.filter(item => item.score > 0.65).map(item => item.text);
+  } catch (err) {
+    console.error('Falha na busca RAG via Python:', err.message);
+    return [];
+  }
 }
 
 function processResponse(text) {
@@ -161,6 +163,7 @@ router.post('/messages/stream', extractUserId, async (req, res, next) => {
   try {
     await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'user', message]);
 
+    // Busca chunks via Python
     let relevantChunks = [];
     if (projectId) relevantChunks = await searchRelevantChunks(projectId, message, 3);
 
@@ -207,7 +210,6 @@ router.post('/messages/stream', extractUserId, async (req, res, next) => {
       invalidateSystemPromptCache(userId, projectId);
     }
 
-    // Sinaliza se a resposta foi cortada por limite de tokens
     if (wasMaxTokens) {
       sendEvent({ maxTokens: true });
     }

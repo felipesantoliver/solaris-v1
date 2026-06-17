@@ -1,4 +1,4 @@
-// domain/ai/prompt.js — System prompt, cache em memória e extração de memórias
+// domain/ai/prompt.js — System prompt, cache em memória e extração de memórias (via Python)
 
 import { getAsync, allAsync, runAsync } from '../../db/database.js';
 import { generateEmbedding, cosineSimilarity } from './embeddings.js';
@@ -160,35 +160,30 @@ export async function getBaseSystemPromptWithCache(userId, projectId, memoryMode
   return systemPrompt;
 }
 
-// ─── Heurísticas de extração de memórias (sem custo de tokens) ────────────
+// ─── Extração de memórias via Python ──────────────────────────────────────
 
-// Padrões positivos: frases que indicam fatos relevantes, decisões ou convenções
-const MEMORY_POSITIVE_PATTERNS = [
-  /\b(sempre|nunca|precisa|deve|é importante|é essencial|é necessário)\b/i,
-  /\b(definimos|decidimos|concluímos|aprendemos|descobrimos|estabelecemos)\b/i,
-  /\b(o padrão é|a regra é|a convenção é|usamos|utilizamos|preferimos|adotamos)\b/i,
-  /\b(arquitetura|stack|tecnologia|framework|biblioteca|banco de dados|configuração)\b/i,
-  /\b(o projeto|o sistema|a api|o backend|o frontend|o modelo|a aplicação)\b.{0,30}\b(usa|utiliza|foi|é|tem|precisa|segue)\b/i,
-  /\b(estrutura|convenção|padrão|fluxo|pipeline|processo)\b.{0,20}\b(é|foi|segue|utiliza)\b/i,
-];
+const PYTHON_SERVICE_URL = process.env.PYTHON_SERVICE_URL || 'http://localhost:8000';
 
-// Padrões negativos: frases que NÃO devem virar memória
-const MEMORY_NEGATIVE_PATTERNS = [
-  /\?/,
-  /^(ok|certo|entendi|claro|sim|não|show|ótimo|perfeito|beleza)\b/i,
-  /\b(talvez|pode ser|não sei|acho que|provavelmente|possivelmente)\b/i,
-  /\b(por exemplo|ex:|e\.g\.|como por exemplo|suponha que|imagine que)\b/i,
-  /\b(você poderia|você pode|podemos|vamos tentar|que tal)\b/i,
-];
-
-function isGoodMemoryCandidate(sentence) {
-  const s = sentence.trim();
-  if (s.length < 40 || s.length > 300) return false;
-  if (MEMORY_NEGATIVE_PATTERNS.some(p => p.test(s))) return false;
-  return MEMORY_POSITIVE_PATTERNS.some(p => p.test(s));
+async function extractCandidatesFromPython(text) {
+  try {
+    const response = await fetch(`${PYTHON_SERVICE_URL}/memories/extract`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    if (!response.ok) {
+      console.error(`Erro no serviço de memórias: ${response.status}`);
+      return [];
+    }
+    const data = await response.json();
+    return Array.isArray(data) ? data : [];
+  } catch (err) {
+    console.error('Falha ao extrair memórias via Python:', err.message);
+    return [];
+  }
 }
 
-// ─── Deduplicação semântica via embedding (zero tokens de LLM) ────────────
+// ─── Deduplicação semântica via embedding ────────────────────────────────
 const DEDUP_SIMILARITY_THRESHOLD = 0.85;
 
 async function upsertMemoryWithDedup(projectId, userId, content, memoryMode) {
@@ -248,21 +243,21 @@ async function upsertMemoryWithDedup(projectId, userId, content, memoryMode) {
   }
 }
 
-// ─── Extração de memórias ──────────────────────────────────────────────────
+// ─── Extração de memórias (ponto de entrada) ──────────────────────────────
 export async function extractMemories(projectId, userId, response, memoryMode) {
   if (!projectId && memoryMode !== 'global') return;
 
-  const candidates = response
-    .split(/[.!]\s+/)
-    .filter(isGoodMemoryCandidate)
-    .slice(0, 2);
+  // 1. Extrai candidatas via Python
+  const candidates = await extractCandidatesFromPython(response);
 
   if (!candidates.length) return;
 
+  // 2. Insere cada candidata com deduplicação
   await Promise.all(
     candidates.map(content => upsertMemoryWithDedup(projectId, userId, content, memoryMode))
   );
 
+  // 3. Limita a 20 memórias por projeto/usuário
   try {
     if (memoryMode === 'projeto' && projectId) {
       await runAsync(

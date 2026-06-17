@@ -12,7 +12,6 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { initDb } from './db/schema.js';
 import { errorHandler } from './utils/errorHandler.js';
-import { getJobQueue } from './utils/jobQueue.js';
 
 // Import routers
 import projectsRouter from './domain/routers/projects.js';
@@ -48,7 +47,7 @@ app.get('/api/health', (_, res) => res.json({ status: 'ok' }));
 app.use('/api', projectsRouter);
 app.use('/api', chatsRouter);
 app.use('/api', messagesRouter);
-app.use('/api', filesRouter);       // agora inclui rota autenticada para download
+app.use('/api', filesRouter);
 app.use('/api', sourcesRouter);
 app.use('/api', settingsRouter);
 app.use('/api', voiceRouter);
@@ -63,8 +62,6 @@ process.on('unhandledRejection', (reason) => console.error('Unhandled rejection:
 (async () => {
   try {
     await initDb();
-    const jobQueue = getJobQueue();
-    console.log('📋 JobQueue inicializada e rodando');
     app.listen(PORT, '0.0.0.0', () => console.log(`✅ Solaris backend na porta ${PORT}`));
   } catch (err) {
     console.error('❌ Falha ao iniciar:', err);

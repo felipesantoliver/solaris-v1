@@ -3,6 +3,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
+# Importa os roteadores
+from app.routers import voice, files, embeddings, search, memories
+
 load_dotenv()
 
 app = FastAPI(title="Solaris Python Microservice", version="1.0.0")
@@ -16,6 +19,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Registra as rotas
+app.include_router(voice.router, prefix="/voice", tags=["voice"])
+app.include_router(files.router, prefix="/files", tags=["files"])
+app.include_router(embeddings.router, prefix="/embeddings", tags=["embeddings"])
+app.include_router(search.router, prefix="/search", tags=["search"])
+app.include_router(memories.router, prefix="/memories", tags=["memories"])
 
 @app.get("/health")
 async def health_check():

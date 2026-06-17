@@ -1,4 +1,5 @@
 // domain/routers/files.js — Upload, listagem, deleção e download autenticado
+// Agora com extração de texto delegada ao microsserviço Python
 
 import { Router } from 'express';
 import multer from 'multer';
@@ -7,7 +8,6 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
 import { runAsync, getAsync, allAsync } from '../../db/database.js';
-import { getJobQueue } from '../../utils/jobQueue.js';
 import { invalidateSystemPromptCache } from '../ai/prompt.js';
 import { extractUserId } from '../../middleware/auth.js';
 
@@ -20,11 +20,12 @@ if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 const ALLOWED_EXTS = ['.pdf', '.txt', '.md', '.json', '.js', '.ts', '.py', '.css', '.html', '.csv'];
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 
+// URL do microsserviço Python
+const PYTHON_SERVICE_URL = process.env.PYTHON_SERVICE_URL || 'http://localhost:8000';
+
+// Configuração do multer com armazenamento em memória para enviar ao Python antes de salvar
 const upload = multer({
-  storage: multer.diskStorage({
-    destination: (_, __, cb) => cb(null, uploadsDir),
-    filename: (_, file, cb) => cb(null, `${Date.now()}-${file.originalname}`),
-  }),
+  storage: multer.memoryStorage(),
   limits: { fileSize: MAX_FILE_SIZE },
   fileFilter: (_, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
@@ -35,7 +36,7 @@ const upload = multer({
   },
 });
 
-// Listar arquivos do projeto (sem autenticação? mantido sem)
+// Listar arquivos do projeto
 router.get('/files/:projectId', async (req, res, next) => {
   try {
     const rows = await allAsync('SELECT id, original_name, mime_type, size, created_at FROM files WHERE project_id = $1 ORDER BY created_at DESC', [req.params.projectId]);
@@ -56,26 +57,59 @@ router.post('/files/:projectId', extractUserId, (req, res, next) => {
 }, async (req, res, next) => {
   const userId = req.userId;
   if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo enviado' });
+
+  const file = req.file;
+  const projectId = req.params.projectId;
+
+  let extractedText = '';
+
+  // 1. Enviar para o microsserviço Python extrair texto
   try {
-    const ext = path.extname(req.file.originalname).toLowerCase();
-    const textExts = ['.txt', '.md', '.json', '.js', '.ts', '.py', '.css', '.html', '.csv'];
-    let extractedText = '';
-    if (textExts.includes(ext)) {
-      extractedText = fs.readFileSync(req.file.path, 'utf-8').substring(0, 50000);
-    } else if (ext === '.pdf') {
-      try {
-        const pdfParse = (await import('pdf-parse')).default;
-        const data = await pdfParse(fs.readFileSync(req.file.path));
-        extractedText = data.text.substring(0, 50000);
-      } catch { extractedText = '[PDF: não foi possível extrair texto]'; }
+    const formData = new FormData();
+    const blob = new Blob([file.buffer], { type: file.mimetype || 'application/octet-stream' });
+    formData.append('file', blob, file.originalname);
+    formData.append('mime_type', file.mimetype || '');
+
+    const response = await fetch(`${PYTHON_SERVICE_URL}/files/extract-text`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      extractedText = data.text || '';
+    } else {
+      console.error(`Erro ao extrair texto com Python: ${response.status} ${await response.text()}`);
     }
-    const fileId = randomUUID();
-    await runAsync('INSERT INTO files (id, project_id, original_name, mime_type, size, extracted_text, path) VALUES ($1,$2,$3,$4,$5,$6,$7)', [fileId, req.params.projectId, req.file.originalname, req.file.mimetype, req.file.size, extractedText, req.file.path]);
-    const jobQueue = getJobQueue();
-    await jobQueue.addJob('upload', { fileId, projectId: req.params.projectId, filePath: req.file.path, extractedText }, 0);
-    if (userId) invalidateSystemPromptCache(userId, req.params.projectId);
-    res.status(201).json({ id: fileId, original_name: req.file.originalname, size: req.file.size, job_enqueued: true });
-  } catch (err) { next(err); }
+  } catch (err) {
+    console.error('Falha na comunicação com microsserviço Python:', err.message);
+    // Continua com texto vazio
+  }
+
+  // 2. Salvar o arquivo fisicamente no disco
+  const safeName = `${Date.now()}-${file.originalname}`;
+  const filePath = path.join(uploadsDir, safeName);
+  fs.writeFileSync(filePath, file.buffer);
+
+  // 3. Inserir no banco com o texto extraído (mesmo que vazio)
+  const fileId = randomUUID();
+  await runAsync(
+    'INSERT INTO files (id, project_id, original_name, mime_type, size, extracted_text, path) VALUES ($1,$2,$3,$4,$5,$6,$7)',
+    [fileId, projectId, file.originalname, file.mimetype, file.size, extractedText, filePath]
+  );
+
+  // 4. A indexação (embedding) pode ser feita sob demanda posteriormente
+  //    O jobQueue foi removido, então não enfileiramos mais automaticamente.
+
+  // 5. Invalidar cache do system prompt
+  if (userId) invalidateSystemPromptCache(userId, projectId);
+
+  res.status(201).json({
+    id: fileId,
+    original_name: file.originalname,
+    size: file.size,
+    extracted_text_length: extractedText.length
+  });
 });
 
 // Deletar arquivo (com autenticação)

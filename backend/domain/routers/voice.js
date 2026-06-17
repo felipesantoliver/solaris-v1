@@ -1,4 +1,4 @@
-// domain/routers/voice.js — Transcrição de voz via Groq Whisper
+// domain/routers/voice.js — Transcrição de voz via microsserviço Python (Whisper local)
 
 import { Router } from 'express';
 import multer from 'multer';
@@ -9,8 +9,11 @@ const router = Router();
 // Armazena o áudio em memória (não salva em disco)
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 25 * 1024 * 1024 }, // 25MB — limite da Groq
+  limits: { fileSize: 25 * 1024 * 1024 }, // 25MB
 });
+
+// URL do microsserviço Python (definida no .env)
+const PYTHON_SERVICE_URL = process.env.PYTHON_SERVICE_URL || 'http://localhost:8000';
 
 // ─── POST /api/voice/transcribe ────────────────────────────────────────────
 router.post('/voice/transcribe', extractUserId, upload.single('audio'), async (req, res) => {
@@ -19,32 +22,25 @@ router.post('/voice/transcribe', extractUserId, upload.single('audio'), async (r
       return res.status(400).json({ error: 'Nenhum arquivo de áudio enviado.' });
     }
 
-    const GROQ_API_KEY = process.env.GROQ_API_KEY;
-    if (!GROQ_API_KEY) {
-      return res.status(500).json({ error: 'GROQ_API_KEY não configurada no servidor.' });
-    }
+    // A GROQ_API_KEY era usada aqui, mas agora a transcrição é feita localmente.
+    // Mantemos a variável comentada para uso futuro (ex: fallback).
+    // const GROQ_API_KEY = process.env.GROQ_API_KEY;
 
-    // Monta o FormData para enviar para a Groq
+    // Constrói o FormData para enviar ao microsserviço Python
     const formData = new FormData();
-
-    // Groq aceita webm, mp4, mpeg, mpga, m4a, wav, ogg
     const blob = new Blob([req.file.buffer], { type: req.file.mimetype || 'audio/webm' });
     formData.append('file', blob, req.file.originalname || 'audio.webm');
-    formData.append('model', 'whisper-large-v3-turbo');
-    formData.append('language', 'pt'); // Português por padrão
-    formData.append('response_format', 'json');
 
-    const response = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+    // Faz a requisição para o Python service
+    const response = await fetch(`${PYTHON_SERVICE_URL}/voice/transcribe`, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${GROQ_API_KEY}`,
-      },
       body: formData,
+      // Não precisa de headers específicos; o FormData define o boundary automaticamente
     });
 
     if (!response.ok) {
       const errText = await response.text();
-      console.error('Groq API erro:', errText);
+      console.error('Erro no microsserviço Python:', errText);
       return res.status(502).json({ error: 'Erro ao transcrever áudio.' });
     }
 
