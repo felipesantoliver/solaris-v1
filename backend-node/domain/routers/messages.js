@@ -1,5 +1,4 @@
-// domain/routers/messages.js — Streaming SSE, fallback, busca RAG via Python, rate limit, mensagens paginadas
-
+// backend-node/domain/routers/messages.js
 import { Router } from 'express';
 import { getPool, runAsync, getAsync, allAsync } from '../../db/database.js';
 import { streamGeminiChat, geminiChat } from '../ai/gemini.js';
@@ -12,10 +11,11 @@ import {
 } from '../ai/prompt.js';
 import { resolveModelForRequest } from './projects.js';
 import { extractUserId } from '../../middleware/auth.js';
+import { getRedisClient, withRedis } from '../../utils/redis.js';
 
 const router = Router();
 
-// ─── Rate limit in-memory ──────────────────────────────────────────────────
+// ─── Rate limit in-memory (fallback) ──────────────────────────────────────
 const rateLimitMap = new Map();
 
 const RATE_LIMITS = {
@@ -23,17 +23,39 @@ const RATE_LIMITS = {
   auth:  { max: 5, windowMs: 60_000 },
 };
 
-function checkRateLimit(userId) {
+/**
+ * Verifica se o usuário excedeu o limite de requisições.
+ * Usa Redis se disponível, senão fallback para Map em memória.
+ */
+async function checkRateLimit(userId) {
   const isGuest = !userId || userId.length < 36;
   const { max, windowMs } = isGuest ? RATE_LIMITS.guest : RATE_LIMITS.auth;
-  const now = Date.now();
-  const timestamps = (rateLimitMap.get(userId) || []).filter(t => now - t < windowMs);
-  if (timestamps.length >= max) return false;
-  timestamps.push(now);
-  rateLimitMap.set(userId, timestamps);
-  return true;
+  const key = `ratelimit:${userId}`;
+
+  // Tenta usar Redis
+  const result = await withRedis(
+    async (client) => {
+      const current = await client.incr(key);
+      if (current === 1) {
+        await client.expire(key, Math.ceil(windowMs / 1000));
+      }
+      return current <= max;
+    },
+    // Fallback: usa Map em memória
+    async () => {
+      const now = Date.now();
+      const timestamps = (rateLimitMap.get(userId) || []).filter(t => now - t < windowMs);
+      if (timestamps.length >= max) return false;
+      timestamps.push(now);
+      rateLimitMap.set(userId, timestamps);
+      return true;
+    }
+  );
+
+  return result;
 }
 
+// Limpeza periódica do fallback Map (a cada 5 min)
 setInterval(() => {
   const now = Date.now();
   for (const [key, timestamps] of rateLimitMap.entries()) {
@@ -161,7 +183,7 @@ router.get('/messages/chat/:chatId', async (req, res, next) => {
 router.post('/messages/stream', extractUserId, async (req, res, next) => {
   const userId = req.userId;
 
-  if (!checkRateLimit(userId)) {
+  if (!(await checkRateLimit(userId))) {
     return res.status(429).json({ error: 'Muitas requisições. Aguarde antes de enviar outra mensagem.' });
   }
 
@@ -253,7 +275,7 @@ router.post('/messages/stream', extractUserId, async (req, res, next) => {
 router.post('/messages', extractUserId, async (req, res, next) => {
   const userId = req.userId;
 
-  if (!checkRateLimit(userId)) {
+  if (!(await checkRateLimit(userId))) {
     return res.status(429).json({ error: 'Muitas requisições. Aguarde antes de enviar outra mensagem.' });
   }
 

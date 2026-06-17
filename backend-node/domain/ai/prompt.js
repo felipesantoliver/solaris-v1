@@ -1,48 +1,111 @@
-// domain/ai/prompt.js — System prompt, cache em memória e extração de memórias (via Python)
-
+// backend-node/domain/ai/prompt.js
 import { getAsync, allAsync, runAsync } from '../../db/database.js';
 import { generateEmbedding, cosineSimilarity } from './embeddings.js';
+import { getRedisClient, withRedis } from '../../utils/redis.js';
 
-// ─── Cache em memória (Map) ────────────────────────────────────────────────
-const SYSTEM_PROMPT_CACHE_TTL = 60_000;
+// ─── Cache em memória (fallback) ──────────────────────────────────────────
+const SYSTEM_PROMPT_CACHE_TTL = 60_000; // 60 segundos
 const systemPromptCache = new Map();
 
 export function getCacheKey(userId, projectId, memoryMode) {
   return `${userId}:${projectId || 'none'}:${memoryMode}`;
 }
 
-export function getCachedSystemPrompt(userId, projectId, memoryMode) {
+/**
+ * Obtém o system prompt do cache.
+ * Tenta Redis primeiro, fallback para Map em memória.
+ */
+export async function getCachedSystemPrompt(userId, projectId, memoryMode) {
   const key = getCacheKey(userId, projectId, memoryMode);
-  const entry = systemPromptCache.get(key);
-  if (entry && Date.now() < entry.expiresAt) {
-    console.log(`💾 Cache hit para ${key}`);
-    return entry.data;
-  }
-  if (entry) systemPromptCache.delete(key);
-  return null;
+  const redisKey = `sysprompt:${key}`;
+
+  const result = await withRedis(
+    async (client) => {
+      const data = await client.get(redisKey);
+      if (data) {
+        console.log(`💾 Cache hit (Redis) para ${key}`);
+        return JSON.parse(data);
+      }
+      return null;
+    },
+    // Fallback: Map em memória
+    async () => {
+      const entry = systemPromptCache.get(key);
+      if (entry && Date.now() < entry.expiresAt) {
+        console.log(`💾 Cache hit (memory) para ${key}`);
+        return entry.data;
+      }
+      if (entry) systemPromptCache.delete(key);
+      return null;
+    }
+  );
+
+  return result;
 }
 
-export function setCachedSystemPrompt(userId, projectId, memoryMode, data) {
+/**
+ * Armazena o system prompt no cache.
+ * Tenta Redis primeiro, fallback para Map em memória.
+ */
+export async function setCachedSystemPrompt(userId, projectId, memoryMode, data) {
   const key = getCacheKey(userId, projectId, memoryMode);
-  systemPromptCache.set(key, { data, expiresAt: Date.now() + SYSTEM_PROMPT_CACHE_TTL });
-  console.log(`💾 Cache set para ${key}`);
+  const redisKey = `sysprompt:${key}`;
+  const ttlSeconds = Math.ceil(SYSTEM_PROMPT_CACHE_TTL / 1000);
+
+  await withRedis(
+    async (client) => {
+      await client.set(redisKey, JSON.stringify(data), 'EX', ttlSeconds);
+      console.log(`💾 Cache set (Redis) para ${key}`);
+    },
+    // Fallback: Map em memória
+    async () => {
+      systemPromptCache.set(key, { data, expiresAt: Date.now() + SYSTEM_PROMPT_CACHE_TTL });
+      console.log(`💾 Cache set (memory) para ${key}`);
+    }
+  );
 }
 
-export function invalidateSystemPromptCache(userId, projectId) {
+/**
+ * Invalida o cache para um usuário/projeto específico.
+ * Remove do Redis e do Map local.
+ */
+export async function invalidateSystemPromptCache(userId, projectId) {
   const prefix = `${userId}:${projectId || 'none'}:`;
+
+  // Remove do Redis (usando SCAN para chaves com prefixo)
+  await withRedis(async (client) => {
+    let cursor = '0';
+    const keysToDelete = [];
+    do {
+      const reply = await client.scan(cursor, 'MATCH', `sysprompt:${prefix}*`, 'COUNT', 100);
+      cursor = reply[0];
+      keysToDelete.push(...reply[1]);
+    } while (cursor !== '0');
+
+    if (keysToDelete.length > 0) {
+      await client.del(...keysToDelete);
+      console.log(`🗑️ Cache invalidado (Redis) para ${prefix}`);
+    }
+  });
+
+  // Remove do Map local
   for (const key of systemPromptCache.keys()) {
     if (key.startsWith(prefix)) {
       systemPromptCache.delete(key);
-      console.log(`🗑️ Cache invalidado para ${key}`);
+      console.log(`🗑️ Cache invalidado (memory) para ${key}`);
     }
   }
 }
 
+// Limpeza periódica do Map local (a cada 5 min)
 setInterval(() => {
   const now = Date.now();
   let deleted = 0;
   for (const [key, entry] of systemPromptCache.entries()) {
-    if (now >= entry.expiresAt) { systemPromptCache.delete(key); deleted++; }
+    if (now >= entry.expiresAt) {
+      systemPromptCache.delete(key);
+      deleted++;
+    }
   }
   if (deleted) console.log(`🧹 Cache limpo: ${deleted} entradas expiradas`);
 }, 5 * 60_000);
@@ -141,7 +204,7 @@ export async function getBaseSystemPromptWithCache(userId, projectId, memoryMode
     return assembleBaseSystemPrompt({ settings: null, project, memories, memoryMode });
   }
 
-  const cached = getCachedSystemPrompt(userId, projectId, memoryMode);
+  const cached = await getCachedSystemPrompt(userId, projectId, memoryMode);
   if (cached) return cached;
 
   const [settings, project, memories] = await Promise.all([
@@ -156,7 +219,7 @@ export async function getBaseSystemPromptWithCache(userId, projectId, memoryMode
   ]);
 
   const systemPrompt = assembleBaseSystemPrompt({ settings, project, memories, memoryMode });
-  setCachedSystemPrompt(userId, projectId, memoryMode, systemPrompt);
+  await setCachedSystemPrompt(userId, projectId, memoryMode, systemPrompt);
   return systemPrompt;
 }
 
