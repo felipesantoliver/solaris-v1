@@ -76,8 +76,21 @@ export const api = {
     return safeJson(res);
   },
 
-  async getUserChats() {
-    const res = await fetch(`${API_BASE}/user/chats`, { headers: await getAuthHeaders() });
+  // Lista chats de um projeto com paginação
+  async getProjectChats(projectId, { page = 1, limit = 30 } = {}) {
+    const url = new URL(`${API_BASE}/projects/${projectId}/chats`);
+    url.searchParams.set('page', page);
+    url.searchParams.set('limit', limit);
+    const res = await fetch(url, { headers: await getAuthHeaders() });
+    return safeJson(res);
+  },
+
+  // Lista chats avulsos do usuário com paginação
+  async getUserChats({ page = 1, limit = 30 } = {}) {
+    const url = new URL(`${API_BASE}/user/chats`);
+    url.searchParams.set('page', page);
+    url.searchParams.set('limit', limit);
+    const res = await fetch(url, { headers: await getAuthHeaders() });
     return safeJson(res);
   },
 
@@ -87,8 +100,11 @@ export const api = {
   },
 
   // ─── Messages ─────────────────────────────────────────────────────────────
-  async getMessages(chatId) {
-    const res = await fetch(`${API_BASE}/messages/chat/${chatId}`, { headers: await getAuthHeaders() });
+  async getMessages(chatId, { page = 1, limit = 30 } = {}) {
+    const url = new URL(`${API_BASE}/messages/chat/${chatId}`);
+    url.searchParams.set('page', page);
+    url.searchParams.set('limit', limit);
+    const res = await fetch(url, { headers: await getAuthHeaders() });
     return safeJson(res);
   },
 

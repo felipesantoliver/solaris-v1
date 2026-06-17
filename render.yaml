@@ -4,7 +4,7 @@ services:
   - type: web
     name: solaris-node
     env: node
-    rootDir: backend                     # ← pasta onde está o package.json
+    rootDir: backend-node                # ← pasta onde está o package.json
     buildCommand: npm install
     startCommand: node server.js
     envVars:
@@ -29,7 +29,7 @@ services:
   - type: web
     name: solaris-python
     env: python
-    rootDir: python-services             # ← pasta onde está o requirements.txt
+    rootDir: backend-python              # ← pasta onde está o requirements.txt
     buildCommand: |
       pip install -r requirements.txt
       python -m spacy download pt_core_news_sm

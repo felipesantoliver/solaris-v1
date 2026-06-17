@@ -1,7 +1,7 @@
-// domain/routers/messages.js — Streaming SSE, fallback, busca RAG via Python, rate limit
+// domain/routers/messages.js — Streaming SSE, fallback, busca RAG via Python, rate limit, mensagens paginadas
 
 import { Router } from 'express';
-import { runAsync, getAsync, allAsync } from '../../db/database.js';
+import { getPool, runAsync, getAsync, allAsync } from '../../db/database.js';
 import { streamGeminiChat, geminiChat } from '../ai/gemini.js';
 import {
   getBaseSystemPromptWithCache,
@@ -102,8 +102,6 @@ async function searchRelevantChunks(projectId, query, limit = 3) {
     }
 
     const data = await response.json();
-    // O Python retorna array com {text, score}, já ordenado e limitado a top 3
-    // Filtra por score > 0.65 (já feito no Python, mas garantimos)
     return data.filter(item => item.score > 0.65).map(item => item.text);
   } catch (err) {
     console.error('Falha na busca RAG via Python:', err.message);
@@ -115,19 +113,47 @@ function processResponse(text) {
   return sanitizeModelResponse(cleanAssistantMessage(text));
 }
 
-// ─── GET mensagens de um chat ──────────────────────────────────────────────
+// ─── GET mensagens de um chat (paginado) ──────────────────────────────────
 router.get('/messages/chat/:chatId', async (req, res, next) => {
+  const chatId = req.params.chatId;
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 30;
+  const offset = (page - 1) * limit;
+
   try {
-    const rows = await allAsync(
-      'SELECT id, role, content, edited, edit_history, created_at FROM messages WHERE chat_id = $1 ORDER BY created_at ASC',
-      [req.params.chatId]
+    const pool = await getPool();
+
+    // Total de mensagens do chat
+    const totalResult = await pool.query(
+      'SELECT COUNT(*) AS total FROM messages WHERE chat_id = $1',
+      [chatId]
     );
-    const cleanedRows = rows.map(msg =>
+    const total = parseInt(totalResult.rows[0]?.total || 0);
+
+    // Dados paginados (ordenados por created_at ASC para manter ordem cronológica)
+    const dataResult = await pool.query(
+      `SELECT id, role, content, edited, edit_history, created_at
+       FROM messages
+       WHERE chat_id = $1
+       ORDER BY created_at ASC
+       LIMIT $2 OFFSET $3`,
+      [chatId, limit, offset]
+    );
+
+    // Limpa o conteúdo das mensagens do assistente
+    const cleanedRows = dataResult.rows.map(msg =>
       msg.role === 'assistant' && msg.content
         ? { ...msg, content: processResponse(msg.content) }
         : msg
     );
-    res.json(cleanedRows);
+
+    res.json({
+      data: cleanedRows,
+      total,
+      page,
+      limit,
+      hasMore: offset + dataResult.rows.length < total
+    });
   } catch (err) { next(err); }
 });
 
@@ -163,7 +189,6 @@ router.post('/messages/stream', extractUserId, async (req, res, next) => {
   try {
     await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'user', message]);
 
-    // Busca chunks via Python
     let relevantChunks = [];
     if (projectId) relevantChunks = await searchRelevantChunks(projectId, message, 3);
 
