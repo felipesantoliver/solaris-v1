@@ -1,31 +1,16 @@
-# Build tools (must come first — openai-whisper needs pkg_resources, removed in Python 3.14)
 setuptools>=68.0.0,<81
-
-# Web framework
 fastapi==0.115.12
 uvicorn[standard]==0.34.0
 python-multipart==0.0.20
 python-dotenv==1.0.1
 httpx==0.28.1
-
-# ML / embeddings
 sentence-transformers==3.3.1
 numpy==2.2.4
 scikit-learn==1.6.1
-
-# Speech recognition
 openai-whisper==20240930
 soundfile>=0.12.1
-
-# NLP
 spacy==3.8.4
-
-# PDF processing
 pypdf==5.1.0
 pdfplumber==0.11.4
-
-# Database
 psycopg2-binary==2.9.10
-
-# Groq LLM client
 groq>=0.9.0
