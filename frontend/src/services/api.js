@@ -108,10 +108,15 @@ export const api = {
     return safeJson(res);
   },
 
-  async sendMessageStream(chatId, projectId, message, _userId, model, onChunk, onTitle, onError, onDone, onMaxTokens) {
+  async sendMessageStream(chatId, projectId, message, _userId, model, codingMode, onChunk, onTitle, onError, onDone, onMaxTokens) {
     const response = await fetch(`${API_BASE}/messages/stream`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-model': model, ...(await getAuthHeaders()) },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-model': model,
+        'x-coding-mode': codingMode ? 'true' : 'false',
+        ...(await getAuthHeaders()),
+      },
       body: JSON.stringify({ project_id: projectId || null, chat_id: chatId, message }),
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);

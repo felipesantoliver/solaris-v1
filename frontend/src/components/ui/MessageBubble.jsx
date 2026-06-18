@@ -200,51 +200,95 @@ export const MessageBubble = React.memo(({
 
   const showCursor = isLastAssistant && isStreaming && msg.content.length > 0;
 
+  // Estilo base para mensagens do assistente
+  const assistantTextClass = `text-base leading-relaxed transition-colors duration-500 ${
+    darkMode ? 'text-white/60 font-light' : 'text-gray-600 font-light'
+  }`;
+
   const renderContent = () => {
-    if (msg.role === 'assistant' && programmingMode) {
+    // Mensagens do usuário: sempre texto puro
+    if (msg.role === 'user') {
       return (
-        <div className="relative">
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            components={{
-              code({ node, inline, className, children, ...props }) {
-                const match = /language-(\w+)/.exec(className || '');
-                const language = match ? match[1] : '';
-                return !inline ? (
-                  <CodeBlock language={language} darkMode={darkMode}>{children}</CodeBlock>
-                ) : (
-                  <code className={`${className} bg-amber-400/10 text-amber-300 px-1.5 py-0.5 rounded text-[0.85em] font-mono`} {...props}>
-                    {children}
-                  </code>
-                );
-              },
-              h3({ children, ...props }) {
-                const isFileName = /^[`\w\-\.]+$/.test(children);
-                if (isFileName) {
-                  return <h3 className="text-sm font-mono font-bold mt-4 mb-2 text-amber-400 border-l-2 border-amber-400 pl-2" {...props}>{children}</h3>;
-                }
-                return <h3 className="text-sm font-semibold mt-3 mb-1" {...props}>{children}</h3>;
-              },
-            }}
-          >
-            {msg.content}
-          </ReactMarkdown>
-          {showCursor && (
-            <span className={`inline-block w-0.5 h-4 ml-0.5 align-middle animate-pulse ${darkMode ? 'bg-white/60' : 'bg-black/60'}`} />
-          )}
+        <div className={`text-base leading-relaxed transition-colors duration-500 whitespace-pre-wrap ${
+          darkMode ? 'text-white font-medium' : 'text-black font-medium'
+        }`}>
+          {msg.content}
         </div>
       );
     }
 
+    // Mensagens do assistente: sempre ReactMarkdown (bold, listas, etc.)
+    // Se a mensagem foi enviada com code mode, também renderiza blocos de código
+    const msgHasCodeMode = msg.codingMode === true;
+
     return (
-      <div className={`text-base leading-relaxed transition-colors duration-500 whitespace-pre-wrap ${
-        msg.role === 'user'
-          ? (darkMode ? 'text-white font-medium' : 'text-black font-medium')
-          : (darkMode ? 'text-white/60 font-light' : 'text-gray-600 font-light')
-      }`}>
-        {msg.content}
+      <div className={`relative ${assistantTextClass}`}>
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          components={{
+            // Negrito e itálico funcionam em todos os modos
+            strong({ children }) {
+              return <strong className="font-semibold">{children}</strong>;
+            },
+            em({ children }) {
+              return <em className="italic">{children}</em>;
+            },
+            // Listas
+            ul({ children }) {
+              return <ul className="list-disc list-inside space-y-1 my-2">{children}</ul>;
+            },
+            ol({ children }) {
+              return <ol className="list-decimal list-inside space-y-1 my-2">{children}</ol>;
+            },
+            li({ children }) {
+              return <li className="text-base leading-relaxed">{children}</li>;
+            },
+            // Parágrafos
+            p({ children }) {
+              return <p className="mb-2 last:mb-0">{children}</p>;
+            },
+            // Código inline: sempre renderizado
+            // Blocos de código: só com syntax highlighting se msg foi enviada com code mode
+            code({ node, inline, className, children, ...props }) {
+              const match = /language-(\w+)/.exec(className || '');
+              const language = match ? match[1] : '';
+              if (!inline) {
+                return msgHasCodeMode
+                  ? <CodeBlock language={language} darkMode={darkMode}>{children}</CodeBlock>
+                  : (
+                    <pre className={`my-3 p-3 rounded-lg text-sm font-mono overflow-x-auto ${darkMode ? 'bg-white/5 text-white/80' : 'bg-black/5 text-black/80'}`}>
+                      <code>{children}</code>
+                    </pre>
+                  );
+              }
+              return (
+                <code
+                  className={`${className} ${msgHasCodeMode ? 'bg-amber-400/10 text-amber-300' : (darkMode ? 'bg-white/10 text-white/80' : 'bg-black/8 text-black/70')} px-1.5 py-0.5 rounded text-[0.85em] font-mono`}
+                  {...props}
+                >
+                  {children}
+                </code>
+              );
+            },
+            h3({ children, ...props }) {
+              const isFileName = /^[`\w\-\.]+$/.test(children);
+              if (isFileName && msgHasCodeMode) {
+                return <h3 className="text-sm font-mono font-bold mt-4 mb-2 text-amber-400 border-l-2 border-amber-400 pl-2" {...props}>{children}</h3>;
+              }
+              return <h3 className={`text-sm font-semibold mt-3 mb-1 ${darkMode ? 'text-white/80' : 'text-black/80'}`} {...props}>{children}</h3>;
+            },
+            h1({ children, ...props }) {
+              return <h1 className={`text-base font-bold mt-4 mb-2 ${darkMode ? 'text-white/90' : 'text-black/90'}`} {...props}>{children}</h1>;
+            },
+            h2({ children, ...props }) {
+              return <h2 className={`text-sm font-bold mt-3 mb-1 ${darkMode ? 'text-white/85' : 'text-black/85'}`} {...props}>{children}</h2>;
+            },
+          }}
+        >
+          {msg.content}
+        </ReactMarkdown>
         {showCursor && (
-          <span className={`inline-block w-0.5 h-4 ml-0.5 align-middle animate-pulse ${darkMode ? 'bg-white/40' : 'bg-black/40'}`} />
+          <span className={`inline-block w-0.5 h-4 ml-0.5 align-middle animate-pulse ${darkMode ? 'bg-white/60' : 'bg-black/60'}`} />
         )}
       </div>
     );
@@ -254,10 +298,15 @@ export const MessageBubble = React.memo(({
     <div className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} group/msg animate-in fade-in slide-in-from-bottom-2 duration-700`}>
       <div className={`max-w-[70%] ${msg.role === 'user' ? 'text-right' : 'text-left'}`}>
         <div className={`text-[9px] uppercase tracking-[0.2em] font-bold mb-3 ${theme.textMuted}`}>
-          {msg.role === 'user' ? 'Você' : (
+          {msg.role === 'user' ? (
+            <span className="flex items-center gap-1.5 justify-end">
+              Você
+              {msg.codingMode && <span className="text-[8px] bg-cyan-500/15 text-cyan-400/70 px-1.5 rounded-full">code</span>}
+            </span>
+          ) : (
             <span className="flex items-center gap-1.5">
               Solaris{msg.model === 'pro' && <span className="flex items-center gap-0.5 text-amber-400 opacity-70"><Star size={8} />pro</span>}
-              {programmingMode && msg.role === 'assistant' && <span className="ml-2 text-[8px] bg-amber-500/20 text-amber-300 px-1.5 rounded-full">modo programador</span>}
+              {msg.codingMode && <span className="ml-2 text-[8px] bg-amber-500/20 text-amber-300 px-1.5 rounded-full">modo programador</span>}
             </span>
           )}
           {msg.edited && <span className="ml-2 normal-case tracking-normal font-normal opacity-50">(editado)</span>}

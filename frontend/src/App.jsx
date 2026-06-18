@@ -78,7 +78,7 @@ export default function App() {
     await sendMessage(input, activeChatId, activeProjectId, async (projectId) => {
       const nc = await createChatInProject(projectId);
       return nc;
-    });
+    }, programmingMode);
     setInput('');
   };
 

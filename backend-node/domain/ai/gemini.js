@@ -24,8 +24,8 @@ export function geminiUrl(modelKey, stream = false) {
 }
 
 const MAX_OUTPUT_TOKENS = {
-  flash: 1024,
-  pro:   2048,
+  flash: 8192,   // era 1024 — muito baixo para gerar código completo
+  pro:   16384,  // era 2048 — insuficiente para respostas longas
 };
 
 export function buildGeminiBody(messages, systemPrompt, modelKey = 'flash') {

@@ -236,6 +236,7 @@ router.post('/messages/stream', extractUserId, async (req, res, next) => {
   const projectId = (project_id && project_id !== 'none') ? project_id : null;
 
   const modelKey = await resolveModelForRequest(userId, projectId, req.headers['x-model']);
+  const isCodingMode = req.headers['x-coding-mode'] === 'true';
 
   let memoryMode = 'projeto';
   if (projectId) {
@@ -276,6 +277,9 @@ router.post('/messages/stream', extractUserId, async (req, res, next) => {
     const baseSystemPrompt = await getBaseSystemPromptWithCache(userId, projectId, memoryMode, message);
 
     let finalSystemPrompt = baseSystemPrompt;
+    if (isCodingMode) {
+      finalSystemPrompt += '\n\nMODO PROGRAMADOR ATIVO: O usuário solicitou código. Forneça o código completo e funcional, sem truncar. Use blocos de código markdown com a linguagem correta (ex: ```cpp, ```python, ```javascript). Não omita partes do código.';
+    }
     if (relevantChunks.length > 0) {
       finalSystemPrompt += `\nTrechos relevantes dos seus documentos:\n\n`;
       relevantChunks.forEach((chunk, idx) => { finalSystemPrompt += `[${idx + 1}] ${chunk}\n\n`; });

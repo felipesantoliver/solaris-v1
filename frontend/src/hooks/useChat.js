@@ -112,13 +112,13 @@ export function useChat(effectiveUserId, authUser, model, activeProjectId) {
   }, [activeChatId]);
 
   // ── Enviar mensagem (SSE streaming real) ──────────────────────────────────
-  const sendMessage = useCallback(async (text, chatId, projectId, onCreateChat) => {
+  const sendMessage = useCallback(async (text, chatId, projectId, onCreateChat, codingMode = false) => {
     if (!text.trim() || isLoading || isStreaming) return;
     setSendError('');
     setMaxTokensReached(false);
 
     let currentChatId = chatId;
-    setMessages(prev => [...prev, { role: 'user', content: text }]);
+    setMessages(prev => [...prev, { role: 'user', content: text, codingMode }]);
 
     if (!currentChatId) {
       try {
@@ -140,7 +140,7 @@ export function useChat(effectiveUserId, authUser, model, activeProjectId) {
 
     setMessages(prev => {
       assistantIdxRef.current = prev.length;
-      return [...prev, { role: 'assistant', content: '', model: authUser ? model : 'flash' }];
+      return [...prev, { role: 'assistant', content: '', model: authUser ? model : 'flash', codingMode }];
     });
 
     showStatusSequence().then(() => setStatusMessage(''));
@@ -154,6 +154,7 @@ export function useChat(effectiveUserId, authUser, model, activeProjectId) {
         text,
         effectiveUserId,
         authUser ? model : 'flash',
+        codingMode,
 
         // onChunk
         (chunk) => {
