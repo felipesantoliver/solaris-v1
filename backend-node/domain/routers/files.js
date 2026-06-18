@@ -1,36 +1,41 @@
 // domain/routers/files.js — Upload, listagem, deleção e download autenticado
-// Agora com extração de texto delegada ao microsserviço Python
+//
+// Problema 5 corrigido: arquivos não são mais salvos no disco (ephemeral no Render).
+//   O buffer binário vai para a coluna "content BYTEA" da tabela files.
+//   O download lê diretamente do banco.
+//
+// Problema 4 corrigido: após inserir o arquivo, indexFileChunks() é chamado para
+//   gerar os file_chunks com embedding, habilitando o RAG.
 
 import { Router } from 'express';
 import multer from 'multer';
 import path from 'path';
-import fs from 'fs';
-import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
 import { runAsync, getAsync, allAsync } from '../../db/database.js';
 import { invalidateSystemPromptCache } from '../ai/prompt.js';
+import { indexFileChunks } from '../ai/embeddings.js';
 import { extractUserId } from '../../middleware/auth.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const router = Router();
-
-const uploadsDir = path.join(__dirname, '../../../uploads');
-if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
 const ALLOWED_EXTS = ['.pdf', '.txt', '.md', '.json', '.js', '.ts', '.py', '.css', '.html', '.csv'];
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 
-// URL do microsserviço Python
 const PYTHON_SERVICE_URL = process.env.PYTHON_SERVICE_URL || 'http://localhost:8000';
 
-// Configuração do multer com armazenamento em memória para enviar ao Python antes de salvar
+// Armazena o arquivo em memória para depois salvar no banco
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: MAX_FILE_SIZE },
   fileFilter: (_, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
     if (!ALLOWED_EXTS.includes(ext)) {
-      return cb(Object.assign(new Error(`Tipo de arquivo não permitido: ${ext}. Permitidos: ${ALLOWED_EXTS.join(', ')}`), { code: 'INVALID_FILE_TYPE' }));
+      return cb(
+        Object.assign(
+          new Error(`Tipo de arquivo não permitido: ${ext}. Permitidos: ${ALLOWED_EXTS.join(', ')}`),
+          { code: 'INVALID_FILE_TYPE' }
+        )
+      );
     }
     cb(null, true);
   },
@@ -39,7 +44,10 @@ const upload = multer({
 // Listar arquivos do projeto
 router.get('/files/:projectId', async (req, res, next) => {
   try {
-    const rows = await allAsync('SELECT id, original_name, mime_type, size, created_at FROM files WHERE project_id = $1 ORDER BY created_at DESC', [req.params.projectId]);
+    const rows = await allAsync(
+      'SELECT id, original_name, mime_type, size, created_at FROM files WHERE project_id = $1 ORDER BY created_at DESC',
+      [req.params.projectId]
+    );
     res.json(rows);
   } catch (err) { next(err); }
 });
@@ -55,15 +63,14 @@ router.post('/files/:projectId', extractUserId, (req, res, next) => {
     next();
   });
 }, async (req, res, next) => {
-  const userId = req.userId;
+  const userId   = req.userId;
   if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo enviado' });
 
-  const file = req.file;
+  const file      = req.file;
   const projectId = req.params.projectId;
 
+  // 1. Extrair texto via microsserviço Python
   let extractedText = '';
-
-  // 1. Enviar para o microsserviço Python extrair texto
   try {
     const formData = new FormData();
     const blob = new Blob([file.buffer], { type: file.mimetype || 'application/octet-stream' });
@@ -79,67 +86,82 @@ router.post('/files/:projectId', extractUserId, (req, res, next) => {
       const data = await response.json();
       extractedText = data.text || '';
     } else {
-      console.error(`Erro ao extrair texto com Python: ${response.status} ${await response.text()}`);
+      console.error(`Erro ao extrair texto com Python: ${response.status}`);
     }
   } catch (err) {
     console.error('Falha na comunicação com microsserviço Python:', err.message);
-    // Continua com texto vazio
   }
 
-  // 2. Salvar o arquivo fisicamente no disco
-  const safeName = `${Date.now()}-${file.originalname}`;
-  const filePath = path.join(uploadsDir, safeName);
-  fs.writeFileSync(filePath, file.buffer);
-
-  // 3. Inserir no banco com o texto extraído (mesmo que vazio)
+  // 2. Inserir no banco — o buffer binário vai para a coluna content (BYTEA)
+  //    Problema 5: sem escrita em disco; o Render não tem volume persistente.
   const fileId = randomUUID();
-  await runAsync(
-    'INSERT INTO files (id, project_id, original_name, mime_type, size, extracted_text, path) VALUES ($1,$2,$3,$4,$5,$6,$7)',
-    [fileId, projectId, file.originalname, file.mimetype, file.size, extractedText, filePath]
-  );
+  try {
+    await runAsync(
+      `INSERT INTO files (id, project_id, original_name, mime_type, size, extracted_text, content)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [fileId, projectId, file.originalname, file.mimetype, file.size, extractedText, file.buffer]
+    );
+  } catch (err) {
+    return next(err);
+  }
 
-  // 4. A indexação (embedding) pode ser feita sob demanda posteriormente
-  //    O jobQueue foi removido, então não enfileiramos mais automaticamente.
+  // 3. Indexar chunks com embeddings (assíncrono — não bloqueia a resposta)
+  //    Problema 4: sem essa chamada o RAG nunca encontra nada.
+  if (extractedText) {
+    indexFileChunks(fileId, extractedText, { runAsync }).catch(err =>
+      console.error('❌ Erro ao indexar chunks:', err.message)
+    );
+  }
 
-  // 5. Invalidar cache do system prompt
+  // 4. Invalidar cache do system prompt
   if (userId) invalidateSystemPromptCache(userId, projectId);
 
   res.status(201).json({
     id: fileId,
     original_name: file.originalname,
     size: file.size,
-    extracted_text_length: extractedText.length
+    extracted_text_length: extractedText.length,
   });
 });
 
-// Deletar arquivo (com autenticação)
+// Deletar arquivo
 router.delete('/files/:projectId/:fileId', extractUserId, async (req, res, next) => {
   const userId = req.userId;
   try {
-    const file = await getAsync('SELECT * FROM files WHERE id = $1 AND project_id = $2', [req.params.fileId, req.params.projectId]);
+    const file = await getAsync(
+      'SELECT id FROM files WHERE id = $1 AND project_id = $2',
+      [req.params.fileId, req.params.projectId]
+    );
     if (!file) return res.status(404).json({ error: 'Arquivo não encontrado' });
-    if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
+
     await runAsync('DELETE FROM files WHERE id = $1', [req.params.fileId]);
     if (userId) invalidateSystemPromptCache(userId, req.params.projectId);
     res.json({ ok: true });
   } catch (err) { next(err); }
 });
 
-// Download de arquivo com autenticação
+// Download de arquivo — lê diretamente do banco (sem depender do disco)
 router.get('/files/:id/download', extractUserId, async (req, res, next) => {
   try {
     const fileId = req.params.id;
     const file = await getAsync(
-      'SELECT f.*, p.user_id as project_user_id FROM files f JOIN projects p ON f.project_id = p.id WHERE f.id = $1',
+      `SELECT f.id, f.original_name, f.mime_type, f.content,
+              p.user_id AS project_user_id
+       FROM files f
+       JOIN projects p ON f.project_id = p.id
+       WHERE f.id = $1`,
       [fileId]
     );
+
     if (!file) return res.status(404).json({ error: 'Arquivo não encontrado' });
-    if (file.project_user_id !== req.userId) return res.status(403).json({ error: 'Acesso negado' });
-    if (!file.path || !fs.existsSync(file.path)) return res.status(404).json({ error: 'Arquivo não encontrado no disco' });
+    if (file.project_user_id !== req.userId)
+      return res.status(403).json({ error: 'Acesso negado' });
+    if (!file.content)
+      return res.status(404).json({ error: 'Conteúdo do arquivo não disponível' });
 
     res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(file.original_name)}"`);
     res.setHeader('Content-Type', file.mime_type || 'application/octet-stream');
-    res.sendFile(file.path);
+    res.send(file.content); // file.content é um Buffer (pg retorna BYTEA como Buffer)
   } catch (err) { next(err); }
 });
 

@@ -1,16 +1,14 @@
-import os
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from sentence_transformers import SentenceTransformer
+
+from app.ml_models import get_embedder
 
 router = APIRouter()
 
-# Carrega o modelo uma única vez (cache)
-MODEL_NAME = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
-model = SentenceTransformer(MODEL_NAME)
 
 class EmbeddingRequest(BaseModel):
     text: str
+
 
 @router.post("/generate")
 async def generate_embedding(request: EmbeddingRequest):
@@ -22,9 +20,8 @@ async def generate_embedding(request: EmbeddingRequest):
         raise HTTPException(status_code=400, detail="Texto vazio.")
 
     try:
-        embedding = model.encode(text, convert_to_numpy=True)
-        # Converte para lista de floats (JSON serializável)
-        embedding_list = embedding.tolist()
-        return {"embedding": embedding_list}
+        embedder = get_embedder()
+        embedding = embedder.encode(text, convert_to_numpy=True)
+        return {"embedding": embedding.tolist()}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao gerar embedding: {str(e)}")

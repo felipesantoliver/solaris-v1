@@ -140,18 +140,30 @@ export function sanitizeModelResponse(text) {
 }
 
 // ─── Funções de chamada ao Python ──────────────────────────────────────────
+// Problema 7: timeout adicionado em todas as chamadas ao Python
+const PYTHON_TIMEOUT_MS = 12_000; // 12 s
+
 async function callPython(endpoint, payload) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PYTHON_TIMEOUT_MS);
   try {
     const response = await fetch(`${PYTHON_SERVICE_URL}${endpoint}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+      signal: controller.signal,
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     return await response.json();
   } catch (err) {
-    console.error(`❌ Falha na chamada ao Python (${endpoint}):`, err.message);
+    if (err.name === 'AbortError') {
+      console.error(`⏱️ Timeout na chamada ao Python (${endpoint})`);
+    } else {
+      console.error(`❌ Falha na chamada ao Python (${endpoint}):`, err.message);
+    }
     return null;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -203,18 +215,15 @@ export function assembleBaseSystemPrompt({ settings, project, synthesis, memoryM
   prompt += `\nEvite respostas genéricas. Nunca invente informações.\n\n`;
   prompt += BASE_IDENTITY_INSTRUCTION;
 
-  // Injeção condicional de memórias com base na intenção
   if (synthesis && synthesis.length > 0) {
     if (intent === 'planning') {
-      // Prioriza memórias estratégicas
       prompt += `\n=== MEMÓRIAS ESTRATÉGICAS (relevantes para planejamento) ===\n${synthesis}\n\n`;
     } else if (intent === 'technical') {
-      // Reduz memórias (já foram sintetizadas, mas podemos indicar que são técnicas)
       prompt += `\n=== MEMÓRIAS TÉCNICAS RELEVANTES ===\n${synthesis}\n\n`;
     } else if (intent === 'review' || intent === 'general') {
       prompt += `\n=== MEMÓRIAS RELEVANTES ===\n${synthesis}\n\n`;
     }
-    // Se for 'continuation', não injeta memórias
+    // 'continuation' não injeta memórias
   }
 
   return prompt;
@@ -223,10 +232,9 @@ export function assembleBaseSystemPrompt({ settings, project, synthesis, memoryM
 // ─── Busca com cache e síntese ────────────────────────────────────────────
 export async function getBaseSystemPromptWithCache(userId, projectId, memoryMode, userQuery = '') {
   if (!userId) {
-    const [, project] = await Promise.all([
-      Promise.resolve(null),
-      projectId ? getAsync('SELECT * FROM projects WHERE id = $1', [projectId]) : Promise.resolve(null),
-    ]);
+    const project = projectId
+      ? await getAsync('SELECT * FROM projects WHERE id = $1', [projectId])
+      : null;
     return assembleBaseSystemPrompt({ settings: null, project, synthesis: null, memoryMode, intent: 'general' });
   }
 
@@ -249,10 +257,8 @@ export async function getBaseSystemPromptWithCache(userId, projectId, memoryMode
     }
   }
 
-  // Classifica intenção
   const intent = await classifyIntent(userQuery);
 
-  // Síntese de memórias (se houver e não for continuation)
   if (memories.length > 0 && userQuery && intent !== 'continuation') {
     const result = await synthesizeMemories(userQuery, memories);
     if (result) {
@@ -260,7 +266,6 @@ export async function getBaseSystemPromptWithCache(userId, projectId, memoryMode
     }
   }
 
-  // Fallback: se síntese falhou, injeta todas (exceto se continuation)
   if (!synthesis && memories.length > 0 && intent !== 'continuation') {
     synthesis = memories.map(m => m.content).join('\n');
   }
@@ -296,7 +301,8 @@ export async function selectContextWindow(history, userQuery = '') {
     if (synthesisResult.summary) {
       result.push({ role: 'user', content: `[Resumo do histórico anterior]\n${synthesisResult.summary}` });
     }
-    for (const msg of synthesisResult.recent) {
+    const recent = synthesisResult.recent_messages || synthesisResult.recent || [];
+    for (const msg of recent) {
       result.push(msg);
     }
     return result;
@@ -305,8 +311,32 @@ export async function selectContextWindow(history, userQuery = '') {
   return deduped.slice(-MAX_CONTEXT_MESSAGES);
 }
 
-// ─── Extração de memórias (mantida) ──────────────────────────────────────
+// ─── Extração e persistência de memórias ─────────────────────────────────
+// Problema 2 corrigido: função estava vazia — agora chama Python e persiste no banco.
 export async function extractMemories(projectId, userId, response, memoryMode) {
-  // ... (código original, sem alterações) ...
-  // Apenas para referência, mantém a implementação que chama o Python /memories/extract
+  if (!response || !userId) return;
+
+  try {
+    const result = await callPython('/memories/extract', { text: response });
+
+    if (!result || !Array.isArray(result) || result.length === 0) return;
+
+    for (const content of result) {
+      if (!content || typeof content !== 'string' || content.trim().length < 10) continue;
+
+      await runAsync(
+        `INSERT INTO memories (project_id, user_id, content, source)
+         VALUES ($1, $2, $3, 'auto')`,
+        [
+          memoryMode === 'projeto' ? (projectId || null) : null,
+          userId,
+          content.trim(),
+        ]
+      );
+    }
+
+    console.log(`🧠 ${result.length} memória(s) extraída(s) e salva(s).`);
+  } catch (err) {
+    console.error('❌ Falha ao extrair memórias:', err.message);
+  }
 }

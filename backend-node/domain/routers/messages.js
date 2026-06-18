@@ -64,7 +64,6 @@ async function generateLocalTitle(firstMessage) {
   const FALLBACK = 'Nova conversa';
   if (!firstMessage || typeof firstMessage !== 'string') return FALLBACK;
 
-  // Tenta chamar o Python para gerar título com Groq
   try {
     const response = await fetch(`${PYTHON_SERVICE_URL}/title/generate`, {
       method: 'POST',
@@ -73,15 +72,12 @@ async function generateLocalTitle(firstMessage) {
     });
     if (response.ok) {
       const data = await response.json();
-      if (data.title) {
-        return data.title;
-      }
+      if (data.title) return data.title;
     }
   } catch (err) {
     console.warn('⚠️ Falha ao gerar título via Python:', err.message);
   }
 
-  // Fallback: lógica original das 7 palavras
   const cleaned = firstMessage
     .replace(/[\r\n\t]+/g, ' ')
     .replace(/\s{2,}/g, ' ')
@@ -124,7 +120,7 @@ function processResponse(text) {
 }
 
 // ─── RAG: busca via microsserviço Python ───────────────────────────────────
-async function searchRelevantChunks(projectId, query, limit = 3) {
+async function searchRelevantChunks(projectId, query) {
   if (!projectId) return [];
   try {
     const response = await fetch(`${PYTHON_SERVICE_URL}/search/rag`, {
@@ -145,10 +141,13 @@ async function searchRelevantChunks(projectId, query, limit = 3) {
 }
 
 // ─── GET mensagens de um chat (paginado) ──────────────────────────────────
+// Problema 11 corrigido: paginação estava retornando mensagens mais antigas primeiro.
+// Agora page=1 retorna as MAIS RECENTES; o array é revertido para preservar
+// ordem cronológica no front-end (mais antiga → mais nova dentro da página).
 router.get('/messages/chat/:chatId', async (req, res, next) => {
   const chatId = req.params.chatId;
-  const page = parseInt(req.query.page) || 1;
-  const limit = parseInt(req.query.limit) || 30;
+  const page   = parseInt(req.query.page)  || 1;
+  const limit  = parseInt(req.query.limit) || 30;
   const offset = (page - 1) * limit;
 
   try {
@@ -160,16 +159,20 @@ router.get('/messages/chat/:chatId', async (req, res, next) => {
     );
     const total = parseInt(totalResult.rows[0]?.total || 0);
 
+    // DESC para pegar as mais recentes; revertemos abaixo para exibição cronológica
     const dataResult = await pool.query(
       `SELECT id, role, content, edited, edit_history, created_at
        FROM messages
        WHERE chat_id = $1
-       ORDER BY created_at ASC
+       ORDER BY created_at DESC
        LIMIT $2 OFFSET $3`,
       [chatId, limit, offset]
     );
 
-    const cleanedRows = dataResult.rows.map(msg =>
+    // Reverte para ordem cronológica (mais antiga → mais nova) dentro da página
+    const rows = dataResult.rows.reverse();
+
+    const cleanedRows = rows.map(msg =>
       msg.role === 'assistant' && msg.content
         ? { ...msg, content: processResponse(msg.content) }
         : msg
@@ -180,8 +183,49 @@ router.get('/messages/chat/:chatId', async (req, res, next) => {
       total,
       page,
       limit,
-      hasMore: offset + dataResult.rows.length < total
+      hasMore: offset + dataResult.rows.length < total,
     });
+  } catch (err) { next(err); }
+});
+
+// ─── PATCH editar mensagem ─────────────────────────────────────────────────
+// Problema 10 corrigido: endpoint de edição estava ausente no backend.
+router.patch('/messages/:messageId', extractUserId, async (req, res, next) => {
+  const { messageId } = req.params;
+  const { content }   = req.body;
+
+  if (!content || !content.trim()) {
+    return res.status(400).json({ error: 'content não pode estar vazio' });
+  }
+
+  try {
+    const existing = await getAsync(
+      'SELECT id, content, edit_history FROM messages WHERE id = $1',
+      [messageId]
+    );
+    if (!existing) return res.status(404).json({ error: 'Mensagem não encontrada' });
+
+    // Acumula histórico de edições
+    let editHistory = [];
+    try {
+      editHistory = Array.isArray(existing.edit_history)
+        ? existing.edit_history
+        : JSON.parse(existing.edit_history || '[]');
+    } catch { editHistory = []; }
+
+    editHistory.push({
+      content:   existing.content,
+      edited_at: new Date().toISOString(),
+    });
+
+    await runAsync(
+      `UPDATE messages
+       SET content = $1, edited = true, edit_history = $2, updated_at = NOW()
+       WHERE id = $3`,
+      [content.trim(), JSON.stringify(editHistory), messageId]
+    );
+
+    res.json({ ok: true, id: messageId });
   } catch (err) { next(err); }
 });
 
@@ -218,14 +262,13 @@ router.post('/messages/stream', extractUserId, async (req, res, next) => {
     await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'user', message]);
 
     let relevantChunks = [];
-    if (projectId) relevantChunks = await searchRelevantChunks(projectId, message, 3);
+    if (projectId) relevantChunks = await searchRelevantChunks(projectId, message);
 
     const history = await allAsync(
       'SELECT role, content FROM messages WHERE chat_id = $1 ORDER BY created_at ASC',
       [chat_id]
     );
-    
-    // Passa a query do usuário para a síntese de memórias
+
     const baseSystemPrompt = await getBaseSystemPromptWithCache(userId, projectId, memoryMode, message);
 
     let finalSystemPrompt = baseSystemPrompt;
@@ -235,7 +278,6 @@ router.post('/messages/stream', extractUserId, async (req, res, next) => {
       finalSystemPrompt += `Use essas informações quando pertinente.\n`;
     }
 
-    // Passa a query também para o selectContextWindow (pode ser usado para classificação)
     const apiHistory = await selectContextWindow(history, message);
     let fullResponse = '';
     let wasMaxTokens = false;
@@ -266,9 +308,7 @@ router.post('/messages/stream', extractUserId, async (req, res, next) => {
       invalidateSystemPromptCache(userId, projectId);
     }
 
-    if (wasMaxTokens) {
-      sendEvent({ maxTokens: true });
-    }
+    if (wasMaxTokens) sendEvent({ maxTokens: true });
 
     sendEvent({ done: true });
     res.end();
@@ -304,13 +344,13 @@ router.post('/messages', extractUserId, async (req, res, next) => {
     await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'user', message]);
 
     let relevantChunks = [];
-    if (projectId) relevantChunks = await searchRelevantChunks(projectId, message, 3);
+    if (projectId) relevantChunks = await searchRelevantChunks(projectId, message);
 
     const history = await allAsync(
       'SELECT role, content FROM messages WHERE chat_id = $1 ORDER BY created_at ASC',
       [chat_id]
     );
-    
+
     const baseSystemPrompt = await getBaseSystemPromptWithCache(userId, projectId, memoryMode, message);
 
     let finalSystemPrompt = baseSystemPrompt;

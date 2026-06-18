@@ -2,7 +2,8 @@
 
 import { getPool } from './database.js';
 
-const CURRENT_SCHEMA_VERSION = 3;
+// Problema 5: incrementado para 4 — adiciona coluna content BYTEA em files
+const CURRENT_SCHEMA_VERSION = 4;
 
 async function ensureSchemaVersionTable(client) {
   await client.query(`
@@ -206,7 +207,6 @@ export async function initDb() {
     }
 
     // ========== MIGRAÇÃO v3 ==========
-    // Adiciona coluna embedding na tabela memories para deduplicação semântica
     if (currentVersion < 3) {
       console.log('🔄 Aplicando migração v3 (embedding em memories)...');
 
@@ -218,7 +218,6 @@ export async function initDb() {
         }
       });
 
-      // Índice parcial para acelerar a busca de memórias com embedding
       await client.query(
         `CREATE INDEX IF NOT EXISTS idx_memories_project_embedding
          ON memories(project_id)
@@ -233,6 +232,28 @@ export async function initDb() {
 
       await setSchemaVersion(client, 3);
       console.log('✅ Migração v3 aplicada.');
+    }
+
+    // ========== MIGRAÇÃO v4 ==========
+    // Problema 5: armazena o binário do arquivo no banco para não perder no reinício do Render.
+    if (currentVersion < 4) {
+      console.log('🔄 Aplicando migração v4 (content BYTEA em files)...');
+
+      await client.query(
+        `ALTER TABLE files ADD COLUMN IF NOT EXISTS content BYTEA`
+      ).catch(err => {
+        if (!err.message?.includes('already exists') && !err.message?.includes('duplicate column')) {
+          console.warn(`⚠️ Migração v4 ignorada: ${err.message}`);
+        }
+      });
+
+      // Índice para busca de chunks por arquivo (acelera o RAG)
+      await client.query(
+        `CREATE INDEX IF NOT EXISTS idx_file_chunks_file_id ON file_chunks(file_id)`
+      ).catch(() => {});
+
+      await setSchemaVersion(client, 4);
+      console.log('✅ Migração v4 aplicada.');
     }
 
     console.log(`✅ Schema atualizado para versão ${CURRENT_SCHEMA_VERSION}`);
