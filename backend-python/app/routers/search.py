@@ -1,23 +1,32 @@
 import os
-import json
 import asyncio
-import numpy as np
+import hashlib
+import asyncpg
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-import psycopg2
-from psycopg2.extras import RealDictCursor
 
 from app.ml_models import get_embedder
-from app.utils.groq_client import groq_available, groq_complete
 
 router = APIRouter()
 
+_query_embedding_cache = {}
+_QUERY_EMBEDDING_CACHE_MAX = 256
 
-def get_db_connection():
-    try:
-        return psycopg2.connect(os.getenv("DATABASE_URL"))
-    except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Erro ao conectar ao banco: {str(e)}")
+
+def _get_cached_query_embedding(query: str, embedder):
+    """Cache FIFO simples para embeddings de query (máx. 256 entradas)."""
+    cache_key = hashlib.sha256(query.encode("utf-8")).hexdigest()[:16]
+    if cache_key in _query_embedding_cache:
+        return _query_embedding_cache[cache_key]
+
+    embedding = embedder.encode(query, convert_to_numpy=True)
+
+    if len(_query_embedding_cache) >= _QUERY_EMBEDDING_CACHE_MAX:
+        oldest_key = next(iter(_query_embedding_cache))
+        del _query_embedding_cache[oldest_key]
+
+    _query_embedding_cache[cache_key] = embedding
+    return embedding
 
 
 class RAGRequest(BaseModel):
@@ -25,42 +34,31 @@ class RAGRequest(BaseModel):
     query: str
 
 
-async def validate_chunk_groq(chunk_text: str, query: str) -> bool:
-    """Valida se o chunk é útil para responder à query usando Groq."""
-    if not groq_available():
-        return True
-
-    prompt = f"""
-Pergunta: {query}
-
-Trecho: {chunk_text}
-
-Responda apenas "sim" se este trecho é útil para responder à pergunta, ou "não" caso contrário.
-"""
-    result = groq_complete(prompt, max_tokens=5)
-    if result:
-        return result.strip().lower() == "sim"
-    return True
+# ─── Pool asyncpg (criado uma vez, reutilizado em todas as requisições) ───
+_pg_pool: asyncpg.Pool | None = None
+_pg_pool_lock = asyncio.Lock()
 
 
-def _fetch_chunks_sync(project_id: str):
-    """Executa a query psycopg2 de forma síncrona (será chamada via asyncio.to_thread)."""
-    conn = get_db_connection()
-    try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                """
-                SELECT fc.id, fc.chunk_text, fc.embedding
-                FROM file_chunks fc
-                JOIN files f ON f.id = fc.file_id
-                WHERE f.project_id = %s
-                  AND fc.embedding IS NOT NULL
-                """,
-                (project_id,),
-            )
-            return cur.fetchall()
-    finally:
-        conn.close()
+async def get_pg_pool() -> asyncpg.Pool:
+    global _pg_pool
+    if _pg_pool is not None:
+        return _pg_pool
+    async with _pg_pool_lock:
+        if _pg_pool is None:
+            try:
+                _pg_pool = await asyncpg.create_pool(
+                    dsn=os.getenv("DATABASE_URL"),
+                    min_size=2,
+                    max_size=10,
+                )
+            except Exception as e:
+                raise HTTPException(status_code=503, detail=f"Erro ao criar pool do banco: {str(e)}")
+    return _pg_pool
+
+
+def _embedding_to_vector_literal(embedding) -> str:
+    """Converte um array numpy para o formato literal do pgvector: '[0.1,0.2,...]'."""
+    return "[" + ",".join(f"{v:.8f}" for v in embedding.tolist()) + "]"
 
 
 @router.post("/rag")
@@ -75,58 +73,42 @@ async def search_rag(request: RAGRequest):
 
     embedder = get_embedder()
 
-    # 1. Gera embedding da query
+    # 1. Gera embedding da query (com cache)
     try:
-        query_embedding = embedder.encode(query, convert_to_numpy=True)
+        query_embedding = _get_cached_query_embedding(query, embedder)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao gerar embedding: {str(e)}")
 
-    # 2. Busca chunks com embedding no banco (psycopg2 síncrono via thread pool)
+    embedding_literal = _embedding_to_vector_literal(query_embedding)
+
+    # 2. Busca vetorial via pgvector (operador <=> = distância de cosseno)
+    #    Traz um conjunto maior (LIMIT 20) ordenado por distância para depois
+    #    filtrar por score >= 0.65 e devolver só os 3 melhores — preserva o
+    #    comportamento original sem perder a ordenação por relevância.
+    pool = await get_pg_pool()
+
     try:
-        rows = await asyncio.to_thread(_fetch_chunks_sync, project_id)
-    except HTTPException:
-        raise
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT fc.id, fc.chunk_text, 1 - (fc.embedding_v <=> $1::vector) AS score
+                FROM file_chunks fc
+                JOIN files f ON f.id = fc.file_id
+                WHERE f.project_id = $2
+                  AND fc.embedding_v IS NOT NULL
+                ORDER BY fc.embedding_v <=> $1::vector
+                LIMIT 20
+                """,
+                embedding_literal,
+                project_id,
+            )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro na consulta ao banco: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erro na consulta vetorial ao banco: {str(e)}")
 
-    if not rows:
-        return []
+    # 3. Filtra por similaridade >= 0.65 (já vem ordenado por relevância)
+    filtered = [row for row in rows if row["score"] >= 0.65]
 
-    # 3. Calcula similaridade coseno e filtra top 5
-    scored = []
-    for row in rows:
-        try:
-            embedding_data = row["embedding"]
-            if isinstance(embedding_data, str):
-                chunk_embedding = np.array(json.loads(embedding_data))
-            else:
-                chunk_embedding = np.array(embedding_data)
-
-            norm_query = np.linalg.norm(query_embedding)
-            norm_chunk = np.linalg.norm(chunk_embedding)
-            if norm_query == 0 or norm_chunk == 0:
-                sim = 0.0
-            else:
-                sim = np.dot(query_embedding, chunk_embedding) / (norm_query * norm_chunk)
-
-            if sim > 0.65:
-                scored.append({"id": row["id"], "text": row["chunk_text"], "score": float(sim)})
-        except Exception as e:
-            print(f"Erro ao processar chunk {row.get('id')}: {e}")
-            continue
-
-    scored.sort(key=lambda x: x["score"], reverse=True)
-    top_5 = scored[:5]
-
-    if not top_5:
-        return []
-
-    # 4. Validação com Groq (em paralelo)
-    if groq_available():
-        tasks = [validate_chunk_groq(chunk["text"], query) for chunk in top_5]
-        validation_results = await asyncio.gather(*tasks)
-        validated = [chunk for chunk, valid in zip(top_5, validation_results) if valid]
-        if validated:
-            return validated[:3]
-
-    return top_5[:3]
+    return [
+        {"id": row["id"], "text": row["chunk_text"], "score": float(row["score"])}
+        for row in filtered[:3]
+    ]

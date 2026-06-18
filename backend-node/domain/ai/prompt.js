@@ -3,13 +3,26 @@
 import { getAsync, allAsync, runAsync } from '../../db/database.js';
 import { generateEmbedding, cosineSimilarity } from './embeddings.js';
 import { getRedisClient, withRedis } from '../../utils/redis.js';
+import { createCircuitBreaker } from '../../utils/circuitBreaker.js';
 
 // ─── Cache em memória (fallback) ──────────────────────────────────────────
 const SYSTEM_PROMPT_CACHE_TTL = 60_000;
 const systemPromptCache = new Map();
 
+// ─── Debounce de invalidação ───────────────────────────────────────────────
+const MEMORY_INVALIDATION_DEBOUNCE_MS = 5 * 60_000;
+const _invalidationDebounce = new Map();
+
 // ─── URLs do Python ────────────────────────────────────────────────────────
 const PYTHON_SERVICE_URL = process.env.PYTHON_SERVICE_URL || 'http://localhost:8000';
+
+// ─── Circuit breaker para o serviço Python ────────────────────────────────
+const pythonCircuitBreaker = createCircuitBreaker({
+  name: 'python-service',
+  failureThreshold: 3,
+  successThreshold: 1,
+  timeoutMs: 30_000,
+});
 
 // ─── Helpers de cache ──────────────────────────────────────────────────────
 export function getCacheKey(userId, projectId, memoryMode) {
@@ -59,8 +72,19 @@ export async function setCachedSystemPrompt(userId, projectId, memoryMode, data)
   );
 }
 
-export async function invalidateSystemPromptCache(userId, projectId) {
+export async function invalidateSystemPromptCache(userId, projectId, { debounce = false } = {}) {
   const prefix = `${userId}:${projectId || 'none'}:`;
+
+  if (debounce) {
+    const debounceKey = `${userId}:${projectId || 'none'}`;
+    const lastInvalidation = _invalidationDebounce.get(debounceKey);
+    const now = Date.now();
+    if (lastInvalidation && now - lastInvalidation < MEMORY_INVALIDATION_DEBOUNCE_MS) {
+      return;
+    }
+    _invalidationDebounce.set(debounceKey, now);
+  }
+
   await withRedis(async (client) => {
     let cursor = '0';
     const keysToDelete = [];
@@ -144,27 +168,29 @@ export function sanitizeModelResponse(text) {
 const PYTHON_TIMEOUT_MS = 12_000; // 12 s
 
 async function callPython(endpoint, payload) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), PYTHON_TIMEOUT_MS);
-  try {
-    const response = await fetch(`${PYTHON_SERVICE_URL}${endpoint}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-      signal: controller.signal,
-    });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    return await response.json();
-  } catch (err) {
-    if (err.name === 'AbortError') {
-      console.error(`⏱️ Timeout na chamada ao Python (${endpoint})`);
-    } else {
-      console.error(`❌ Falha na chamada ao Python (${endpoint}):`, err.message);
+  return pythonCircuitBreaker.exec(async () => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), PYTHON_TIMEOUT_MS);
+    try {
+      const response = await fetch(`${PYTHON_SERVICE_URL}${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return await response.json();
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        console.error(`⏱️ Timeout na chamada ao Python (${endpoint})`);
+      } else {
+        console.error(`❌ Falha na chamada ao Python (${endpoint}):`, err.message);
+      }
+      throw err; // repassa para o circuit breaker registrar a falha
+    } finally {
+      clearTimeout(timer);
     }
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
+  }, null);
 }
 
 async function synthesizeMemories(query, memories) {
@@ -275,8 +301,25 @@ export async function getBaseSystemPromptWithCache(userId, projectId, memoryMode
   return systemPrompt;
 }
 
-// ─── Seleção de janela de contexto com síntese de histórico ──────────────
-const MAX_CONTEXT_MESSAGES = 20;
+// ─── Seleção de janela de contexto com síntese de histórico (por tokens) ──
+const MAX_CONTEXT_TOKENS_ESTIMATE = 30_000;
+const HISTORY_SYNTHESIS_TOKEN_THRESHOLD = 40_000;
+
+const estimateTokens = (text) => Math.ceil((text || '').length / 4);
+
+// Seleciona mensagens do mais recente ao mais antigo até estourar maxTokens,
+// retornando o resultado em ordem cronológica.
+function selectMessagesByTokenBudget(messages, maxTokens) {
+  const selected = [];
+  let totalTokens = 0;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    totalTokens += estimateTokens(msg.content);
+    selected.push(msg);
+    if (totalTokens > maxTokens) break;
+  }
+  return selected.reverse();
+}
 
 export async function selectContextWindow(history, userQuery = '') {
   if (!Array.isArray(history) || history.length === 0) return [];
@@ -290,8 +333,10 @@ export async function selectContextWindow(history, userQuery = '') {
     return !(prev.role === m.role && prev.content.trim() === m.content.trim());
   });
 
-  if (deduped.length < 15) {
-    return deduped.slice(-MAX_CONTEXT_MESSAGES);
+  const totalEstimatedTokens = deduped.reduce((sum, m) => sum + estimateTokens(m.content), 0);
+
+  if (totalEstimatedTokens <= HISTORY_SYNTHESIS_TOKEN_THRESHOLD) {
+    return selectMessagesByTokenBudget(deduped, MAX_CONTEXT_TOKENS_ESTIMATE);
   }
 
   const synthesisResult = await synthesizeHistory(deduped, 10);
@@ -308,35 +353,82 @@ export async function selectContextWindow(history, userQuery = '') {
     return result;
   }
 
-  return deduped.slice(-MAX_CONTEXT_MESSAGES);
+  return selectMessagesByTokenBudget(deduped, MAX_CONTEXT_TOKENS_ESTIMATE);
+}
+
+// ─── Similaridade de Jaccard (deduplicação de memórias) ───────────────────
+function jaccardSimilarity(textA, textB) {
+  const setA = new Set(textA.toLowerCase().trim().split(/\s+/).filter(Boolean));
+  const setB = new Set(textB.toLowerCase().trim().split(/\s+/).filter(Boolean));
+  if (setA.size === 0 || setB.size === 0) return 0;
+
+  let intersection = 0;
+  for (const word of setA) {
+    if (setB.has(word)) intersection++;
+  }
+  const union = new Set([...setA, ...setB]).size;
+  return union === 0 ? 0 : intersection / union;
 }
 
 // ─── Extração e persistência de memórias ─────────────────────────────────
 // Problema 2 corrigido: função estava vazia — agora chama Python e persiste no banco.
+// Dedup por Jaccard (>0.7) adicionada para evitar memórias duplicadas.
 export async function extractMemories(projectId, userId, response, memoryMode) {
   if (!response || !userId) return;
 
   try {
     const result = await callPython('/memories/extract', { text: response });
 
-    if (!result || !Array.isArray(result) || result.length === 0) return;
+    if (!result || !Array.isArray(result) || result.length === 0) {
+      if (!result) {
+        console.error('❌ extractMemories: chamada ao Python (/memories/extract) falhou ou não retornou dados.');
+      }
+      return;
+    }
+
+    const isProjectScope = memoryMode === 'projeto' && !!projectId;
+    const scopeProjectId = isProjectScope ? projectId : null;
+
+    const existingMemories = isProjectScope
+      ? await allAsync(
+          'SELECT content FROM memories WHERE project_id = $1 ORDER BY created_at DESC LIMIT 50',
+          [scopeProjectId]
+        )
+      : await allAsync(
+          'SELECT content FROM memories WHERE project_id IS NULL AND user_id = $1 ORDER BY created_at DESC LIMIT 50',
+          [userId]
+        );
+
+    let inserted = 0;
+    let skippedDuplicates = 0;
 
     for (const content of result) {
       if (!content || typeof content !== 'string' || content.trim().length < 10) continue;
 
+      const trimmed = content.trim();
+
+      const isDuplicate = existingMemories.some(
+        (mem) => jaccardSimilarity(trimmed, mem.content) > 0.7
+      );
+
+      if (isDuplicate) {
+        skippedDuplicates++;
+        console.log(`🔁 Memória duplicada (Jaccard > 0.7) ignorada: "${trimmed.slice(0, 60)}..."`);
+        continue;
+      }
+
       await runAsync(
         `INSERT INTO memories (project_id, user_id, content, source)
          VALUES ($1, $2, $3, 'auto')`,
-        [
-          memoryMode === 'projeto' ? (projectId || null) : null,
-          userId,
-          content.trim(),
-        ]
+        [scopeProjectId, userId, trimmed]
       );
+
+      existingMemories.push({ content: trimmed });
+      inserted++;
     }
 
-    console.log(`🧠 ${result.length} memória(s) extraída(s) e salva(s).`);
+    console.log(`🧠 ${inserted} memória(s) salva(s), ${skippedDuplicates} duplicata(s) ignorada(s).`);
   } catch (err) {
-    console.error('❌ Falha ao extrair memórias:', err.message);
+    console.error('❌ Falha ao extrair/persistir memórias:', err.message, err.stack);
   }
 }

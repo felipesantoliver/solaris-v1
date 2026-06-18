@@ -1,10 +1,10 @@
-import numpy as np
 from fastapi import APIRouter
 from pydantic import BaseModel
 from typing import List
 
 from app.ml_models import get_embedder, get_nlp
 from app.utils.groq_client import groq_available, groq_complete
+from app.utils.math_utils import cosine_similarity
 
 router = APIRouter()
 
@@ -22,12 +22,6 @@ class HistorySynthesisRequest(BaseModel):
 class HistorySynthesisResponse(BaseModel):
     summary: str
     recent_messages: List[Message]
-
-
-def cosine_similarity(a, b):
-    a = np.array(a)
-    b = np.array(b)
-    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-8)
 
 
 def cluster_messages(messages, threshold=0.75):

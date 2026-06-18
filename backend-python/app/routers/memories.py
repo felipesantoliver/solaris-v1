@@ -6,6 +6,7 @@ from typing import List, Optional
 
 from app.ml_models import get_embedder, get_nlp
 from app.utils.groq_client import groq_available, groq_complete
+from app.utils.math_utils import cosine_similarity
 
 router = APIRouter()
 
@@ -95,12 +96,6 @@ class SynthesisRequest(BaseModel):
 class SynthesisResponse(BaseModel):
     synthesis: str
     used_memory_ids: List[str]
-
-
-def cosine_similarity(a, b):
-    a = np.array(a)
-    b = np.array(b)
-    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-8)
 
 
 @router.post("/synthesize", response_model=SynthesisResponse)

@@ -87,7 +87,7 @@ async function generateLocalTitle(firstMessage) {
   const cleaned = firstMessage
     .replace(/[\r\n\t]+/g, ' ')
     .replace(/\s{2,}/g, ' ')
-    .replace(/["""''`]/g, '')
+    .replace(/[""""'']/g, '')
     .trim();
   if (cleaned.length < 3) return FALLBACK;
   const words = cleaned.split(' ').filter(Boolean);
@@ -144,6 +144,57 @@ async function searchRelevantChunks(projectId, query) {
     console.error('Falha na busca RAG via Python:', err.message);
     return [];
   }
+}
+
+// ─── Construção do contexto de chat (compartilhado entre /messages/stream e /messages) ──
+// Centraliza: resolução de modelo, memory_mode do projeto, busca paralela de
+// RAG + histórico, montagem do system prompt (com cache) e seleção da janela
+// de contexto. NÃO executa side-effects pós-resposta (extractMemories,
+// invalidateSystemPromptCache, generateLocalTitle, UPDATE chats) — isso
+// permanece em cada handler.
+//
+// onProgress(stage) é opcional: usado apenas pelo handler de streaming para
+// emitir eventos SSE de progresso ('thinking', antes do system prompt). O
+// handler de fallback não passa esse callback — comportamento inalterado.
+async function buildChatContext(chatId, projectId, userId, message, isCodingMode, headerModel, onProgress) {
+  const modelKey = await resolveModelForRequest(userId, projectId, headerModel);
+
+  // 1. memory_mode do projeto (1 query SQL)
+  let memoryMode = 'projeto';
+  if (projectId) {
+    const proj = await getAsync('SELECT memory_mode FROM projects WHERE id = $1', [projectId]);
+    if (proj?.memory_mode) memoryMode = proj.memory_mode;
+  }
+
+  // 2. RAG (se houver projeto) em paralelo com o histórico de mensagens
+  const [relevantChunks, history] = await Promise.all([
+    projectId ? searchRelevantChunks(projectId, message) : Promise.resolve([]),
+    allAsync(
+      'SELECT role, content FROM messages WHERE chat_id = $1 ORDER BY created_at ASC',
+      [chatId]
+    ),
+  ]);
+
+  if (onProgress) onProgress('thinking');
+
+  // 3. System prompt base (com cache)
+  const baseSystemPrompt = await getBaseSystemPromptWithCache(userId, projectId, memoryMode, message);
+
+  let finalSystemPrompt = baseSystemPrompt;
+  if (isCodingMode) {
+    finalSystemPrompt += '\n\nMODO PROGRAMADOR ATIVO: O usuário solicitou código. Forneça o código completo e funcional, sem truncar. Use blocos de código markdown com a linguagem correta (ex: ```cpp, ```python, ```javascript). Não omita partes do código.';
+  }
+  if (relevantChunks.length > 0) {
+    finalSystemPrompt += `\nTrechos relevantes dos seus documentos:\n\n`;
+    relevantChunks.forEach((chunk, idx) => { finalSystemPrompt += `[${idx + 1}] ${chunk}\n\n`; });
+    finalSystemPrompt += `Use essas informações quando pertinente.\n`;
+  }
+
+  const apiHistory = await selectContextWindow(history, message);
+
+  // 4. Retorno: apiHistory, finalSystemPrompt, modelKey, memoryMode
+  // (+ history, necessário nos handlers para o check de "isFirst")
+  return { apiHistory, finalSystemPrompt, modelKey, memoryMode, history };
 }
 
 // ─── GET mensagens de um chat (paginado) ──────────────────────────────────
@@ -235,14 +286,7 @@ router.post('/messages/stream', extractUserId, async (req, res, next) => {
   if (!chat_id || !message) return res.status(400).json({ error: 'chat_id e message obrigatórios' });
   const projectId = (project_id && project_id !== 'none') ? project_id : null;
 
-  const modelKey = await resolveModelForRequest(userId, projectId, req.headers['x-model']);
   const isCodingMode = req.headers['x-coding-mode'] === 'true';
-
-  let memoryMode = 'projeto';
-  if (projectId) {
-    const proj = await getAsync('SELECT memory_mode FROM projects WHERE id = $1', [projectId]);
-    if (proj?.memory_mode) memoryMode = proj.memory_mode;
-  }
 
   res.writeHead(200, {
     'Content-Type':                'text/event-stream',
@@ -263,30 +307,23 @@ router.post('/messages/stream', extractUserId, async (req, res, next) => {
     if (!res.writableEnded) res.write(`data: ${JSON.stringify(data)}\n\n`);
   };
 
+  // Eventos de progresso (não interferem no layout/UI — apenas informam a etapa atual)
+  const sendProgress = (stage) => {
+    if (!res.writableEnded) res.write(`data: ${JSON.stringify({ progress: stage })}\n\n`);
+  };
+
   try {
     await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'user', message]);
 
-    let relevantChunks = [];
-    if (projectId) relevantChunks = await searchRelevantChunks(projectId, message);
+    sendProgress('searching'); // antes do RAG (disparado dentro de buildChatContext)
 
-    const history = await allAsync(
-      'SELECT role, content FROM messages WHERE chat_id = $1 ORDER BY created_at ASC',
-      [chat_id]
+    const { apiHistory, finalSystemPrompt, modelKey, memoryMode, history } = await buildChatContext(
+      chat_id, projectId, userId, message, isCodingMode, req.headers['x-model'],
+      (stage) => sendProgress(stage) // emite 'thinking' antes do system prompt
     );
 
-    const baseSystemPrompt = await getBaseSystemPromptWithCache(userId, projectId, memoryMode, message);
+    sendProgress('generating'); // antes do stream do Gemini
 
-    let finalSystemPrompt = baseSystemPrompt;
-    if (isCodingMode) {
-      finalSystemPrompt += '\n\nMODO PROGRAMADOR ATIVO: O usuário solicitou código. Forneça o código completo e funcional, sem truncar. Use blocos de código markdown com a linguagem correta (ex: ```cpp, ```python, ```javascript). Não omita partes do código.';
-    }
-    if (relevantChunks.length > 0) {
-      finalSystemPrompt += `\nTrechos relevantes dos seus documentos:\n\n`;
-      relevantChunks.forEach((chunk, idx) => { finalSystemPrompt += `[${idx + 1}] ${chunk}\n\n`; });
-      finalSystemPrompt += `Use essas informações quando pertinente.\n`;
-    }
-
-    const apiHistory = await selectContextWindow(history, message);
     let fullResponse = '';
     let wasMaxTokens = false;
 
@@ -323,7 +360,7 @@ router.post('/messages/stream', extractUserId, async (req, res, next) => {
 
     if (projectId || memoryMode === 'global') {
       extractMemories(projectId, userId, cleanedResponse, memoryMode).catch(console.error);
-      invalidateSystemPromptCache(userId, projectId);
+      invalidateSystemPromptCache(userId, projectId, { debounce: true });
     }
 
   } catch (err) {
@@ -350,35 +387,15 @@ router.post('/messages', extractUserId, async (req, res, next) => {
   if (!chat_id || !message) return res.status(400).json({ error: 'chat_id e message obrigatórios' });
   const projectId = (project_id && project_id !== 'none') ? project_id : null;
 
-  const modelKey = await resolveModelForRequest(userId, projectId, req.headers['x-model']);
-
-  let memoryMode = 'projeto';
-  if (projectId) {
-    const proj = await getAsync('SELECT memory_mode FROM projects WHERE id = $1', [projectId]);
-    if (proj?.memory_mode) memoryMode = proj.memory_mode;
-  }
-
   try {
     await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'user', message]);
 
-    let relevantChunks = [];
-    if (projectId) relevantChunks = await searchRelevantChunks(projectId, message);
-
-    const history = await allAsync(
-      'SELECT role, content FROM messages WHERE chat_id = $1 ORDER BY created_at ASC',
-      [chat_id]
+    // Handler de fallback nunca leu x-coding-mode no original — mantido como false.
+    // Sem onProgress: nenhum evento SSE de progresso aqui (não é streaming).
+    const { apiHistory, finalSystemPrompt, modelKey, memoryMode, history } = await buildChatContext(
+      chat_id, projectId, userId, message, false, req.headers['x-model']
     );
 
-    const baseSystemPrompt = await getBaseSystemPromptWithCache(userId, projectId, memoryMode, message);
-
-    let finalSystemPrompt = baseSystemPrompt;
-    if (relevantChunks.length > 0) {
-      finalSystemPrompt += `\nTrechos relevantes dos seus documentos:\n\n`;
-      relevantChunks.forEach((chunk, idx) => { finalSystemPrompt += `[${idx + 1}] ${chunk}\n\n`; });
-      finalSystemPrompt += `Use essas informações quando pertinente.\n`;
-    }
-
-    const apiHistory = await selectContextWindow(history, message);
     const { text, maxTokens } = await geminiChat(apiHistory, finalSystemPrompt, modelKey);
     const responseText = processResponse(text);
 
