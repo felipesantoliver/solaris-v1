@@ -1,5 +1,5 @@
 # Build tools (must come first — openai-whisper needs pkg_resources, removed in Python 3.14)
-setuptools>=68.0.0
+setuptools>=68.0.0,<81
 
 # Web framework
 fastapi==0.115.12

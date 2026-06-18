@@ -3,3 +3,4 @@ node_modules
 backend/database.sqlite
 backend/uploads
 frontend/dist
+backend-python/venv
