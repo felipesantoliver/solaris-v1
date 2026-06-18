@@ -31,9 +31,7 @@ async function checkRateLimit(userId) {
   const result = await withRedis(
     async (client) => {
       const current = await client.incr(key);
-      if (current === 1) {
-        await client.expire(key, Math.ceil(windowMs / 1000));
-      }
+      if (current === 1) await client.expire(key, Math.ceil(windowMs / 1000));
       return current <= max;
     },
     async () => {
@@ -65,11 +63,15 @@ async function generateLocalTitle(firstMessage) {
   if (!firstMessage || typeof firstMessage !== 'string') return FALLBACK;
 
   try {
+    const ac = new AbortController();
+    const t  = setTimeout(() => ac.abort(), 8_000);
     const response = await fetch(`${PYTHON_SERVICE_URL}/title/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: firstMessage }),
+      signal: ac.signal,
     });
+    clearTimeout(t);
     if (response.ok) {
       const data = await response.json();
       if (data.title) return data.title;
@@ -97,12 +99,11 @@ function cleanAssistantMessage(text) {
   const lines = text.split(/\r?\n/);
   const cleanedLines = [];
   let firstSolarisFound = false;
-  const solarisPrefixRegex = /^\s*Solaris\s*[:：]?\s*(diz\s*)?[:：]?\s*/i;
+  const solarisPrefixRegex = /^\s*\**\s*Solaris\s*\**\s*[:：]?\s*(diz\s*)?[:：]?\s*/i;
   for (const line of lines) {
     if (solarisPrefixRegex.test(line)) {
       const rest = line.replace(solarisPrefixRegex, '');
       if (!firstSolarisFound) {
-        cleanedLines.push('Solaris');
         firstSolarisFound = true;
         if (rest.trim()) cleanedLines.push(rest);
       } else {
@@ -123,15 +124,16 @@ function processResponse(text) {
 async function searchRelevantChunks(projectId, query) {
   if (!projectId) return [];
   try {
+    const ac = new AbortController();
+    const t  = setTimeout(() => ac.abort(), 10_000);
     const response = await fetch(`${PYTHON_SERVICE_URL}/search/rag`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ project_id: projectId, query }),
+      signal: ac.signal,
     });
-    if (!response.ok) {
-      console.error(`Erro no serviço RAG: ${response.status}`);
-      return [];
-    }
+    clearTimeout(t);
+    if (!response.ok) { console.error(`Erro no serviço RAG: ${response.status}`); return []; }
     const data = await response.json();
     return data.filter(item => item.score > 0.65).map(item => item.text);
   } catch (err) {
@@ -141,9 +143,8 @@ async function searchRelevantChunks(projectId, query) {
 }
 
 // ─── GET mensagens de um chat (paginado) ──────────────────────────────────
-// Problema 11 corrigido: paginação estava retornando mensagens mais antigas primeiro.
-// Agora page=1 retorna as MAIS RECENTES; o array é revertido para preservar
-// ordem cronológica no front-end (mais antiga → mais nova dentro da página).
+// Problema 11 corrigido: page=1 retorna as mensagens mais recentes;
+// array revertido para preservar ordem cronológica no front.
 router.get('/messages/chat/:chatId', async (req, res, next) => {
   const chatId = req.params.chatId;
   const page   = parseInt(req.query.page)  || 1;
@@ -159,7 +160,6 @@ router.get('/messages/chat/:chatId', async (req, res, next) => {
     );
     const total = parseInt(totalResult.rows[0]?.total || 0);
 
-    // DESC para pegar as mais recentes; revertemos abaixo para exibição cronológica
     const dataResult = await pool.query(
       `SELECT id, role, content, edited, edit_history, created_at
        FROM messages
@@ -169,8 +169,7 @@ router.get('/messages/chat/:chatId', async (req, res, next) => {
       [chatId, limit, offset]
     );
 
-    // Reverte para ordem cronológica (mais antiga → mais nova) dentro da página
-    const rows = dataResult.rows.reverse();
+    const rows = dataResult.rows.reverse(); // cronológico dentro da página
 
     const cleanedRows = rows.map(msg =>
       msg.role === 'assistant' && msg.content
@@ -189,14 +188,13 @@ router.get('/messages/chat/:chatId', async (req, res, next) => {
 });
 
 // ─── PATCH editar mensagem ─────────────────────────────────────────────────
-// Problema 10 corrigido: endpoint de edição estava ausente no backend.
+// Problema 10 corrigido: endpoint ausente → edit não persistia.
 router.patch('/messages/:messageId', extractUserId, async (req, res, next) => {
   const { messageId } = req.params;
   const { content }   = req.body;
 
-  if (!content || !content.trim()) {
+  if (!content || !content.trim())
     return res.status(400).json({ error: 'content não pode estar vazio' });
-  }
 
   try {
     const existing = await getAsync(
@@ -205,7 +203,6 @@ router.patch('/messages/:messageId', extractUserId, async (req, res, next) => {
     );
     if (!existing) return res.status(404).json({ error: 'Mensagem não encontrada' });
 
-    // Acumula histórico de edições
     let editHistory = [];
     try {
       editHistory = Array.isArray(existing.edit_history)
@@ -213,14 +210,10 @@ router.patch('/messages/:messageId', extractUserId, async (req, res, next) => {
         : JSON.parse(existing.edit_history || '[]');
     } catch { editHistory = []; }
 
-    editHistory.push({
-      content:   existing.content,
-      edited_at: new Date().toISOString(),
-    });
+    editHistory.push({ content: existing.content, edited_at: new Date().toISOString() });
 
     await runAsync(
-      `UPDATE messages
-       SET content = $1, edited = true, edit_history = $2, updated_at = NOW()
+      `UPDATE messages SET content = $1, edited = true, edit_history = $2, updated_at = NOW()
        WHERE id = $3`,
       [content.trim(), JSON.stringify(editHistory), messageId]
     );
@@ -253,10 +246,25 @@ router.post('/messages/stream', extractUserId, async (req, res, next) => {
     'Content-Type':                'text/event-stream',
     'Cache-Control':               'no-cache',
     'Connection':                  'keep-alive',
+    'X-Accel-Buffering':           'no',   // desativa buffering no nginx/Render
     'Access-Control-Allow-Origin': process.env.FRONTEND_URL || '*',
   });
 
-  const sendEvent = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+  // ── FIX: keep-alive imediato para evitar timeout do cliente durante
+  //    o aquecimento do Python (cold start no Render pode levar 15–30 s).
+  //    Comentários SSE (": ...") são ignorados pelo EventSource mas mantêm
+  //    a conexão TCP viva e sinalizam que o servidor está processando.
+  res.write(': processing\n\n');
+
+  // Heartbeat a cada 15 s enquanto não houver dados
+  const heartbeat = setInterval(() => {
+    if (!res.writableEnded) res.write(': heartbeat\n\n');
+  }, 15_000);
+
+  const sendEvent = (data) => {
+    clearInterval(heartbeat); // para o heartbeat assim que dados reais chegarem
+    if (!res.writableEnded) res.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
 
   try {
     await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'user', message]);
@@ -287,9 +295,7 @@ router.post('/messages/stream', extractUserId, async (req, res, next) => {
         fullResponse += event.chunk;
         sendEvent({ chunk: event.chunk });
       }
-      if (event.maxTokens) {
-        wasMaxTokens = true;
-      }
+      if (event.maxTokens) wasMaxTokens = true;
     }
 
     const cleanedResponse = processResponse(fullResponse);
@@ -311,12 +317,15 @@ router.post('/messages/stream', extractUserId, async (req, res, next) => {
     if (wasMaxTokens) sendEvent({ maxTokens: true });
 
     sendEvent({ done: true });
-    res.end();
   } catch (err) {
     console.error('Erro no streaming:', err);
-    sendEvent({ error: err.message || 'Erro interno' });
-    res.end();
+    if (!res.writableEnded) {
+      res.write(`data: ${JSON.stringify({ error: err.message || 'Erro interno' })}\n\n`);
+    }
     next(err);
+  } finally {
+    clearInterval(heartbeat);
+    if (!res.writableEnded) res.end();
   }
 });
 

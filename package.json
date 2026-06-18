@@ -24,6 +24,7 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "bullmq": "^5.78.1"
+    "bullmq": "^5.78.1",
+    "react-markdown": "^10.1.0"
   }
 }

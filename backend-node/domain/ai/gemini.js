@@ -5,17 +5,17 @@ const GEMINI_PRO_API_KEY   = process.env.GEMINI_PRO_API_KEY;
 
 if (!GEMINI_FLASH_API_KEY) throw new Error('❌ GEMINI_FLASH_API_KEY não definida');
 
-// Problema 6 corrigido: modelo Pro era 'gemini-3-flash-preview' (inexistente).
-// Use a variável de ambiente GEMINI_PRO_MODEL para trocar sem redeploy.
-const GEMINI_PRO_MODEL   = process.env.GEMINI_PRO_MODEL   || 'gemini-2.5-pro-preview-06-05';
-const GEMINI_FLASH_MODEL = process.env.GEMINI_FLASH_MODEL || 'gemini-2.5-flash';
+// "Pro" e "Flash" usam o mesmo modelo Gemini (gemini-2.5-flash).
+// A diferença do modo Pro está no pipeline de pré-processamento
+// (classificação de intenção, síntese de memórias), não no modelo LLM.
+// O modelo original 'gemini-3-flash-preview' não existe e causava erro 404.
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 
 export function getGeminiConfig(modelKey) {
-  const key = modelKey === 'pro' ? GEMINI_PRO_API_KEY : GEMINI_FLASH_API_KEY;
-  if (!key) throw new Error(`Chave API não configurada para o modelo ${modelKey}`);
-  const modelName = modelKey === 'pro' ? GEMINI_PRO_MODEL : GEMINI_FLASH_MODEL;
-  const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}`;
-  return { key, modelName, baseUrl };
+  // Pro usa sua própria API key se disponível; caso contrário, compartilha a Flash key.
+  const key = (modelKey === 'pro' && GEMINI_PRO_API_KEY) ? GEMINI_PRO_API_KEY : GEMINI_FLASH_API_KEY;
+  const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}`;
+  return { key, modelName: GEMINI_MODEL, baseUrl };
 }
 
 export function geminiUrl(modelKey, stream = false) {
@@ -59,17 +59,20 @@ export async function withRetry(fn, maxRetries = 3, baseDelay = 3000) {
   }
 }
 
-// ─── Stream com detecção de MAX_TOKENS e timeout ──────────────────────────
-const STREAM_TIMEOUT_MS = 60_000; // 60 s sem receber nenhum byte → aborta
+// ─── Stream com timeout por inatividade ───────────────────────────────────
+const STREAM_INACTIVITY_MS = 45_000; // 45 s sem chunk → aborta
 
 export async function* streamGeminiChat(messages, systemPrompt, modelKey = 'flash') {
   const url  = geminiUrl(modelKey, true);
   const body = buildGeminiBody(messages, systemPrompt, modelKey);
 
   const controller = new AbortController();
+  let inactivityTimer = setTimeout(() => controller.abort(), STREAM_INACTIVITY_MS);
 
-  // Problema 7: timeout para o stream inteiro
-  const streamTimer = setTimeout(() => controller.abort(), STREAM_TIMEOUT_MS);
+  const resetTimer = () => {
+    clearTimeout(inactivityTimer);
+    inactivityTimer = setTimeout(() => controller.abort(), STREAM_INACTIVITY_MS);
+  };
 
   let response;
   try {
@@ -82,7 +85,7 @@ export async function* streamGeminiChat(messages, systemPrompt, modelKey = 'flas
       })
     );
   } catch (err) {
-    clearTimeout(streamTimer);
+    clearTimeout(inactivityTimer);
     if (err.name === 'AbortError') {
       throw Object.assign(new Error('Timeout no streaming do Gemini'), { status: 504 });
     }
@@ -90,7 +93,7 @@ export async function* streamGeminiChat(messages, systemPrompt, modelKey = 'flas
   }
 
   if (!response.ok) {
-    clearTimeout(streamTimer);
+    clearTimeout(inactivityTimer);
     const errorText = await response.text();
     throw new Error(`Gemini streaming error: ${response.status} - ${errorText}`);
   }
@@ -105,10 +108,7 @@ export async function* streamGeminiChat(messages, systemPrompt, modelKey = 'flas
       const { done, value } = await reader.read();
       if (done) break;
 
-      // Reinicia o timer a cada chunk recebido (watchdog por inatividade)
-      clearTimeout(streamTimer);
-      const inactivityTimer = setTimeout(() => controller.abort(), STREAM_TIMEOUT_MS);
-
+      resetTimer();
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop() || '';
@@ -116,7 +116,7 @@ export async function* streamGeminiChat(messages, systemPrompt, modelKey = 'flas
       for (const line of lines) {
         if (!line.startsWith('data: ')) continue;
         const data = line.slice(6);
-        if (data === '[DONE]') { clearTimeout(inactivityTimer); return; }
+        if (data === '[DONE]') return;
 
         try {
           const parsed      = JSON.parse(data);
@@ -128,18 +128,18 @@ export async function* streamGeminiChat(messages, systemPrompt, modelKey = 'flas
           if (finishReason === 'MAX_TOKENS') hitMaxTokens = true;
         } catch { /* ignora linha malformada */ }
       }
-
-      // Agora usando o inactivityTimer por chunk; cancela o anterior genérico
-      void inactivityTimer; // já registrado acima
     }
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      throw Object.assign(new Error('Timeout por inatividade no stream'), { status: 504 });
+    }
+    throw err;
   } finally {
-    clearTimeout(streamTimer);
+    clearTimeout(inactivityTimer);
     reader.cancel().catch(() => {});
   }
 
-  if (hitMaxTokens) {
-    yield { maxTokens: true };
-  }
+  if (hitMaxTokens) yield { maxTokens: true };
 }
 
 export async function geminiChat(messages, systemPrompt, modelKey = 'flash') {
