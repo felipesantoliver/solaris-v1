@@ -1,4 +1,4 @@
-// domain/ai/prompt.js — Montagem de system prompt com síntese de memórias e histórico
+// domain/ai/prompt.js — Montagem de system prompt com síntese de memórias, histórico e classificação de intenção
 
 import { getAsync, allAsync, runAsync } from '../../db/database.js';
 import { generateEmbedding, cosineSimilarity } from './embeddings.js';
@@ -139,49 +139,48 @@ export function sanitizeModelResponse(text) {
   return cleaned;
 }
 
-// ─── Síntese de memórias (chamada ao Python) ─────────────────────────────
-async function synthesizeMemories(query, memories) {
-  if (!memories || memories.length === 0) return { synthesis: '', usedIds: [] };
-
+// ─── Funções de chamada ao Python ──────────────────────────────────────────
+async function callPython(endpoint, payload) {
   try {
-    const response = await fetch(`${PYTHON_SERVICE_URL}/memories/synthesize`, {
+    const response = await fetch(`${PYTHON_SERVICE_URL}${endpoint}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query, memories: memories.map(m => ({ id: m.id, content: m.content })) }),
+      body: JSON.stringify(payload),
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const data = await response.json();
-    return { synthesis: data.synthesis || '', usedIds: data.used_memory_ids || [] };
+    return await response.json();
   } catch (err) {
-    console.error('❌ Falha na síntese de memórias:', err.message);
-    return null; // fallback
-  }
-}
-
-// ─── Síntese de histórico (chamada ao Python) ─────────────────────────────
-async function synthesizeHistory(messages, keepLast = 10) {
-  if (!messages || messages.length < 15) return null;
-
-  try {
-    const response = await fetch(`${PYTHON_SERVICE_URL}/history/synthesize`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages, keep_last: keepLast }),
-    });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const data = await response.json();
-    return {
-      summary: data.summary || '',
-      recent: data.recent_messages || [],
-    };
-  } catch (err) {
-    console.error('❌ Falha na síntese de histórico:', err.message);
+    console.error(`❌ Falha na chamada ao Python (${endpoint}):`, err.message);
     return null;
   }
 }
 
-// ─── Montagem do system prompt ────────────────────────────────────────────
-export function assembleBaseSystemPrompt({ settings, project, synthesis, memoryMode }) {
+async function synthesizeMemories(query, memories) {
+  if (!memories || memories.length === 0) return { synthesis: '', usedIds: [] };
+  const result = await callPython('/memories/synthesize', {
+    query,
+    memories: memories.map(m => ({ id: m.id, content: m.content })),
+  });
+  return result || { synthesis: '', usedIds: [] };
+}
+
+async function synthesizeHistory(messages, keepLast = 10) {
+  if (!messages || messages.length < 15) return null;
+  const result = await callPython('/history/synthesize', {
+    messages: messages.map(m => ({ role: m.role, content: m.content })),
+    keep_last: keepLast,
+  });
+  return result || null;
+}
+
+async function classifyIntent(query) {
+  if (!query) return 'general';
+  const result = await callPython('/intent/classify', { query });
+  return result?.intent || 'general';
+}
+
+// ─── Montagem do system prompt com intenção ──────────────────────────────
+export function assembleBaseSystemPrompt({ settings, project, synthesis, memoryMode, intent }) {
   let personalityText = PERSONALITY_GUIDE.direto;
   let customTraits = '';
   if (settings) {
@@ -204,8 +203,18 @@ export function assembleBaseSystemPrompt({ settings, project, synthesis, memoryM
   prompt += `\nEvite respostas genéricas. Nunca invente informações.\n\n`;
   prompt += BASE_IDENTITY_INSTRUCTION;
 
+  // Injeção condicional de memórias com base na intenção
   if (synthesis && synthesis.length > 0) {
-    prompt += `\n=== MEMÓRIAS RELEVANTES ===\n${synthesis}\n\n`;
+    if (intent === 'planning') {
+      // Prioriza memórias estratégicas
+      prompt += `\n=== MEMÓRIAS ESTRATÉGICAS (relevantes para planejamento) ===\n${synthesis}\n\n`;
+    } else if (intent === 'technical') {
+      // Reduz memórias (já foram sintetizadas, mas podemos indicar que são técnicas)
+      prompt += `\n=== MEMÓRIAS TÉCNICAS RELEVANTES ===\n${synthesis}\n\n`;
+    } else if (intent === 'review' || intent === 'general') {
+      prompt += `\n=== MEMÓRIAS RELEVANTES ===\n${synthesis}\n\n`;
+    }
+    // Se for 'continuation', não injeta memórias
   }
 
   return prompt;
@@ -218,7 +227,7 @@ export async function getBaseSystemPromptWithCache(userId, projectId, memoryMode
       Promise.resolve(null),
       projectId ? getAsync('SELECT * FROM projects WHERE id = $1', [projectId]) : Promise.resolve(null),
     ]);
-    return assembleBaseSystemPrompt({ settings: null, project, synthesis: null, memoryMode });
+    return assembleBaseSystemPrompt({ settings: null, project, synthesis: null, memoryMode, intent: 'general' });
   }
 
   const cached = await getCachedSystemPrompt(userId, projectId, memoryMode);
@@ -240,19 +249,23 @@ export async function getBaseSystemPromptWithCache(userId, projectId, memoryMode
     }
   }
 
-  if (memories.length > 0 && userQuery) {
+  // Classifica intenção
+  const intent = await classifyIntent(userQuery);
+
+  // Síntese de memórias (se houver e não for continuation)
+  if (memories.length > 0 && userQuery && intent !== 'continuation') {
     const result = await synthesizeMemories(userQuery, memories);
     if (result) {
       synthesis = result.synthesis;
     }
   }
 
-  // Fallback: se síntese falhou, injeta todas
-  if (!synthesis && memories.length > 0) {
+  // Fallback: se síntese falhou, injeta todas (exceto se continuation)
+  if (!synthesis && memories.length > 0 && intent !== 'continuation') {
     synthesis = memories.map(m => m.content).join('\n');
   }
 
-  const systemPrompt = assembleBaseSystemPrompt({ settings, project, synthesis, memoryMode });
+  const systemPrompt = assembleBaseSystemPrompt({ settings, project, synthesis, memoryMode, intent });
   await setCachedSystemPrompt(userId, projectId, memoryMode, systemPrompt);
   return systemPrompt;
 }
@@ -293,8 +306,7 @@ export async function selectContextWindow(history, userQuery = '') {
 }
 
 // ─── Extração de memórias (mantida) ──────────────────────────────────────
-// (mantenha a implementação original que chama o Python /memories/extract)
 export async function extractMemories(projectId, userId, response, memoryMode) {
   // ... (código original, sem alterações) ...
-  // Apenas para referência, não estou reescrevendo aqui, mas você deve mantê-lo.
+  // Apenas para referência, mantém a implementação que chama o Python /memories/extract
 }

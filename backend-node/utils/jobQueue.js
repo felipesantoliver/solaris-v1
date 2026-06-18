@@ -11,6 +11,7 @@ let queue = null;
 let worker = null;
 let isReady = false;
 
+// Handlers de processamento (mesma lógica anterior)
 const handlers = {
   upload: processUpload,
   embedding: processEmbedding,
@@ -31,6 +32,7 @@ async function processEmbedding(payload) {
   return { status: 'embedded', chunks: Math.ceil(text.length / 500) };
 }
 
+// Inicializa a fila e o worker se Redis estiver disponível
 function initBullMQ() {
   if (!REDIS_URL) {
     console.warn('⚠️ REDIS_URL não definida – fila desabilitada');
@@ -40,7 +42,10 @@ function initBullMQ() {
   try {
     const connection = { url: REDIS_URL, maxRetriesPerRequest: 3 };
 
-    queue = new Queue('solaris-jobs', { connection, defaultJobOptions: { attempts: 3, backoff: { type: 'exponential', delay: 5000 } } });
+    queue = new Queue('solaris-jobs', {
+      connection,
+      defaultJobOptions: { attempts: 3, backoff: { type: 'exponential', delay: 5000 } }
+    });
 
     worker = new Worker('solaris-jobs', async (job) => {
       const { id, name, data } = job;
@@ -57,9 +62,12 @@ function initBullMQ() {
         return result;
       } catch (err) {
         console.error(`❌ Job ${id} (${name}) falhou:`, err.message);
-        throw err;
+        throw err; // BullMQ cuidará do retry
       }
-    }, { connection, concurrency: 2 });
+    }, {
+      connection,
+      concurrency: 2,
+    });
 
     worker.on('completed', (job) => {
       console.log(`✅ Job ${job.id} (${job.name}) finalizado com sucesso`);
@@ -82,6 +90,7 @@ function initBullMQ() {
   }
 }
 
+// Função pública para adicionar job
 async function addJob(type, payload, priority = 0) {
   if (!isReady || !queue) {
     console.warn('⚠️ Fila desabilitada – job não adicionado:', type);
@@ -99,12 +108,14 @@ async function addJob(type, payload, priority = 0) {
   return jobId;
 }
 
+// Inicializa a fila (start)
 function start() {
   if (!isReady) {
     initBullMQ();
   }
 }
 
+// Para o worker (stop)
 async function stop() {
   if (worker) {
     await worker.close();
@@ -114,14 +125,20 @@ async function stop() {
   }
 }
 
+// Singleton
 let jobQueueInstance = null;
 
 export function getJobQueue() {
   if (!jobQueueInstance) {
-    jobQueueInstance = { addJob, start, stop };
+    jobQueueInstance = {
+      addJob,
+      start,
+      stop,
+    };
     jobQueueInstance.start();
   }
   return jobQueueInstance;
 }
 
+// Exporta também para uso direto (compatibilidade)
 export { addJob, start, stop };

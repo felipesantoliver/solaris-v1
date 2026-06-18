@@ -23,16 +23,11 @@ const RATE_LIMITS = {
   auth:  { max: 5, windowMs: 60_000 },
 };
 
-/**
- * Verifica se o usuário excedeu o limite de requisições.
- * Usa Redis se disponível, senão fallback para Map em memória.
- */
 async function checkRateLimit(userId) {
   const isGuest = !userId || userId.length < 36;
   const { max, windowMs } = isGuest ? RATE_LIMITS.guest : RATE_LIMITS.auth;
   const key = `ratelimit:${userId}`;
 
-  // Tenta usar Redis
   const result = await withRedis(
     async (client) => {
       const current = await client.incr(key);
@@ -41,7 +36,6 @@ async function checkRateLimit(userId) {
       }
       return current <= max;
     },
-    // Fallback: usa Map em memória
     async () => {
       const now = Date.now();
       const timestamps = (rateLimitMap.get(userId) || []).filter(t => now - t < windowMs);
@@ -51,11 +45,9 @@ async function checkRateLimit(userId) {
       return true;
     }
   );
-
   return result;
 }
 
-// Limpeza periódica do fallback Map (a cada 5 min)
 setInterval(() => {
   const now = Date.now();
   for (const [key, timestamps] of rateLimitMap.entries()) {
@@ -64,6 +56,44 @@ setInterval(() => {
     else rateLimitMap.set(key, fresh);
   }
 }, 5 * 60_000);
+
+// ─── Geração de título com Groq via Python ──────────────────────────────
+const PYTHON_SERVICE_URL = process.env.PYTHON_SERVICE_URL || 'http://localhost:8000';
+
+async function generateLocalTitle(firstMessage) {
+  const FALLBACK = 'Nova conversa';
+  if (!firstMessage || typeof firstMessage !== 'string') return FALLBACK;
+
+  // Tenta chamar o Python para gerar título com Groq
+  try {
+    const response = await fetch(`${PYTHON_SERVICE_URL}/title/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: firstMessage }),
+    });
+    if (response.ok) {
+      const data = await response.json();
+      if (data.title) {
+        return data.title;
+      }
+    }
+  } catch (err) {
+    console.warn('⚠️ Falha ao gerar título via Python:', err.message);
+  }
+
+  // Fallback: lógica original das 7 palavras
+  const cleaned = firstMessage
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/["""''`]/g, '')
+    .trim();
+  if (cleaned.length < 3) return FALLBACK;
+  const words = cleaned.split(' ').filter(Boolean);
+  let title = words.slice(0, 7).join(' ');
+  title = title.charAt(0).toUpperCase() + title.slice(1);
+  if (words.length > 7) title += '…';
+  return title.substring(0, 50);
+}
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 function cleanAssistantMessage(text) {
@@ -89,50 +119,29 @@ function cleanAssistantMessage(text) {
   return cleanedLines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
-function generateLocalTitle(firstMessage) {
-  const FALLBACK = 'Nova conversa';
-  if (!firstMessage || typeof firstMessage !== 'string') return FALLBACK;
-  const cleaned = firstMessage
-    .replace(/[\r\n\t]+/g, ' ')
-    .replace(/\s{2,}/g, ' ')
-    .replace(/["""''`]/g, '')
-    .trim();
-  if (cleaned.length < 3) return FALLBACK;
-  const words = cleaned.split(' ').filter(Boolean);
-  let title = words.slice(0, 7).join(' ');
-  title = title.charAt(0).toUpperCase() + title.slice(1);
-  if (words.length > 7) title += '…';
-  return title.substring(0, 50);
+function processResponse(text) {
+  return sanitizeModelResponse(cleanAssistantMessage(text));
 }
 
 // ─── RAG: busca via microsserviço Python ───────────────────────────────────
-const PYTHON_SERVICE_URL = process.env.PYTHON_SERVICE_URL || 'http://localhost:8000';
-
 async function searchRelevantChunks(projectId, query, limit = 3) {
   if (!projectId) return [];
-
   try {
     const response = await fetch(`${PYTHON_SERVICE_URL}/search/rag`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ project_id: projectId, query }),
     });
-
     if (!response.ok) {
       console.error(`Erro no serviço RAG: ${response.status}`);
       return [];
     }
-
     const data = await response.json();
     return data.filter(item => item.score > 0.65).map(item => item.text);
   } catch (err) {
     console.error('Falha na busca RAG via Python:', err.message);
     return [];
   }
-}
-
-function processResponse(text) {
-  return sanitizeModelResponse(cleanAssistantMessage(text));
 }
 
 // ─── GET mensagens de um chat (paginado) ──────────────────────────────────
@@ -145,14 +154,12 @@ router.get('/messages/chat/:chatId', async (req, res, next) => {
   try {
     const pool = await getPool();
 
-    // Total de mensagens do chat
     const totalResult = await pool.query(
       'SELECT COUNT(*) AS total FROM messages WHERE chat_id = $1',
       [chatId]
     );
     const total = parseInt(totalResult.rows[0]?.total || 0);
 
-    // Dados paginados (ordenados por created_at ASC para manter ordem cronológica)
     const dataResult = await pool.query(
       `SELECT id, role, content, edited, edit_history, created_at
        FROM messages
@@ -162,7 +169,6 @@ router.get('/messages/chat/:chatId', async (req, res, next) => {
       [chatId, limit, offset]
     );
 
-    // Limpa o conteúdo das mensagens do assistente
     const cleanedRows = dataResult.rows.map(msg =>
       msg.role === 'assistant' && msg.content
         ? { ...msg, content: processResponse(msg.content) }
@@ -218,7 +224,9 @@ router.post('/messages/stream', extractUserId, async (req, res, next) => {
       'SELECT role, content FROM messages WHERE chat_id = $1 ORDER BY created_at ASC',
       [chat_id]
     );
-    const baseSystemPrompt = await getBaseSystemPromptWithCache(userId, projectId, memoryMode);
+    
+    // Passa a query do usuário para a síntese de memórias
+    const baseSystemPrompt = await getBaseSystemPromptWithCache(userId, projectId, memoryMode, message);
 
     let finalSystemPrompt = baseSystemPrompt;
     if (relevantChunks.length > 0) {
@@ -227,7 +235,8 @@ router.post('/messages/stream', extractUserId, async (req, res, next) => {
       finalSystemPrompt += `Use essas informações quando pertinente.\n`;
     }
 
-    const apiHistory = selectContextWindow(history);
+    // Passa a query também para o selectContextWindow (pode ser usado para classificação)
+    const apiHistory = await selectContextWindow(history, message);
     let fullResponse = '';
     let wasMaxTokens = false;
 
@@ -247,7 +256,7 @@ router.post('/messages/stream', extractUserId, async (req, res, next) => {
 
     const isFirst = history.length === 1;
     if (isFirst) {
-      const title = generateLocalTitle(message);
+      const title = await generateLocalTitle(message);
       await runAsync('UPDATE chats SET title = $1 WHERE id = $2', [title, chat_id]).catch(() => {});
       sendEvent({ title, chat_id });
     }
@@ -301,7 +310,8 @@ router.post('/messages', extractUserId, async (req, res, next) => {
       'SELECT role, content FROM messages WHERE chat_id = $1 ORDER BY created_at ASC',
       [chat_id]
     );
-    const baseSystemPrompt = await getBaseSystemPromptWithCache(userId, projectId, memoryMode);
+    
+    const baseSystemPrompt = await getBaseSystemPromptWithCache(userId, projectId, memoryMode, message);
 
     let finalSystemPrompt = baseSystemPrompt;
     if (relevantChunks.length > 0) {
@@ -310,7 +320,7 @@ router.post('/messages', extractUserId, async (req, res, next) => {
       finalSystemPrompt += `Use essas informações quando pertinente.\n`;
     }
 
-    const apiHistory = selectContextWindow(history);
+    const apiHistory = await selectContextWindow(history, message);
     const { text, maxTokens } = await geminiChat(apiHistory, finalSystemPrompt, modelKey);
     const responseText = processResponse(text);
 
@@ -319,7 +329,7 @@ router.post('/messages', extractUserId, async (req, res, next) => {
 
     const isFirst = history.length === 1;
     if (isFirst) {
-      const title = generateLocalTitle(message);
+      const title = await generateLocalTitle(message);
       await runAsync('UPDATE chats SET title = $1 WHERE id = $2', [title, chat_id]).catch(() => {});
     }
 

@@ -4,8 +4,9 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
 import spacy
-from typing import List, Dict, Any
-from collections import defaultdict
+from typing import List
+
+from app.utils.groq_client import groq_available, groq_complete
 
 router = APIRouter()
 
@@ -19,7 +20,7 @@ except OSError:
     try:
         nlp = spacy.load("en_core_web_sm")
     except OSError:
-        raise RuntimeError("Modelo spaCy não encontrado.")
+        raise RuntimeError("Modelo spaCy não encontrado. Execute: python -m spacy download pt_core_news_sm")
 
 class Message(BaseModel):
     role: str  # "user" ou "assistant"
@@ -60,15 +61,13 @@ def cluster_messages(messages, threshold=0.75):
 
     return [[messages[i] for i in cluster] for cluster in clusters]
 
-def summarize_cluster(cluster_messages):
-    """Gera um parágrafo resumo para um cluster de mensagens."""
+def summarize_cluster_spacy(cluster_messages):
+    """Gera um parágrafo resumo para um cluster de mensagens usando spaCy."""
     full_text = " ".join([m.content for m in cluster_messages])
     doc = nlp(full_text)
-
     sentences = [sent.text.strip() for sent in doc.sents if len(sent.text.strip()) > 20]
     sentences.sort(key=len, reverse=True)
     top_sentences = sentences[:3]
-
     if top_sentences:
         return " ".join(top_sentences)
     else:
@@ -86,12 +85,35 @@ async def synthesize_history(request: HistorySynthesisRequest):
     if not older:
         return HistorySynthesisResponse(summary="", recent_messages=recent)
 
+    # Agrupa mensagens antigas
     clusters = cluster_messages(older, threshold=0.75)
-    cluster_summaries = [summarize_cluster(cluster) for cluster in clusters if cluster]
 
-    if cluster_summaries:
-        summary = "Resumo do histórico anterior:\n" + "\n".join(cluster_summaries)
+    summary = ""
+
+    # Tenta síntese com Groq se disponível
+    if groq_available():
+        # Junta todo o histórico antigo
+        full_older_text = "\n".join([f"{m.role}: {m.content}" for m in older])
+        prompt = f"""
+Resuma o seguinte histórico de conversa de forma fluida, em no máximo 5 linhas, preservando decisões, conclusões e contexto técnico.
+
+Histórico:
+{full_older_text}
+
+Retorne apenas o resumo, sem introdução ou conclusão.
+"""
+        groq_result = groq_complete(prompt, max_tokens=300)
+        if groq_result and 100 <= len(groq_result) <= 600:
+            summary = groq_result
+        else:
+            # Fallback para spaCy
+            cluster_summaries = [summarize_cluster_spacy(cluster) for cluster in clusters if cluster]
+            if cluster_summaries:
+                summary = "Resumo do histórico anterior:\n" + "\n".join(cluster_summaries)
     else:
-        summary = ""
+        # Sem Groq: usa spaCy
+        cluster_summaries = [summarize_cluster_spacy(cluster) for cluster in clusters if cluster]
+        if cluster_summaries:
+            summary = "Resumo do histórico anterior:\n" + "\n".join(cluster_summaries)
 
     return HistorySynthesisResponse(summary=summary, recent_messages=recent)

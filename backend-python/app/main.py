@@ -3,8 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
-# Importa os roteadores
-from app.routers import voice, files, embeddings, search, memories, history
+from app.routers import voice, files, embeddings, search, memories, history, title, intent
 
 load_dotenv()
 
@@ -28,8 +27,10 @@ app.include_router(voice.router, prefix="/voice", tags=["voice"])
 app.include_router(files.router, prefix="/files", tags=["files"])
 app.include_router(embeddings.router, prefix="/embeddings", tags=["embeddings"])
 app.include_router(search.router, prefix="/search", tags=["search"])
-app.include_router(memories.router, prefix="/memories", tags=["memories"])   # unificado
-app.include_router(history.router, prefix="/history", tags=["history"])       # renomeado
+app.include_router(memories.router, prefix="/memories", tags=["memories"])
+app.include_router(history.router, prefix="/history", tags=["history"])
+app.include_router(title.router, prefix="/title", tags=["title"])
+app.include_router(intent.router, prefix="/intent", tags=["intent"])
 
 @app.get("/health")
 async def health_check():

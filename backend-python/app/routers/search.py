@@ -1,5 +1,6 @@
 import os
 import json
+import asyncio
 import numpy as np
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -7,13 +8,13 @@ from sentence_transformers import SentenceTransformer
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
+from app.utils.groq_client import groq_available, groq_complete
+
 router = APIRouter()
 
-# Carrega o modelo de embedding (mesmo usado em embeddings.py)
 MODEL_NAME = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 model = SentenceTransformer(MODEL_NAME)
 
-# Conecta ao banco PostgreSQL usando DATABASE_URL
 def get_db_connection():
     try:
         return psycopg2.connect(os.getenv("DATABASE_URL"))
@@ -24,12 +25,25 @@ class RAGRequest(BaseModel):
     project_id: str
     query: str
 
+async def validate_chunk_groq(chunk_text: str, query: str) -> bool:
+    """Valida se o chunk é útil para responder à query usando Groq."""
+    if not groq_available():
+        return True  # Se Groq não disponível, mantém
+
+    prompt = f"""
+Pergunta: {query}
+
+Trecho: {chunk_text}
+
+Responda apenas "sim" se este trecho é útil para responder à pergunta, ou "não" caso contrário.
+"""
+    result = groq_complete(prompt, max_tokens=5)
+    if result:
+        return result.strip().lower() == "sim"
+    return True  # Em caso de erro, mantém
+
 @router.post("/rag")
 async def search_rag(request: RAGRequest):
-    """
-    Recebe project_id e query, gera embedding, busca chunks com embedding no banco,
-    calcula similaridade de cosseno e retorna os top 3 chunks com score > 0.65.
-    """
     project_id = request.project_id
     query = request.query.strip()
 
@@ -44,7 +58,7 @@ async def search_rag(request: RAGRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao gerar embedding: {str(e)}")
 
-    # 2. Busca chunks com embedding para o projeto
+    # 2. Busca chunks com embedding no banco
     conn = get_db_connection()
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -62,22 +76,18 @@ async def search_rag(request: RAGRequest):
         conn.close()
 
     if not rows:
-        return []  # Nenhum chunk encontrado
+        return []
 
-    # 3. Calcula similaridade de cosseno para cada chunk
-    results = []
-    THRESHOLD = 0.65
-
+    # 3. Calcula similaridade para todos e pega top 5
+    scored = []
     for row in rows:
         try:
-            # embedding está armazenado como JSONB (string JSON)
             embedding_data = row['embedding']
             if isinstance(embedding_data, str):
                 chunk_embedding = np.array(json.loads(embedding_data))
             else:
                 chunk_embedding = np.array(embedding_data)
 
-            # Similaridade de cosseno
             norm_query = np.linalg.norm(query_embedding)
             norm_chunk = np.linalg.norm(chunk_embedding)
             if norm_query == 0 or norm_chunk == 0:
@@ -85,8 +95,9 @@ async def search_rag(request: RAGRequest):
             else:
                 sim = np.dot(query_embedding, chunk_embedding) / (norm_query * norm_chunk)
 
-            if sim > THRESHOLD:
-                results.append({
+            if sim > 0.65:
+                scored.append({
+                    "id": row['id'],
                     "text": row['chunk_text'],
                     "score": float(sim)
                 })
@@ -94,6 +105,23 @@ async def search_rag(request: RAGRequest):
             print(f"Erro ao processar chunk {row.get('id')}: {e}")
             continue
 
-    # 4. Ordena por score (maior primeiro) e retorna top 3
-    results.sort(key=lambda x: x['score'], reverse=True)
-    return results[:3]
+    # Ordena e pega top 5 (para dar margem ao filtro)
+    scored.sort(key=lambda x: x['score'], reverse=True)
+    top_5 = scored[:5]
+
+    if not top_5:
+        return []
+
+    # 4. Validação com Groq (em paralelo)
+    if groq_available():
+        tasks = [validate_chunk_groq(chunk['text'], query) for chunk in top_5]
+        validation_results = await asyncio.gather(*tasks)
+
+        # Mantém apenas os que passaram na validação
+        validated = [chunk for chunk, valid in zip(top_5, validation_results) if valid]
+        if validated:
+            # Retorna até 3 chunks validados
+            return validated[:3]
+
+    # Fallback: retorna top 3 originais
+    return top_5[:3]
