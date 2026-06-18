@@ -4,22 +4,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
 # Importa os roteadores
-from app.routers import voice, files, embeddings, search, memories
+from app.routers import voice, files, embeddings, search, memories, history
 
 load_dotenv()
 
 app = FastAPI(title="Solaris Python Microservice", version="1.0.0")
 
-# ─── CORS ─────────────────────────────────────────────────────────────
-# 🔥 Permitir origens: frontend (Vercel) e também o Node (Render)
-#    (embora o Node não precise de CORS, não faz mal)
+# CORS
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
-NODE_URL = os.getenv("NODE_URL", "http://localhost:3001")  # opcional, mas incluímos
-origins = [
-    FRONTEND_URL,
-    NODE_URL,
-    # Se quiser, pode adicionar também o domínio do Render do Node
-]
+NODE_URL = os.getenv("NODE_URL", "http://localhost:3001")
+origins = [FRONTEND_URL, NODE_URL]
 
 app.add_middleware(
     CORSMiddleware,
@@ -34,7 +28,8 @@ app.include_router(voice.router, prefix="/voice", tags=["voice"])
 app.include_router(files.router, prefix="/files", tags=["files"])
 app.include_router(embeddings.router, prefix="/embeddings", tags=["embeddings"])
 app.include_router(search.router, prefix="/search", tags=["search"])
-app.include_router(memories.router, prefix="/memories", tags=["memories"])
+app.include_router(memories.router, prefix="/memories", tags=["memories"])   # unificado
+app.include_router(history.router, prefix="/history", tags=["history"])       # renomeado
 
 @app.get("/health")
 async def health_check():
@@ -47,5 +42,5 @@ if __name__ == "__main__":
         "app.main:app",
         host="0.0.0.0",
         port=port,
-        reload=False   # em produção, não use reload
+        reload=False
     )

@@ -1,152 +1,127 @@
-// utils/jobQueue.js — Fila de jobs assíncrona
+// utils/jobQueue.js — Fila de jobs assíncrona com BullMQ
 
+import { Queue, Worker } from 'bullmq';
 import { randomUUID } from 'crypto';
 import { runAsync, allAsync, getAsync } from '../db/database.js';
 import { indexFileChunks } from '../domain/ai/embeddings.js';
 
-class JobQueue {
-    constructor(options = {}) {
-        this.concurrency = options.concurrency || 2;
-        this.pollInterval = options.pollInterval || 3000;
-        this.running = 0;
-        this.intervalId = null;
-        this.handlers = {
-            upload: this.processUpload.bind(this),
-            embedding: this.processEmbedding.bind(this),
-        };
-    }
+const REDIS_URL = process.env.REDIS_URL;
 
-    start() {
-        if (this.intervalId) return;
-        this.intervalId = setInterval(() => this.poll(), this.pollInterval);
-        this.cleanupIntervalId = setInterval(() => this.cleanup(), 24 * 60 * 60 * 1000);
-        this.cleanup();
-        console.log(`🚀 JobQueue iniciada (concorrência=${this.concurrency})`);
-    }
+let queue = null;
+let worker = null;
+let isReady = false;
 
-    stop() {
-        if (this.intervalId) {
-            clearInterval(this.intervalId);
-            this.intervalId = null;
-        }
-        if (this.cleanupIntervalId) {
-            clearInterval(this.cleanupIntervalId);
-            this.cleanupIntervalId = null;
-        }
-    }
+const handlers = {
+  upload: processUpload,
+  embedding: processEmbedding,
+};
 
-    async cleanup() {
-        try {
-            const { rowCount } = await runAsync(
-                `DELETE FROM jobs WHERE status IN ('completed', 'failed') AND updated_at < NOW() - INTERVAL '7 days'`
-            );
-            if (rowCount > 0) console.log(`🧹 JobQueue: ${rowCount} jobs antigos removidos`);
-        } catch (err) {
-            console.error('❌ Erro na limpeza de jobs:', err.message);
-        }
-    }
-
-    async poll() {
-        while (this.running < this.concurrency) {
-            const job = await this.getNextPendingJob();
-            if (!job) break;
-            this.running++;
-            this.processJob(job).finally(() => this.running--);
-        }
-    }
-
-    async getNextPendingJob() {
-        const rows = await allAsync(
-            `SELECT * FROM jobs
-       WHERE status = 'pending'
-       ORDER BY priority DESC, created_at ASC
-       LIMIT 1`
-        );
-        return rows[0] || null;
-    }
-
-    async processJob(job) {
-        const handler = this.handlers[job.type];
-        if (!handler) {
-            await this.markFailed(job.id, `Tipo de job desconhecido: ${job.type}`);
-            return;
-        }
-        await this.markProcessing(job.id);
-        try {
-            const result = await handler(job.payload);
-            await this.markCompleted(job.id, result);
-            console.log(`✅ Job ${job.id} (${job.type}) concluído`);
-        } catch (err) {
-            console.error(`❌ Job ${job.id} falhou:`, err);
-            const retry = job.retry_count + 1;
-            if (retry <= job.max_retries) {
-                await runAsync(
-                    `UPDATE jobs SET status = 'pending', retry_count = $1, updated_at = NOW() WHERE id = $2`,
-                    [retry, job.id]
-                );
-                console.log(`🔄 Job ${job.id} reagendado (tentativa ${retry}/${job.max_retries})`);
-            } else {
-                await this.markFailed(job.id, err.message);
-            }
-        }
-    }
-
-    async addJob(type, payload, priority = 0) {
-        const id = randomUUID();
-        await runAsync(
-            `INSERT INTO jobs (id, type, payload, priority, status)
-       VALUES ($1, $2, $3, $4, 'pending')`,
-            [id, type, JSON.stringify(payload), priority]
-        );
-        console.log(`📦 Job ${id} (${type}) adicionado à fila`);
-
-        // Dispara polling imediato para processar o job recém-criado sem esperar o intervalo
-        setImmediate(() => this.poll());
-
-        return id;
-    }
-
-    async markProcessing(id) {
-        await runAsync(`UPDATE jobs SET status = 'processing', updated_at = NOW() WHERE id = $1`, [id]);
-    }
-
-    async markCompleted(id, result) {
-        await runAsync(
-            `UPDATE jobs SET status = 'completed', result = $1, updated_at = NOW() WHERE id = $2`,
-            [JSON.stringify(result), id]
-        );
-    }
-
-    async markFailed(id, error) {
-        await runAsync(
-            `UPDATE jobs SET status = 'failed', error = $1, updated_at = NOW() WHERE id = $2`,
-            [error, id]
-        );
-    }
-
-    // Handlers específicos
-    async processUpload(payload) {
-        const { fileId, projectId, filePath, extractedText } = payload;
-        if (extractedText && extractedText.length > 0) {
-            await this.addJob('embedding', { fileId, projectId, text: extractedText }, 1);
-        }
-        return { status: 'uploaded', fileId };
-    }
-
-    async processEmbedding(payload) {
-        const { fileId, projectId, text } = payload;
-        const db = { runAsync, allAsync, getAsync };
-        await indexFileChunks(fileId, text, db);
-        return { status: 'embedded', chunks: Math.ceil(text.length / 500) };
-    }
+async function processUpload(payload) {
+  const { fileId, projectId, filePath, extractedText } = payload;
+  if (extractedText && extractedText.length > 0) {
+    await addJob('embedding', { fileId, projectId, text: extractedText }, 1);
+  }
+  return { status: 'uploaded', fileId };
 }
 
-// Singleton
+async function processEmbedding(payload) {
+  const { fileId, projectId, text } = payload;
+  const db = { runAsync, allAsync, getAsync };
+  await indexFileChunks(fileId, text, db);
+  return { status: 'embedded', chunks: Math.ceil(text.length / 500) };
+}
+
+function initBullMQ() {
+  if (!REDIS_URL) {
+    console.warn('⚠️ REDIS_URL não definida – fila desabilitada');
+    return false;
+  }
+
+  try {
+    const connection = { url: REDIS_URL, maxRetriesPerRequest: 3 };
+
+    queue = new Queue('solaris-jobs', { connection, defaultJobOptions: { attempts: 3, backoff: { type: 'exponential', delay: 5000 } } });
+
+    worker = new Worker('solaris-jobs', async (job) => {
+      const { id, name, data } = job;
+      console.log(`🚀 Iniciando job ${id} (${name})`);
+
+      const handler = handlers[name];
+      if (!handler) {
+        throw new Error(`Tipo de job desconhecido: ${name}`);
+      }
+
+      try {
+        const result = await handler(data);
+        console.log(`✅ Job ${id} (${name}) concluído`);
+        return result;
+      } catch (err) {
+        console.error(`❌ Job ${id} (${name}) falhou:`, err.message);
+        throw err;
+      }
+    }, { connection, concurrency: 2 });
+
+    worker.on('completed', (job) => {
+      console.log(`✅ Job ${job.id} (${job.name}) finalizado com sucesso`);
+    });
+
+    worker.on('failed', (job, err) => {
+      console.error(`❌ Job ${job.id} (${job.name}) falhou definitivamente:`, err.message);
+    });
+
+    worker.on('error', (err) => {
+      console.error('⚠️ Worker BullMQ erro:', err.message);
+    });
+
+    isReady = true;
+    console.log('🚀 BullMQ Worker iniciado');
+    return true;
+  } catch (err) {
+    console.error('❌ Falha ao inicializar BullMQ:', err.message);
+    return false;
+  }
+}
+
+async function addJob(type, payload, priority = 0) {
+  if (!isReady || !queue) {
+    console.warn('⚠️ Fila desabilitada – job não adicionado:', type);
+    return null;
+  }
+
+  const jobId = randomUUID();
+  await queue.add(type, payload, {
+    priority,
+    jobId,
+    attempts: payload.maxRetries || 3,
+    backoff: { type: 'exponential', delay: 5000 },
+  });
+  console.log(`📦 Job ${jobId} (${type}) adicionado à fila BullMQ`);
+  return jobId;
+}
+
+function start() {
+  if (!isReady) {
+    initBullMQ();
+  }
+}
+
+async function stop() {
+  if (worker) {
+    await worker.close();
+    worker = null;
+    isReady = false;
+    console.log('🛑 BullMQ Worker parado');
+  }
+}
+
 let jobQueueInstance = null;
+
 export function getJobQueue() {
-    if (!jobQueueInstance) {
-        jobQueueInstance = new JobQueue();
-        jobQueueInstance.start();
-    }
-    return jobQueueInstance;
+  if (!jobQueueInstance) {
+    jobQueueInstance = { addJob, start, stop };
+    jobQueueInstance.start();
+  }
+  return jobQueueInstance;
 }
+
+export { addJob, start, stop };
