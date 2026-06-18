@@ -1,46 +1,69 @@
 import os
 import tempfile
-import whisper
 from fastapi import APIRouter, File, UploadFile, HTTPException
 from fastapi.responses import JSONResponse
-import numpy as np
-import soundfile as sf
-import io
 
 router = APIRouter()
 
-# Carrega o modelo uma única vez (cache) – você pode definir a variável de ambiente WHISPER_MODEL
-# Valores possíveis: tiny, base, small, medium, large
-WHISPER_MODEL = os.getenv("WHISPER_MODEL", "tiny")
-model = whisper.load_model(WHISPER_MODEL)
+# Usa a API Whisper do Groq (sem modelo local → sem consumo de RAM no startup)
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
+
+def _get_groq_client():
+    """Retorna um cliente Groq inicializado sob demanda."""
+    if not GROQ_API_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail="GROQ_API_KEY não configurada. Transcrição indisponível.",
+        )
+    try:
+        from groq import Groq
+        return Groq(api_key=GROQ_API_KEY)
+    except ImportError:
+        raise HTTPException(
+            status_code=503,
+            detail="Pacote 'groq' não instalado.",
+        )
+
 
 @router.post("/transcribe")
 async def transcribe_audio(file: UploadFile = File(...)):
     """
     Recebe um arquivo de áudio (multipart/form-data) e retorna a transcrição em português.
+    Usa a API Whisper do Groq (whisper-large-v3-turbo) — sem modelo local.
     """
-    # Verifica se o arquivo foi enviado
     if not file:
         raise HTTPException(status_code=400, detail="Nenhum arquivo enviado.")
 
-    # Lê o conteúdo do arquivo
     contents = await file.read()
-    
-    # Salva temporariamente em disco (o Whisper espera um caminho de arquivo)
+
+    # Detecta extensão para o arquivo temporário
+    original_name = file.filename or "audio.webm"
+    suffix = os.path.splitext(original_name)[-1] or ".webm"
+
+    tmp_path = None
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as tmp:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             tmp.write(contents)
             tmp_path = tmp.name
 
-        # Realiza a transcrição
-        result = model.transcribe(tmp_path, language="pt", task="transcribe")
-        text = result.get("text", "").strip()
+        client = _get_groq_client()
 
+        with open(tmp_path, "rb") as audio_file:
+            transcription = client.audio.transcriptions.create(
+                file=(os.path.basename(tmp_path), audio_file),
+                model="whisper-large-v3-turbo",
+                language="pt",
+                response_format="json",
+            )
+
+        text = (transcription.text or "").strip()
         return JSONResponse(content={"text": text})
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro na transcrição: {str(e)}")
     finally:
-        # Remove o arquivo temporário, se existir
-        if os.path.exists(tmp_path):
+        if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)

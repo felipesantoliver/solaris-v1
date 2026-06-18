@@ -4,7 +4,7 @@ services:
   - type: web
     name: solaris-node
     env: node
-    rootDir: backend-node                # ← pasta onde está o package.json
+    rootDir: backend-node
     buildCommand: npm install
     startCommand: node server.js
     envVars:
@@ -29,12 +29,11 @@ services:
   - type: web
     name: solaris-python
     env: python
-    rootDir: backend-python              # ← pasta onde está o requirements.txt
-    runtime: python3                     # força Python — não usa Node build
-    pythonVersion: "3.12.0"             # fixa em 3.12; openai-whisper quebra no 3.14
+    rootDir: backend-python
+    runtime: python3
+    pythonVersion: "3.12.0"
     buildCommand: |
       pip install --upgrade pip "setuptools>=68.0.0,<81" wheel
-      pip install --no-build-isolation "openai-whisper==20240930"
       pip install -r requirements.txt
       python -m spacy download pt_core_news_sm
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
@@ -43,7 +42,7 @@ services:
         sync: false
       - key: FRONTEND_URL
         sync: false
-      - key: WHISPER_MODEL
-        value: tiny
+      - key: GROQ_API_KEY
+        sync: false
       - key: EMBEDDING_MODEL
         value: sentence-transformers/all-MiniLM-L6-v2
