@@ -8,11 +8,9 @@ if (!GEMINI_FLASH_API_KEY) throw new Error('❌ GEMINI_FLASH_API_KEY não defini
 // "Pro" e "Flash" usam o mesmo modelo Gemini (gemini-2.5-flash).
 // A diferença do modo Pro está no pipeline de pré-processamento
 // (classificação de intenção, síntese de memórias), não no modelo LLM.
-// O modelo original 'gemini-3-flash-preview' não existe e causava erro 404.
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 
 export function getGeminiConfig(modelKey) {
-  // Pro usa sua própria API key se disponível; caso contrário, compartilha a Flash key.
   const key = (modelKey === 'pro' && GEMINI_PRO_API_KEY) ? GEMINI_PRO_API_KEY : GEMINI_FLASH_API_KEY;
   const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}`;
   return { key, modelName: GEMINI_MODEL, baseUrl };
@@ -38,19 +36,29 @@ export function buildGeminiBody(messages, systemPrompt, modelKey = 'flash') {
   return {
     system_instruction: { parts: [{ text: systemPrompt }] },
     contents,
-    generationConfig: { maxOutputTokens: MAX_OUTPUT_TOKENS[modelKey] ?? MAX_OUTPUT_TOKENS.flash },
+    generationConfig: {
+      maxOutputTokens: MAX_OUTPUT_TOKENS[modelKey] ?? MAX_OUTPUT_TOKENS.flash,
+      // FIX VELOCIDADE: desativa o "thinking" do Gemini 2.5 Flash.
+      // O thinking adiciona latência significativa sem benefício para um chat.
+      // thinkingBudget: 0 → resposta imediata sem etapa de raciocínio interno.
+      thinkingConfig: { thinkingBudget: 0 },
+    },
   };
 }
 
+// ─── withRetry: trata 429 tanto de exceções quanto de respostas HTTP ─────────
+// CORREÇÃO: fetch() não lança erro em respostas 4xx — withRetry nunca
+// detectava o 429 do Gemini. Agora o callback lança explicitamente, e o
+// retry com backoff exponencial funciona de verdade.
 export async function withRetry(fn, maxRetries = 3, baseDelay = 3000) {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       return await fn();
     } catch (err) {
-      const is429 = err.message?.includes('429') || err.status === 429;
+      const is429 = err.status === 429 || err.message?.includes('429');
       if (is429 && attempt < maxRetries) {
         const wait = baseDelay * Math.pow(2, attempt);
-        console.warn(`⚠️ Rate limit. Aguardando ${wait / 1000}s...`);
+        console.warn(`⚠️ Rate limit Gemini (tentativa ${attempt + 1}/${maxRetries}). Aguardando ${wait / 1000}s...`);
         await new Promise(r => setTimeout(r, wait));
         continue;
       }
@@ -76,14 +84,21 @@ export async function* streamGeminiChat(messages, systemPrompt, modelKey = 'flas
 
   let response;
   try {
-    response = await withRetry(() =>
-      fetch(url, {
+    // FIX: lança erro explícito no 429 para withRetry poder retentar
+    response = await withRetry(async () => {
+      const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
         signal: controller.signal,
-      })
-    );
+      });
+      if (res.status === 429) {
+        const err = new Error(`Gemini rate limit (429)`);
+        err.status = 429;
+        throw err;
+      }
+      return res;
+    });
   } catch (err) {
     clearTimeout(inactivityTimer);
     if (err.name === 'AbortError') {
@@ -150,14 +165,22 @@ export async function geminiChat(messages, systemPrompt, modelKey = 'flash') {
   const timeout    = setTimeout(() => controller.abort(), 30_000);
 
   try {
-    const res = await withRetry(() =>
-      fetch(url, {
+    // FIX: mesma correção — lança erro no 429 para withRetry funcionar
+    const res = await withRetry(async () => {
+      const r = await fetch(url, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify(body),
         signal:  controller.signal,
-      })
-    );
+      });
+      if (r.status === 429) {
+        const err = new Error(`Gemini rate limit (429)`);
+        err.status = 429;
+        throw err;
+      }
+      return r;
+    });
+
     if (!res.ok) {
       const err = new Error(`Erro na IA: ${res.status}`);
       err.status = res.status;

@@ -18,9 +18,11 @@ const router = Router();
 // ─── Rate limit in-memory (fallback) ──────────────────────────────────────
 const rateLimitMap = new Map();
 
+// FIX: limites anteriores (guest: 2, auth: 5) eram muito baixos para uso normal.
+// Novo: guest: 15/min, auth: 40/min.
 const RATE_LIMITS = {
-  guest: { max: 2, windowMs: 60_000 },
-  auth:  { max: 5, windowMs: 60_000 },
+  guest: { max: 15, windowMs: 60_000 },
+  auth:  { max: 40, windowMs: 60_000 },
 };
 
 async function checkRateLimit(userId) {
@@ -64,7 +66,9 @@ async function generateLocalTitle(firstMessage) {
 
   try {
     const ac = new AbortController();
-    const t  = setTimeout(() => ac.abort(), 8_000);
+    // FIX: timeout reduzido de 8s para 2s — não vale bloquear o evento
+    // "done" por 8 segundos só para gerar um título.
+    const t  = setTimeout(() => ac.abort(), 2_000);
     const response = await fetch(`${PYTHON_SERVICE_URL}/title/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -143,8 +147,6 @@ async function searchRelevantChunks(projectId, query) {
 }
 
 // ─── GET mensagens de um chat (paginado) ──────────────────────────────────
-// Problema 11 corrigido: page=1 retorna as mensagens mais recentes;
-// array revertido para preservar ordem cronológica no front.
 router.get('/messages/chat/:chatId', async (req, res, next) => {
   const chatId = req.params.chatId;
   const page   = parseInt(req.query.page)  || 1;
@@ -169,7 +171,7 @@ router.get('/messages/chat/:chatId', async (req, res, next) => {
       [chatId, limit, offset]
     );
 
-    const rows = dataResult.rows.reverse(); // cronológico dentro da página
+    const rows = dataResult.rows.reverse();
 
     const cleanedRows = rows.map(msg =>
       msg.role === 'assistant' && msg.content
@@ -188,7 +190,6 @@ router.get('/messages/chat/:chatId', async (req, res, next) => {
 });
 
 // ─── PATCH editar mensagem ─────────────────────────────────────────────────
-// Problema 10 corrigido: endpoint ausente → edit não persistia.
 router.patch('/messages/:messageId', extractUserId, async (req, res, next) => {
   const { messageId } = req.params;
   const { content }   = req.body;
@@ -246,23 +247,18 @@ router.post('/messages/stream', extractUserId, async (req, res, next) => {
     'Content-Type':                'text/event-stream',
     'Cache-Control':               'no-cache',
     'Connection':                  'keep-alive',
-    'X-Accel-Buffering':           'no',   // desativa buffering no nginx/Render
+    'X-Accel-Buffering':           'no',
     'Access-Control-Allow-Origin': process.env.FRONTEND_URL || '*',
   });
 
-  // ── FIX: keep-alive imediato para evitar timeout do cliente durante
-  //    o aquecimento do Python (cold start no Render pode levar 15–30 s).
-  //    Comentários SSE (": ...") são ignorados pelo EventSource mas mantêm
-  //    a conexão TCP viva e sinalizam que o servidor está processando.
   res.write(': processing\n\n');
 
-  // Heartbeat a cada 15 s enquanto não houver dados
   const heartbeat = setInterval(() => {
     if (!res.writableEnded) res.write(': heartbeat\n\n');
   }, 15_000);
 
   const sendEvent = (data) => {
-    clearInterval(heartbeat); // para o heartbeat assim que dados reais chegarem
+    clearInterval(heartbeat);
     if (!res.writableEnded) res.write(`data: ${JSON.stringify(data)}\n\n`);
   };
 
@@ -302,11 +298,23 @@ router.post('/messages/stream', extractUserId, async (req, res, next) => {
     await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'assistant', cleanedResponse]);
     await runAsync('UPDATE chats SET updated_at = NOW() WHERE id = $1', [chat_id]);
 
+    if (wasMaxTokens) sendEvent({ maxTokens: true });
+
+    // FIX PRIMEIRA RESPOSTA: envia "done" ANTES de gerar o título.
+    // Antes: generateLocalTitle tinha timeout de 8s e bloqueava o "done",
+    // fazendo o frontend não renderizar a resposta até o timeout expirar.
+    // Agora: o frontend recebe "done" imediatamente → renderiza a resposta →
+    // o título é gerado em background (timeout de 2s) e enviado depois.
+    sendEvent({ done: true });
+
     const isFirst = history.length === 1;
     if (isFirst) {
       const title = await generateLocalTitle(message);
       await runAsync('UPDATE chats SET title = $1 WHERE id = $2', [title, chat_id]).catch(() => {});
-      sendEvent({ title, chat_id });
+      // Envia o título após o done — o frontend deve aceitar eventos após done
+      if (!res.writableEnded) {
+        res.write(`data: ${JSON.stringify({ title, chat_id })}\n\n`);
+      }
     }
 
     if (projectId || memoryMode === 'global') {
@@ -314,9 +322,6 @@ router.post('/messages/stream', extractUserId, async (req, res, next) => {
       invalidateSystemPromptCache(userId, projectId);
     }
 
-    if (wasMaxTokens) sendEvent({ maxTokens: true });
-
-    sendEvent({ done: true });
   } catch (err) {
     console.error('Erro no streaming:', err);
     if (!res.writableEnded) {
