@@ -24,7 +24,7 @@ Assistente pessoal de IA com memória persistente, organização por projetos e 
 
 ## Visão geral
 
-Solaris AI é construído em torno do conceito de **projetos com contexto próprio**. Cada projeto mantém suas memórias, histórico de conversas, arquivos e fontes de conhecimento de forma isolada. O sistema usa embeddings semânticos para recuperação de informações (RAG) e spaCy + Groq para extrair e sintetizar memórias automaticamente ao encerrar cada conversa.
+Solaris AI é construído em torno do conceito de **projetos com contexto próprio**. Cada projeto mantém suas memórias, histórico de conversas, arquivos e fontes de conhecimento de forma isolada. O sistema usa embeddings semânticos para recuperação de informações (RAG) e spaCy + Groq para extrair e sintetizar memórias automaticamente após cada resposta.
 
 A arquitetura é distribuída em quatro serviços independentes:
 
@@ -50,9 +50,7 @@ A arquitetura é distribuída em quatro serviços independentes:
 
 > Memórias nunca vazam entre projetos. Um projeto não tem acesso às memórias de outro, nem ao histórico de chats avulsos. Isso garante isolamento total de contexto.
 
-**Memória automática** — ao encerrar uma conversa, o sistema analisa o texto com spaCy buscando padrões relevantes (decisões, tecnologias, preferências, regras). Quando `GROQ_API_KEY` está disponível, usa um modelo de linguagem para síntese mais sofisticada. As memórias ficam vinculadas ao projeto (ou ao chat, se avulso) e são injetadas nas próximas conversas.
-
-> ⚠️ **Limitação conhecida:** memórias são extraídas apenas ao encerrar a conversa. Se o usuário fechar a aba ou a sessão cair antes do encerramento, as memórias daquela sessão são perdidas. Extração incremental mid-conversation está no roadmap.
+**Memória automática** — após cada resposta do assistente, o sistema analisa o texto com spaCy buscando padrões relevantes (decisões, tecnologias, preferências, regras). Quando `GROQ_API_KEY` está disponível, usa um modelo de linguagem para síntese mais sofisticada. As memórias ficam vinculadas ao projeto (ou ao chat, se avulso) e são injetadas nas próximas conversas. Duplicatas são filtradas por similaridade de Jaccard antes de serem salvas.
 
 **Seleção de janela de contexto** — o backend seleciona dinamicamente quais memórias e mensagens anteriores incluir em cada requisição, priorizando relevância para não desperdiçar tokens.
 
@@ -61,6 +59,7 @@ A arquitetura é distribuída em quatro serviços independentes:
 **Modos de memória por projeto:**
 - `projeto` — memórias isoladas por projeto
 - `global` — memórias compartilhadas entre todos os projetos do usuário
+- `nenhuma` — memória desativada; nenhuma informação é extraída ou injetada
 
 ---
 
@@ -72,7 +71,7 @@ A arquitetura é distribuída em quatro serviços independentes:
 
 **Histórico paginado** — carregamento de 30 mensagens por página para chats longos.
 
-**Geração automática de título** — gerado via Groq na primeira mensagem, com fallback para as primeiras 6 palavras.
+**Geração automática de título** — gerado via Groq na primeira mensagem, com fallback para as primeiras 7 palavras.
 
 **Rate limiting** — dois níveis de proteção, implementado com Redis (com fallback em memória):
 
@@ -87,7 +86,9 @@ A arquitetura é distribuída em quatro serviços independentes:
 
 ### 🤖 Modelos e personalidades
 
-**Múltiplos modelos** — alterne entre Gemini Flash (rápido) e Gemini Pro (mais elaborado). O modelo pode ser definido por projeto ou por conversa.
+**Múltiplos modelos** — alterne entre dois modos de resposta. O **Flash** usa o Gemini diretamente — rápido e objetivo, ideal para perguntas diretas e tarefas do dia a dia. O **Pro** é um modo avançado que vai além do modelo base: a pergunta passa por um pré-processamento, é refinada e trabalhada em etapas quase iterativas antes de gerar a resposta final, resultando em respostas mais precisas, confiáveis e aprofundadas. O modo Pro também realiza buscas na internet para incorporar informações atualizadas, garantindo que a resposta não fique limitada ao conhecimento estático do modelo. O modo pode ser definido por projeto ou trocado por conversa.
+
+> O modo Pro está disponível **apenas para usuários autenticados**. No modo convidado, somente o Flash está habilitado.
 
 **7 personalidades configuráveis:**
 
@@ -131,7 +132,7 @@ A arquitetura é distribuída em quatro serviços independentes:
 
 ### 🎙️ Voz e código
 
-**Transcrição de voz** — grave áudio diretamente no chat. O arquivo é transcrito via Whisper da GROQ API (sem modelo local, sem consumo de RAM extra). Requer `GROQ_API_KEY`.
+**Transcrição de voz** — grave áudio diretamente no chat. O arquivo é transcrito via API Whisper da Groq (modelo `whisper-large-v3-turbo`), sem rodar nada localmente e sem consumo de RAM extra. Requer `GROQ_API_KEY`.
 
 **Sandbox de execução de código** — snippets Python executados em ambiente Docker isolado:
 
@@ -179,11 +180,11 @@ solaris-v1/
 │   │   └── ai/             # gemini.js, prompt.js
 │   ├── db/                 # schema.js (migrações automáticas), database.js
 │   ├── middleware/         # auth.js
-│   └── utils/              # redis.js, errorHandler.js
+│   └── utils/              # redis.js, errorHandler.js, jobQueue.js, circuitBreaker.js
 │
 ├── backend-python/         # FastAPI (voz, embeddings, RAG, memórias)  →  Render
 │   ├── app/
-│   │   ├── routers/        # voice, files, embeddings, search, memories, history, title
+│   │   ├── routers/        # voice, files, embeddings, search, memories, history, title, intent
 │   │   ├── ml_models.py    # SentenceTransformer + spaCy (lazy loading)
 │   │   └── utils/          # groq_client.py, math_utils.py
 │   └── migrations/         # 001_add_pgvector_file_chunks.sql
@@ -206,8 +207,8 @@ Usuário
   ├──► [Supabase PostgreSQL]    dados, memórias, arquivos, jobs
   ├──► [Redis]                  rate limiting e cache (opcional)
   ├──► [Google Gemini API]      geração de respostas
-  ├──► [Backend Python]         embeddings, voz, memórias, títulos
-  │      └──► [GROQ API]        Whisper + geração de títulos
+  ├──► [Backend Python]         embeddings, voz, memórias, títulos, intenção
+  │      └──► [GROQ API]        Whisper + geração de títulos + classificação de intenção
   └──► [Sandbox Docker]         execução isolada de código Python
 ```
 
@@ -235,12 +236,12 @@ O backend Node aplica migrações automaticamente no startup (sem ferramenta ext
 | `projects` | Projetos do usuário: objetivo, tags, modo de memória, modelo |
 | `chats` | Conversas vinculadas a um projeto |
 | `messages` | Mensagens com histórico de edições (JSONB) |
-| `memories` | Memórias extraídas automaticamente, com embedding para busca |
+| `memories` | Memórias extraídas automaticamente após cada resposta, com embedding para busca |
 | `files` | Arquivos: metadados + texto extraído + binário (BYTEA) |
 | `file_chunks` | Chunks com `embedding_v vector(384)` (pgvector) |
 | `external_sources` | Fontes externas por projeto: URL ou texto livre |
 | `user_settings` | Personalidade e traits por usuário |
-| `jobs` | Fila de jobs assíncronos com retry e prioridade |
+| `jobs` | Fila de jobs assíncronos (upload e indexação) com retry e prioridade |
 | `schema_version` | Controle de versão das migrações |
 
 ### Migration pgvector (Supabase)
@@ -272,7 +273,8 @@ Execute `backend-python/migrations/001_add_pgvector_file_chunks.sql` manualmente
 | `POST` | `/api/chats` | Cria chat |
 | `DELETE` | `/api/chats/:id` | Remove chat |
 | `GET` | `/api/chats/:id/messages` | Mensagens paginadas |
-| `POST` | `/api/messages` | Envia mensagem (SSE streaming) |
+| `POST` | `/api/messages/stream` | Envia mensagem (SSE streaming) |
+| `POST` | `/api/messages` | Envia mensagem (fallback não-streaming) |
 | `PATCH` | `/api/messages/:id` | Edita mensagem |
 | `POST` | `/api/files/upload` | Envia arquivo para um projeto |
 | `GET` | `/api/files/:projectId` | Lista arquivos do projeto |
@@ -293,20 +295,22 @@ Execute `backend-python/migrations/001_add_pgvector_file_chunks.sql` manualmente
 | `POST` | `/files/extract` | Extração de texto de arquivo |
 | `POST` | `/embeddings/generate` | Embedding de um texto |
 | `POST` | `/embeddings/batch` | Embeddings em lote |
-| `POST` | `/search/chunks` | Busca semântica em chunks |
+| `POST` | `/search/rag` | Busca semântica em chunks (RAG) |
 | `POST` | `/memories/extract` | Extração de memórias (spaCy + Groq) |
-| `POST` | `/memories/search` | Busca semântica em memórias |
-| `POST` | `/history/condense` | Condensa histórico longo |
+| `POST` | `/memories/synthesize` | Síntese semântica de memórias relevantes |
+| `POST` | `/history/synthesize` | Condensa histórico longo |
 | `POST` | `/title/generate` | Gera título do chat |
-| `POST` | `/intent/detect` | Detecta intenção da mensagem |
+| `POST` | `/intent/classify` | Classifica intenção da mensagem |
+| `POST` | `/tools/condense-chunk` | Condensa chunk de texto por heurística |
+| `POST` | `/tools/generate-title` | Gera título com fallback local |
 
 ### Sandbox
 
 | Método | Rota | Descrição |
 |---|---|---|
 | `GET` | `/health` | Health check |
-| `POST` | `/execute` | Executa código Python isolado (requer `INTERNAL_TOKEN`) |
-| `POST` | `/embeddings/batch` | Embeddings em lote (alternativa) |
+| `POST` | `/tools/python-exec` | Executa código Python isolado (requer `INTERNAL_TOKEN`) |
+| `POST` | `/tools/condense-chunk` | Condensa chunk de texto por heurística |
 
 ---
 
@@ -318,7 +322,7 @@ Crie contas em [GitHub](https://github.com), [Render](https://render.com), [Verc
 
 Obtenha as chaves de API:
 - **Google AI Studio** — `GEMINI_FLASH_API_KEY` e `GEMINI_PRO_API_KEY` em [aistudio.google.com](https://aistudio.google.com)
-- **GROQ** — `GROQ_API_KEY` em [console.groq.com](https://console.groq.com) *(gratuito; necessário para voz e geração de títulos)*
+- **GROQ** — `GROQ_API_KEY` em [console.groq.com](https://console.groq.com) *(gratuito; necessário para voz, títulos e classificação de intenção)*
 
 ---
 
@@ -371,11 +375,10 @@ Obtenha as chaves de API:
 | `NODE_URL` | *(preencher após o deploy do Node)* |
 | `GROQ_API_KEY` | Sua chave da GROQ |
 | `EMBEDDING_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` |
-| `WHISPER_MODEL` | `tiny` |
 
 6. Copie a URL pública após o deploy.
 
-> O modelo de embedding é baixado automaticamente no primeiro uso. O primeiro request pode demorar mais.
+> O modelo de embedding é baixado automaticamente no primeiro uso. O primeiro request pode demorar mais. A transcrição de voz usa `whisper-large-v3-turbo` via API Groq — nenhum modelo local é carregado.
 
 ---
 
@@ -392,8 +395,8 @@ Obtenha as chaves de API:
 | `DATABASE_URL` | Connection string do Supabase |
 | `SUPABASE_URL` | Project URL do Supabase |
 | `SUPABASE_ANON_KEY` | Anon key do Supabase |
-| `GEMINI_FLASH_API_KEY` | Chave Gemini Flash |
-| `GEMINI_PRO_API_KEY` | Chave Gemini Pro |
+| `GEMINI_FLASH_API_KEY` | Chave Gemini (modo Flash) |
+| `GEMINI_PRO_API_KEY` | Chave Gemini (modo Pro — pode ser a mesma, ou uma chave separada para billing) |
 | `GROQ_API_KEY` | Chave da GROQ (opcional) |
 | `FRONTEND_URL` | *(preencher após deploy do frontend)* |
 | `PYTHON_SERVICE_URL` | URL do microsserviço Python (passo 3) |
@@ -539,7 +542,6 @@ FRONTEND_URL=https://solaris-v1.vercel.app
 NODE_URL=https://solaris-backend-xxxx.onrender.com
 GROQ_API_KEY=gsk_...
 EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
-WHISPER_MODEL=tiny
 ```
 
 ### Sandbox
@@ -567,17 +569,18 @@ VITE_SUPABASE_ANON_KEY=eyJ...
 
 | Funcionalidade |
 |---|
-| Memória automática com spaCy + Groq |
+| Memória automática com spaCy + Groq (extração após cada resposta) |
 | Busca RAG com pgvector + HNSW |
 | Execução de código em sandbox Docker |
-| Transcrição de voz via Whisper/GROQ |
+| Transcrição de voz via Whisper Large V3 Turbo (GROQ) |
 | Streaming de respostas (SSE) |
 | Upload e indexação de arquivos |
-| Múltiplos modelos Gemini (Flash/Pro) |
+| Modos Flash e Pro (Flash direto via Gemini; Pro com pré-processamento iterativo e busca na internet) |
 | 7 personalidades configuráveis |
+| Classificação de intenção por mensagem (técnico, planejamento, revisão, continuação, geral) |
 | Modo convidado com migração automática |
 | Edição de mensagens com histórico |
-| Fila de jobs assíncronos (BullMQ) |
+| Fila de jobs assíncronos (BullMQ) para upload e indexação de arquivos |
 
 ---
 
@@ -599,7 +602,7 @@ As funcionalidades abaixo estão organizadas da mais fácil para a mais complexa
 |---|---|
 | Painel de contexto usado na resposta | Exibição expansível (não intrusiva) das memórias e chunks RAG injetados em cada resposta, para depuração e maior transparência |
 | Personalidade completamente customizável | System prompt livre por projeto, substituindo (não apenas complementando) as personalidades base — mais poderoso que traits adicionais |
-| Extração de memórias incremental | Salvar memórias a cada N mensagens ou ao detectar padrões relevantes mid-conversation, eliminando a perda de contexto por fechamento abrupto de aba |
+| Extração de memórias incremental mid-conversation | Detectar e salvar padrões relevantes em mensagens intermediárias, além das já extraídas após cada resposta |
 | Notificações e tarefas em background | Jobs assíncronos visíveis ao usuário: indexação, extração de memórias, geração de títulos com progresso em tempo real |
 | Geração de imagens (Gemini Imagen) | Geração de imagens diretamente no chat via Gemini Imagen |
 
