@@ -2,8 +2,8 @@
 
 import { getPool } from './database.js';
 
-// Problema 5: incrementado para 4 — adiciona coluna content BYTEA em files
-const CURRENT_SCHEMA_VERSION = 4;
+// Problema 5: incrementado para 5 — adiciona preferências de notificações/privacidade em user_settings
+const CURRENT_SCHEMA_VERSION = 5;
 
 async function ensureSchemaVersionTable(client) {
   await client.query(`
@@ -254,6 +254,31 @@ export async function initDb() {
 
       await setSchemaVersion(client, 4);
       console.log('✅ Migração v4 aplicada.');
+    }
+
+    // ========== MIGRAÇÃO v5 ==========
+    // Persiste no backend as preferências de Notificações e Privacidade que antes
+    // viviam só no localStorage do navegador (não acompanhavam o usuário entre dispositivos).
+    if (currentVersion < 5) {
+      console.log('🔄 Aplicando migração v5 (preferências de notificações e privacidade)...');
+
+      const migrations = [
+        `ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS notif_browser BOOLEAN DEFAULT FALSE`,
+        `ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS notif_sound BOOLEAN DEFAULT FALSE`,
+        `ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS privacy_personalize BOOLEAN DEFAULT TRUE`,
+        `ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS privacy_usage BOOLEAN DEFAULT TRUE`,
+      ];
+
+      for (const sql of migrations) {
+        await client.query(sql).catch(err => {
+          if (!err.message?.includes('already exists') && !err.message?.includes('duplicate column')) {
+            console.warn(`⚠️ Migração v5 ignorada: ${err.message}`);
+          }
+        });
+      }
+
+      await setSchemaVersion(client, 5);
+      console.log('✅ Migração v5 aplicada.');
     }
 
     console.log(`✅ Schema atualizado para versão ${CURRENT_SCHEMA_VERSION}`);

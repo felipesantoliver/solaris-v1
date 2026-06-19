@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   X, Save, Loader2, Check, Trash2, User, Sparkles, Database,
   AlertTriangle, Settings, Bell, Lock,
@@ -78,18 +78,35 @@ export function SettingsModal({
   const [deletingChats, setDeletingChats] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
-  // Notificações e Privacidade: preferências locais, persistidas no navegador.
-  // Ainda não têm enforcement no backend (ex.: notificação real ou bloqueio
-  // de uso de histórico) — servem de base pronta pra conectar essa lógica depois.
+  // Notificações e Privacidade: preferências persistidas no backend, vinculadas
+  // ao usuário (ou ao guestId, no caso de convidados). O localStorage funciona
+  // como cache local — garante leitura instantânea ao abrir o modal e serve de
+  // fallback caso o backend esteja indisponível no momento do salvamento.
   const [browserNotif, setBrowserNotif] = useState(() => localStorage.getItem('solaris_notif_browser') === 'true');
   const [soundNotif, setSoundNotif] = useState(() => localStorage.getItem('solaris_notif_sound') === 'true');
   const [personalizeHistory, setPersonalizeHistory] = useState(() => localStorage.getItem('solaris_privacy_personalize') !== 'false');
   const [shareUsageData, setShareUsageData] = useState(() => localStorage.getItem('solaris_privacy_usage') !== 'false');
 
+  // Evita que o efeito de sincronização com o backend dispare durante a carga
+  // inicial (antes de sabermos os valores reais vindos do servidor), o que
+  // sobrescreveria a preferência salva com os defaults do localStorage.
+  const prefsHydratedRef = useRef(false);
+
   useEffect(() => { localStorage.setItem('solaris_notif_browser', browserNotif); }, [browserNotif]);
   useEffect(() => { localStorage.setItem('solaris_notif_sound', soundNotif); }, [soundNotif]);
   useEffect(() => { localStorage.setItem('solaris_privacy_personalize', personalizeHistory); }, [personalizeHistory]);
   useEffect(() => { localStorage.setItem('solaris_privacy_usage', shareUsageData); }, [shareUsageData]);
+
+  // Salva no backend sempre que uma das preferências mudar (depois da carga inicial).
+  useEffect(() => {
+    if (!prefsHydratedRef.current) return;
+    api.updateSettings({
+      notif_browser: browserNotif,
+      notif_sound: soundNotif,
+      privacy_personalize: personalizeHistory,
+      privacy_usage: shareUsageData,
+    }).catch(err => console.error('Não foi possível salvar preferências:', err));
+  }, [browserNotif, soundNotif, personalizeHistory, shareUsageData]);
 
   const handleToggleBrowserNotif = (value) => {
     setBrowserNotif(value);
@@ -128,7 +145,15 @@ export function SettingsModal({
         const data = await api.getSettings(effectiveUserId);
         setPersonality(data.personality || 'direto');
         setCustomTraits(data.custom_traits || '');
+        setBrowserNotif(!!data.notif_browser);
+        setSoundNotif(!!data.notif_sound);
+        setPersonalizeHistory(data.privacy_personalize !== false);
+        setShareUsageData(data.privacy_usage !== false);
       } catch (err) { console.error(err); }
+      // Libera a sincronização automática para o backend só depois da primeira
+      // carga (sucesso ou falha) — em caso de falha, mantém os valores em cache
+      // (localStorage) e passa a salvá-los normalmente a partir da próxima alteração.
+      prefsHydratedRef.current = true;
       setLoading(false);
     };
     fetchData();

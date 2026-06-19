@@ -61,6 +61,29 @@ export default function App() {
   useEffect(() => { localStorage.setItem('solaris_programming_mode', programmingMode); }, [programmingMode]);
   useEffect(() => { if (!authUser && model === 'pro') setModel('flash'); }, [authUser, model]);
 
+  // Sincroniza as preferências de notificações/privacidade do backend para o
+  // cache local (localStorage) assim que sabemos quem é o usuário (logado ou
+  // convidado) — não é preciso abrir o modal de configurações para isso. Isso
+  // garante que preferências definidas em outro dispositivo (conta logada) ou
+  // numa sessão anterior (convidado) já valham desde a primeira resposta do
+  // assistente, já que useChat.js lê essas preferências direto do localStorage.
+  useEffect(() => {
+    if (!authReady || !effectiveUserId) return;
+    let cancelled = false;
+    api.getSettings()
+      .then((data) => {
+        if (cancelled || !data) return;
+        localStorage.setItem('solaris_notif_browser', String(!!data.notif_browser));
+        localStorage.setItem('solaris_notif_sound', String(!!data.notif_sound));
+        localStorage.setItem('solaris_privacy_personalize', String(data.privacy_personalize !== false));
+        localStorage.setItem('solaris_privacy_usage', String(data.privacy_usage !== false));
+      })
+      .catch(() => {
+        // Backend indisponível — mantém o que já está no cache local (fallback offline).
+      });
+    return () => { cancelled = true; };
+  }, [authReady, effectiveUserId]);
+
   const handleNewChat = useCallback(() => {
     setActiveChatId(null);
     setMessages([]);

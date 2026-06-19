@@ -171,13 +171,20 @@ export const api = {
     return safeJson(res);
   },
 
-  async saveSettings(_userId, personality, customTraits) {
+  // Atualização parcial das preferências do usuário (personalidade, notificações,
+  // privacidade...). Campos omitidos no objeto `partial` preservam o valor já
+  // salvo no backend — não é necessário reenviar tudo a cada chamada.
+  async updateSettings(partial) {
     const res = await fetch(`${API_BASE}/settings`, {
-      method: 'POST',
+      method: 'PUT',
       headers: { 'Content-Type': 'application/json', ...(await getAuthHeaders()) },
-      body: JSON.stringify({ personality, custom_traits: customTraits }),
+      body: JSON.stringify(partial),
     });
     return safeJson(res);
+  },
+
+  async saveSettings(_userId, personality, customTraits) {
+    return this.updateSettings({ personality, custom_traits: customTraits });
   },
 
   async migrateGuest(guestId, userId) {
