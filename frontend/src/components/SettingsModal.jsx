@@ -1,5 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { X, Save, Loader2, Check, Trash2, User, Sparkles, Database, AlertTriangle } from 'lucide-react';
+import {
+  X, Save, Loader2, Check, Trash2, User, Sparkles, Database,
+  AlertTriangle, Settings, Bell, Lock,
+} from 'lucide-react';
 import { api } from '../services/api';
 
 const PERSONALITIES = [
@@ -12,13 +15,58 @@ const PERSONALITIES = [
   { id: 'empatico', label: 'Empático', desc: 'Caloroso, acolhedor e encorajador.' },
 ];
 
+// Ordem: Perfil primeiro (fixo), depois por tendência de uso (mais usada -> menos usada)
 const TABS = [
   { id: 'profile', label: 'Perfil', icon: User },
-  { id: 'personality', label: 'Personalidade', icon: Sparkles },
-  { id: 'data', label: 'Controles de dados', icon: Database },
+  { id: 'general', label: 'Geral', icon: Settings },
+  { id: 'personality', label: 'Personalização', icon: Sparkles },
+  { id: 'notifications', label: 'Notificações', icon: Bell },
+  { id: 'privacy', label: 'Privacidade', icon: Lock },
+  { id: 'data', label: 'Controle de dados', icon: Database },
 ];
 
-export function SettingsModal({ onClose, darkMode, effectiveUserId, authUser, onAuthUpdate, onDeleteAllChats }) {
+function Toggle({ checked, onChange, darkMode }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      onClick={() => onChange(!checked)}
+      className={`relative w-10 h-6 rounded-full shrink-0 transition-colors ${
+        checked ? 'bg-blue-500' : darkMode ? 'bg-white/15' : 'bg-black/15'
+      }`}
+    >
+      <span
+        className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform duration-200 ${
+          checked ? 'translate-x-4' : 'translate-x-0'
+        }`}
+      />
+    </button>
+  );
+}
+
+function SettingRow({ label, description, control, divider, darkMode }) {
+  const muted = darkMode ? 'text-white/40' : 'text-black/45';
+  return (
+    <div className={`flex items-center justify-between gap-6 py-4 ${divider ? `border-b ${divider}` : ''}`}>
+      <div className="min-w-0">
+        <p className="text-sm font-medium">{label}</p>
+        {description && <p className={`text-xs mt-0.5 ${muted}`}>{description}</p>}
+      </div>
+      <div className="shrink-0">{control}</div>
+    </div>
+  );
+}
+
+export function SettingsModal({
+  onClose,
+  darkMode,
+  setDarkMode,
+  effectiveUserId,
+  authUser,
+  onAuthUpdate,
+  onDeleteAllChats,
+}) {
   const [activeTab, setActiveTab] = useState('profile');
   const [displayName, setDisplayName] = useState('');
   const [personality, setPersonality] = useState('direto');
@@ -29,6 +77,26 @@ export function SettingsModal({ onClose, darkMode, effectiveUserId, authUser, on
   const [error, setError] = useState('');
   const [deletingChats, setDeletingChats] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+
+  // Notificações e Privacidade: preferências locais, persistidas no navegador.
+  // Ainda não têm enforcement no backend (ex.: notificação real ou bloqueio
+  // de uso de histórico) — servem de base pronta pra conectar essa lógica depois.
+  const [browserNotif, setBrowserNotif] = useState(() => localStorage.getItem('solaris_notif_browser') === 'true');
+  const [soundNotif, setSoundNotif] = useState(() => localStorage.getItem('solaris_notif_sound') === 'true');
+  const [personalizeHistory, setPersonalizeHistory] = useState(() => localStorage.getItem('solaris_privacy_personalize') !== 'false');
+  const [shareUsageData, setShareUsageData] = useState(() => localStorage.getItem('solaris_privacy_usage') !== 'false');
+
+  useEffect(() => { localStorage.setItem('solaris_notif_browser', browserNotif); }, [browserNotif]);
+  useEffect(() => { localStorage.setItem('solaris_notif_sound', soundNotif); }, [soundNotif]);
+  useEffect(() => { localStorage.setItem('solaris_privacy_personalize', personalizeHistory); }, [personalizeHistory]);
+  useEffect(() => { localStorage.setItem('solaris_privacy_usage', shareUsageData); }, [shareUsageData]);
+
+  const handleToggleBrowserNotif = (value) => {
+    setBrowserNotif(value);
+    if (value && typeof Notification !== 'undefined' && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  };
 
   const t = {
     bg: darkMode ? 'bg-[#1f1f1f]' : 'bg-white',
@@ -113,7 +181,7 @@ export function SettingsModal({ onClose, darkMode, effectiveUserId, authUser, on
         className={`${t.bg} border ${t.border} w-full max-w-3xl h-[640px] max-h-[88vh] rounded-2xl shadow-2xl flex overflow-hidden`}
       >
         {/* Sidebar */}
-        <div className={`${t.sidebarBg} w-16 sm:w-64 shrink-0 border-r ${t.border} flex flex-col p-2 sm:p-3`}>
+        <div className={`${t.sidebarBg} w-16 sm:w-64 shrink-0 border-r ${t.border} flex flex-col p-2 sm:p-3 overflow-y-auto`}>
           <button
             onClick={onClose}
             className={`self-start p-2 mb-3 rounded-lg ${t.muted} ${t.closeHover} transition-colors`}
@@ -157,6 +225,11 @@ export function SettingsModal({ onClose, darkMode, effectiveUserId, authUser, on
                   <div className="space-y-6">
                     {authUser ? (
                       <div className={`pb-6 border-b ${t.border}`}>
+                        {authUser.email && (
+                          <p className={`text-xs mb-4 ${t.muted}`}>
+                            Conectado como <span className={t.text}>{authUser.email}</span>
+                          </p>
+                        )}
                         <label className={`text-xs uppercase tracking-wider ${t.muted}`}>Nome de exibição</label>
                         <input
                           type="text"
@@ -178,6 +251,31 @@ export function SettingsModal({ onClose, darkMode, effectiveUserId, authUser, on
                     ) : (
                       <p className={`text-sm ${t.muted}`}>Faça login para editar seu perfil.</p>
                     )}
+                  </div>
+                )}
+
+                {activeTab === 'general' && (
+                  <div>
+                    <SettingRow
+                      darkMode={darkMode}
+                      divider={t.border}
+                      label="Tema escuro"
+                      description="Ativa o modo escuro em toda a interface."
+                      control={<Toggle checked={darkMode} onChange={(v) => setDarkMode?.(v)} darkMode={darkMode} />}
+                    />
+                    <SettingRow
+                      darkMode={darkMode}
+                      label="Idioma"
+                      description="Mais idiomas em breve."
+                      control={
+                        <select
+                          disabled
+                          className={`text-sm px-3 py-1.5 rounded-lg border ${t.input} opacity-60 cursor-not-allowed`}
+                        >
+                          <option>Português (Brasil)</option>
+                        </select>
+                      }
+                    />
                   </div>
                 )}
 
@@ -218,6 +316,51 @@ export function SettingsModal({ onClose, darkMode, effectiveUserId, authUser, on
                       {saving ? <Loader2 size={16} className="animate-spin" /> : saved ? <Check size={16} /> : <Save size={16} />}
                       {saved ? 'Salvo!' : 'Salvar personalidade'}
                     </button>
+                  </div>
+                )}
+
+                {activeTab === 'notifications' && (
+                  <div>
+                    <SettingRow
+                      darkMode={darkMode}
+                      divider={t.border}
+                      label="Notificações do navegador"
+                      description="Avisa quando uma resposta termina, mesmo em outra aba."
+                      control={<Toggle checked={browserNotif} onChange={handleToggleBrowserNotif} darkMode={darkMode} />}
+                    />
+                    <SettingRow
+                      darkMode={darkMode}
+                      label="Som ao concluir resposta"
+                      description="Toca um som curto quando a resposta é finalizada."
+                      control={<Toggle checked={soundNotif} onChange={setSoundNotif} darkMode={darkMode} />}
+                    />
+                  </div>
+                )}
+
+                {activeTab === 'privacy' && (
+                  <div>
+                    <SettingRow
+                      darkMode={darkMode}
+                      divider={t.border}
+                      label="Personalizar com base no histórico"
+                      description="Usa suas conversas anteriores para ajustar o tom das respostas."
+                      control={<Toggle checked={personalizeHistory} onChange={setPersonalizeHistory} darkMode={darkMode} />}
+                    />
+                    <SettingRow
+                      darkMode={darkMode}
+                      label="Compartilhar dados de uso anônimos"
+                      description="Ajuda a identificar bugs e melhorar o produto."
+                      control={<Toggle checked={shareUsageData} onChange={setShareUsageData} darkMode={darkMode} />}
+                    />
+                    <p className={`text-xs mt-4 ${t.muted}`}>
+                      Para apagar suas conversas, acesse{' '}
+                      <button
+                        onClick={() => setActiveTab('data')}
+                        className="underline underline-offset-2 hover:opacity-80"
+                      >
+                        Controle de dados
+                      </button>.
+                    </p>
                   </div>
                 )}
 

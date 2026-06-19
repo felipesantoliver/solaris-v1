@@ -198,7 +198,7 @@ export default function App() {
         <AuthModal darkMode={darkMode} onClose={() => setShowAuthModal(false)} onAuthSuccess={() => setShowAuthModal(false)} onGoogleLogin={handleGoogleLogin} onLogin={handleLogin} onSignUp={handleSignUp} />
       )}
       {showSettingsModal && authUser && (
-        <SettingsModal darkMode={darkMode} onClose={() => setShowSettingsModal(false)} effectiveUserId={effectiveUserId} authUser={authUser} onAuthUpdate={handleAuthUpdate} onDeleteAllChats={deleteAllChats} />
+        <SettingsModal darkMode={darkMode} setDarkMode={setDarkMode} onClose={() => setShowSettingsModal(false)} effectiveUserId={effectiveUserId} authUser={authUser} onAuthUpdate={handleAuthUpdate} onDeleteAllChats={deleteAllChats} />
       )}
       {editingProject && (
         <ProjectModal project={editingProject} onClose={() => setEditingProject(null)} onUpdate={updateProject} darkMode={darkMode} effectiveUserId={effectiveUserId} />
