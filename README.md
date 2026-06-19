@@ -592,7 +592,7 @@ As funcionalidades abaixo estão organizadas da mais fácil para a mais complexa
 
 | Funcionalidade | Descrição |
 |---|---|
-| Suporte a gráficos no sandbox | Adicionar `matplotlib` e `plotly` aos módulos permitidos e retornar imagens base64 como output gráfico |
+| Suporte a gráficos no sandbox | Adicionar `matplotlib` e `plotly` aos módulos permitidos e retornar imagens base64 como output gráfico | 
 | Aviso de expiração do modo convidado | Notificar o usuário anônimo antes que seu ID expire, com opção de criar conta para preservar o histórico |
 | Renderização Markdown avançada | Melhorias na renderização GFM: suporte a callouts, math (KaTeX), e diagramas Mermaid inline |
 

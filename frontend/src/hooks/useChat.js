@@ -20,6 +20,7 @@ export function useChat(effectiveUserId, authUser, model, activeProjectId) {
   const assistantIdxRef  = useRef(null);
   const streamTimeoutRef = useRef(null);
   const continueContextRef = useRef({ chatId: null, projectId: null });
+  const lastAssistantContentRef = useRef(''); // guarda o texto final p/ usar no corpo da notificação
 
   // ── Status visual antes da resposta ──────────────────────────────────────
   const statusSequence = [
@@ -44,6 +45,82 @@ export function useChat(effectiveUserId, authUser, model, activeProjectId) {
     setStatusMessage('');
     setTimeout(() => { assistantIdxRef.current = null; }, 50);
   }, []);
+
+  // ── Som de notificação (gerado via Web Audio API, sem depender de arquivo) ─
+  const playNotificationSound = useCallback(() => {
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+
+      const ctx = new AudioCtx();
+      const now = ctx.currentTime;
+
+      const playTone = (freq, start, duration, peakGain = 0.15) => {
+        const osc  = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0, now + start);
+        gain.gain.linearRampToValueAtTime(peakGain, now + start + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + start + duration);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now + start);
+        osc.stop(now + start + duration + 0.02);
+      };
+
+      // "Ding" curto de duas notas
+      playTone(880, 0, 0.15);
+      playTone(1320, 0.08, 0.18);
+
+      // Libera o contexto de áudio após o som terminar
+      setTimeout(() => { ctx.close().catch(() => {}); }, 600);
+    } catch (err) {
+      console.warn('Não foi possível tocar o som de notificação:', err);
+    }
+  }, []);
+
+  // ── Notificação do navegador (Notification API) ───────────────────────────
+  const showBrowserNotification = useCallback((bodyText) => {
+    try {
+      if (typeof Notification === 'undefined') return;
+      if (Notification.permission !== 'granted') return;
+
+      // Só exibe a notificação se a aba estiver em background.
+      // Se o usuário já está olhando a conversa, a notificação do SO é redundante.
+      if (document.visibilityState === 'visible') return;
+
+      const notification = new Notification('Solaris', {
+        body: bodyText && bodyText.trim() ? bodyText.trim() : 'Sua resposta está pronta.',
+        tag: 'solaris-response', // evita empilhar várias notificações
+        silent: true,            // o som já é tratado separadamente
+      });
+
+      notification.onclick = () => {
+        window.focus();
+        notification.close();
+      };
+    } catch (err) {
+      console.warn('Não foi possível exibir a notificação do navegador:', err);
+    }
+  }, []);
+
+  // ── Dispara som/notificação ao final da resposta, respeitando preferências ─
+  const notifyResponseDone = useCallback(() => {
+    const soundEnabled   = localStorage.getItem('solaris_notif_sound') === 'true';
+    const browserEnabled = localStorage.getItem('solaris_notif_browser') === 'true';
+
+    if (!soundEnabled && !browserEnabled) return;
+
+    if (soundEnabled) {
+      playNotificationSound();
+    }
+
+    if (browserEnabled) {
+      const preview = (lastAssistantContentRef.current || '').slice(0, 120);
+      showBrowserNotification(preview);
+    }
+  }, [playNotificationSound, showBrowserNotification]);
 
   // ── Carregar mensagens de um chat (com paginação) ────────────────────────
   const loadMessages = useCallback(async (chatId, page = 1, limit = messagesLimit) => {
@@ -142,6 +219,7 @@ export function useChat(effectiveUserId, authUser, model, activeProjectId) {
       assistantIdxRef.current = prev.length;
       return [...prev, { role: 'assistant', content: '', model: authUser ? model : 'flash', codingMode }];
     });
+    lastAssistantContentRef.current = '';
 
     showStatusSequence().then(() => setStatusMessage(''));
 
@@ -162,7 +240,9 @@ export function useChat(effectiveUserId, authUser, model, activeProjectId) {
             const idx = assistantIdxRef.current;
             if (idx === null || !prev[idx]) return prev;
             const updated = [...prev];
-            updated[idx] = { ...updated[idx], content: updated[idx].content + chunk };
+            const newContent = updated[idx].content + chunk;
+            updated[idx] = { ...updated[idx], content: newContent };
+            lastAssistantContentRef.current = newContent;
             return updated;
           });
         },
@@ -187,6 +267,7 @@ export function useChat(effectiveUserId, authUser, model, activeProjectId) {
 
         // onDone
         () => {
+          notifyResponseDone();
           finishStreaming();
           // Recarrega a primeira página para sincronizar com o backend
           refreshMessages();
@@ -207,7 +288,7 @@ export function useChat(effectiveUserId, authUser, model, activeProjectId) {
       setSendError('Não foi possível obter resposta. Tente novamente.');
       finishStreaming();
     }
-  }, [isLoading, isStreaming, effectiveUserId, authUser, model, finishStreaming, refreshMessages]);
+  }, [isLoading, isStreaming, effectiveUserId, authUser, model, finishStreaming, refreshMessages, notifyResponseDone]);
 
   // ── Continuar resposta cortada ────────────────────────────────────────────
   const continueResponse = useCallback(async (onCreateChat) => {
