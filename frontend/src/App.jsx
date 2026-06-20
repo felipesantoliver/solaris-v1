@@ -13,6 +13,7 @@ import { ProjectModal } from './components/ProjectModal';
 import { ProjectsView } from './components/ProjectsView';
 import { SettingsModal } from './components/SettingsModal';
 import { AuthModal } from './components/AuthModal';
+import { GuestBanner } from './components/GuestBanner';
 import { ConfirmDialog } from './components/ui/ConfirmDialog';
 import { ShareModal } from './components/ui/ShareModal';
 
@@ -34,6 +35,14 @@ export default function App() {
   const [showShareModal, setShowShareModal] = useState(false);
   const [activeView, setActiveView] = useState('chat');
   const [input, setInput] = useState('');
+  // Aviso de expiração do modo convidado: usa sessionStorage (não localStorage) de
+  // propósito — assim, se o usuário dispensar o aviso, ele não volta a aparecer
+  // nesta mesma sessão do navegador, mas reaparece numa próxima visita (depois de
+  // fechar o navegador), que é justamente o momento em que o aviso volta a ser
+  // relevante para um convidado que ainda não criou conta.
+  const [guestBannerDismissed, setGuestBannerDismissed] = useState(
+    () => sessionStorage.getItem('solaris_guest_banner_dismissed') === 'true'
+  );
 
   const fileInputRef = useRef(null);
   const moreProjectsRef = useRef(null);
@@ -196,6 +205,11 @@ export default function App() {
   const handleDeleteProject = useCallback((proj) => setItemToDelete({ type: 'project', data: proj }), []);
   const handleDeleteChat    = useCallback((chat) => setItemToDelete({ type: 'chat',    data: chat }), []);
   const handleOpenSettings  = useCallback(() => setShowSettingsModal(true), []);
+  const handleDismissGuestBanner = useCallback(() => {
+    sessionStorage.setItem('solaris_guest_banner_dismissed', 'true');
+    setGuestBannerDismissed(true);
+  }, []);
+  const handleOpenAuthFromBanner = useCallback(() => setShowAuthModal(true), []);
 
   const theme = useMemo(() => ({
     bgAside: darkMode ? 'bg-[#0a0a0a]' : 'bg-white',
@@ -214,6 +228,7 @@ export default function App() {
   }), [darkMode]);
 
   const hasUserStartedChat = messages.some(m => m.role === 'user');
+  const showGuestBanner = authReady && !authUser && !guestBannerDismissed && (hasUserStartedChat || chatHistory.length > 0);
 
   return (
     <div className={`flex h-screen ${darkMode ? 'bg-[#050505] text-white' : 'bg-[#fafafa] text-[#1a1a1a]'} font-sans antialiased overflow-hidden transition-colors duration-500`}>
@@ -304,6 +319,17 @@ export default function App() {
             )}
           </div>
         </header>
+
+        {/* Aviso de expiração do modo convidado — discreto, dispensável, e só some
+            de vez ao logar (a dispensa via X dura apenas a sessão atual). */}
+        {showGuestBanner && (
+          <GuestBanner
+            darkMode={darkMode}
+            theme={theme}
+            onCreateAccount={handleOpenAuthFromBanner}
+            onDismiss={handleDismissGuestBanner}
+          />
+        )}
 
         {/* Badge modo code — abaixo da linha do header */}
         {programmingMode && (

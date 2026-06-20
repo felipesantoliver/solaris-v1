@@ -85,11 +85,26 @@ router.post('/settings', upsertSettings);
 router.put('/settings', upsertSettings);
 
 // Migração de guest para usuário logado (rota sem middleware, pois usa body)
+//
+// Cobre TODO o histórico do convidado, não só os projetos:
+//   - projects        -> projetos criados como convidado
+//   - chats            -> conversas avulsas (fora de projeto, project_id IS NULL)
+//                         e também as ligadas a projeto, mantendo user_id consistente
+//   - memories         -> memórias/personalização extraídas fora de projeto
+//   - user_settings    -> preferências (personalidade, notificações, privacidade)
+// `messages` não precisa de update direto: pertence a `chats` via chat_id, então
+// migrar `chats.user_id` já preserva as mensagens junto.
 router.post('/migrate', async (req, res, next) => {
   const { guest_id, user_id } = req.body;
   if (!guest_id || !user_id || guest_id === user_id) return res.json({ ok: true, migrated: 0 });
   try {
     const result = await runAsync('UPDATE projects SET user_id = $1 WHERE user_id = $2', [user_id, guest_id]);
+
+    // Conversas avulsas (e também as de projeto, por consistência) — preserva o histórico de chat.
+    await runAsync('UPDATE chats SET user_id = $1, updated_at = NOW() WHERE user_id = $2', [user_id, guest_id]);
+
+    // Memórias extraídas fora de projeto, vinculadas diretamente ao convidado.
+    await runAsync('UPDATE memories SET user_id = $1 WHERE user_id = $2', [user_id, guest_id]);
 
     // Migra as preferências (personalidade, notificações, privacidade) do convidado
     // para a conta recém-logada — mas só se a conta ainda não tiver preferências
