@@ -1,6 +1,7 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
-import { Send, Loader2, Mic, MicOff, Plus, AlertTriangle, Check, Code } from 'lucide-react';
+import { Send, Loader2, Mic, MicOff, Plus, AlertTriangle, Check, Code, Sparkles } from 'lucide-react';
 import { ModelToggle } from './ui/ModelToggle';
+import { ExtendedReasoningToggle } from './ui/ExtendedReasoningToggle';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
 
@@ -21,6 +22,10 @@ export function MessageInput({
   uploadStatus,
   onFileUpload,
   fileInputRef,
+  agentMode,
+  setAgentMode,
+  extendedReasoning,
+  setExtendedReasoning,
 }) {
   const textareaRef = useRef(null);
 
@@ -167,6 +172,18 @@ export function MessageInput({
           onProgrammingModeChange={setProgrammingMode}
         />
 
+        {/* Só faz sentido oferecer Raciocínio Estendido dentro do Modo Agente —
+            é uma etapa do loop de ferramentas (extended_reasoning), não do
+            chat normal. O próprio toggle já trata a regra "Pro-only". */}
+        {agentMode && (
+          <ExtendedReasoningToggle
+            enabled={extendedReasoning}
+            onToggle={setExtendedReasoning}
+            isPro={model === 'pro'}
+            darkMode={darkMode}
+          />
+        )}
+
         {sendError && (
           <p className="text-red-400 text-xs mb-3 flex items-center gap-1.5">
             <AlertTriangle size={12} />{sendError}
@@ -267,6 +284,27 @@ export function MessageInput({
           <span className="hidden sm:inline">enter para enviar · shift+enter nova linha</span>
           <span className="sm:hidden" />
           <div className="flex items-center gap-4">
+            {/* Botão Agente — liga o Modo Agente Autônomo (loop de ferramentas via
+                SSE). Mesmo padrão visual do botão Code, cor própria (fuchsia)
+                pra não se confundir com o violeta do Raciocínio Estendido. */}
+            <button
+              onClick={() => setAgentMode(!agentMode)}
+              title={agentMode ? 'Desativar Modo Agente' : 'Ativar Modo Agente Autônomo'}
+              aria-pressed={agentMode}
+              className={`relative flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[10px] font-medium uppercase tracking-widest transition-all duration-300 mb-2 ${
+                agentMode
+                  ? darkMode
+                    ? 'border-fuchsia-400/60 text-fuchsia-300 bg-fuchsia-400/8'
+                    : 'border-fuchsia-600/50 text-fuchsia-700 bg-fuchsia-500/8'
+                  : darkMode
+                    ? 'border-white/10 text-white/30 hover:text-fuchsia-400/60 hover:border-fuchsia-400/30'
+                    : 'border-black/10 text-black/30 hover:text-fuchsia-600/60 hover:border-fuchsia-500/30'
+              }`}
+            >
+              <Sparkles size={10} />
+              <span>Agente</span>
+              {agentMode && <span className="w-1 h-1 rounded-full bg-fuchsia-400 animate-pulse shrink-0" />}
+            </button>
             {/* Botão Code — indicador tech discreto, funciona em light e dark */}
             <button
               onClick={() => setProgrammingMode(!programmingMode)}

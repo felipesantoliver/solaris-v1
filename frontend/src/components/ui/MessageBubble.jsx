@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Pencil, RotateCcw, Check, Loader2, Star } from 'lucide-react';
 import AdvancedMarkdown from './AdvancedMarkdown';
+import AgentChatTimeline from './AgentChatTimeline';
 
 export const MessageBubble = React.memo(({
   msg,
@@ -54,6 +55,15 @@ export const MessageBubble = React.memo(({
     // Se a mensagem foi enviada com code mode, também renderiza blocos de código
     const msgHasCodeMode = msg.codingMode === true;
 
+    // Mensagens geradas pelo Modo Agente Autônomo carregam `agentSteps`
+    // (mesmo vazio, enquanto conecta) — nesse caso a timeline assume o
+    // lugar do AdvancedMarkdown puro; o step `final` já renderiza a resposta
+    // com markdown internamente (ver AgentChatTimeline/FinalStep).
+    if (Array.isArray(msg.agentSteps)) {
+      const isAgentStreaming = isLastAssistant && isStreaming;
+      return <AgentChatTimeline steps={msg.agentSteps} darkMode={darkMode} isStreaming={isAgentStreaming} />;
+    }
+
     return (
       <div className={`relative ${assistantTextClass}`}>
         <AdvancedMarkdown
@@ -82,6 +92,7 @@ export const MessageBubble = React.memo(({
             <span className="flex items-center gap-1.5">
               Solaris{msg.model === 'pro' && <span className="flex items-center gap-0.5 text-amber-400 opacity-70"><Star size={8} />pro</span>}
               {msg.codingMode && <span className="ml-2 text-[8px] bg-amber-500/20 text-amber-300 px-1.5 rounded-full">modo programador</span>}
+              {Array.isArray(msg.agentSteps) && <span className="ml-2 text-[8px] bg-fuchsia-500/20 text-fuchsia-300 px-1.5 rounded-full">agente</span>}
             </span>
           )}
           {msg.edited && <span className="ml-2 normal-case tracking-normal font-normal opacity-50">(editado)</span>}
