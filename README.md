@@ -588,33 +588,18 @@ VITE_SUPABASE_ANON_KEY=eyJ...
 
 As funcionalidades abaixo estão organizadas da mais fácil para a mais complexa de implementar.
 
-#### Fácil — baixo esforço, alto impacto imediato
-
-| Funcionalidade | Descrição |
-|---|---|
-| Suporte a gráficos no sandbox | Adicionar `matplotlib` e `plotly` aos módulos permitidos e retornar imagens base64 como output gráfico | 
-| Aviso de expiração do modo convidado | Notificar o usuário anônimo antes que seu ID expire, com opção de criar conta para preservar o histórico |
-| Renderização Markdown avançada | Melhorias na renderização GFM: suporte a callouts, math (KaTeX), e diagramas Mermaid inline |
-
 #### Médio — impacto significativo, esforço moderado
 
 | Funcionalidade | Descrição |
-|---|---|
-| Painel de contexto usado na resposta | Exibição expansível (não intrusiva) das memórias e chunks RAG injetados em cada resposta, para depuração e maior transparência |
-| Personalidade completamente customizável | System prompt livre por projeto, substituindo (não apenas complementando) as personalidades base — mais poderoso que traits adicionais |
-| Extração de memórias incremental mid-conversation | Detectar e salvar padrões relevantes em mensagens intermediárias, além das já extraídas após cada resposta |
-| Notificações e tarefas em background | Jobs assíncronos visíveis ao usuário: indexação, extração de memórias, geração de títulos com progresso em tempo real |
 | Geração de imagens (Gemini Imagen) | Geração de imagens diretamente no chat via Gemini Imagen |
 
 #### Difícil — alta complexidade ou dependência de infraestrutura
 
 | Funcionalidade | Descrição |
 |---|---|
-| RAG sobre histórico de conversas | Indexação vetorial das mensagens históricas, permitindo buscas como "o que eu decidi sobre X no mês passado" além do que foi sintetizado nas memórias |
+
 | Agentes autônomos por projeto | Execução de tarefas multi-etapa com ferramentas (busca web, execução de código, leitura de arquivos) sem intervenção manual a cada passo |
 | Colaboração multiusuário em projetos | Projetos compartilhados com controle de acesso, memórias colaborativas e histórico unificado entre usuários |
-| Integrações externas | Conectores com Notion, Google Drive, GitHub e outros serviços como fontes de conhecimento ou destinos de output |
-| Aplicativo mobile (React Native) | App nativo iOS/Android com suporte a voz e notificações push |
 
 ---
 
