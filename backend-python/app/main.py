@@ -147,6 +147,55 @@ Retorne apenas o título.
     return GenerateTitleResponse(title=title, source="fallback")
 
 
+class OptimizePersonalityRequest(BaseModel):
+    text: str
+    max_chars: int = 280
+
+class OptimizePersonalityResponse(BaseModel):
+    optimized: str
+    source: str  # "groq" ou "fallback"
+
+@app.post("/tools/optimize-personality", response_model=OptimizePersonalityResponse)
+async def optimize_personality(req: OptimizePersonalityRequest):
+    """
+    Reescreve a descrição de personalidade (escrita livremente pelo usuário ao
+    criar/editar um projeto) em uma instrução de sistema compacta e objetiva.
+    Isso economiza tokens em TODA mensagem trocada no projeto, já que esse
+    texto entra no system prompt de cada chamada ao modelo.
+    Usa Groq se disponível; se falhar/indisponível, aplica fallback local
+    (normaliza espaços e corta no limite de caracteres) — nunca derruba a
+    criação do projeto por causa disso.
+    """
+    from app.utils.groq_client import groq_available, groq_complete
+    text = req.text.strip()
+    max_chars = req.max_chars
+    if not text:
+        return OptimizePersonalityResponse(optimized="", source="fallback")
+
+    if groq_available():
+        prompt = f"""
+Reescreva a descrição de personalidade abaixo como uma instrução de sistema direta e objetiva para um assistente de IA, na 2ª pessoa do imperativo (ex.: "Seja direto e técnico, evite rodeios.").
+Regras:
+- Máximo {max_chars} caracteres.
+- Mantenha o sentido e o tom pretendidos pelo usuário, só remova redundância e enrolação.
+- Não use aspas, markdown ou explicações — retorne só a instrução final.
+
+Descrição original do usuário:
+{text}
+"""
+        result = groq_complete(prompt, max_tokens=120)
+        if result:
+            optimized = result.strip().strip('"').strip("'").replace("\n", " ").strip()
+            if 0 < len(optimized) <= max_chars:
+                return OptimizePersonalityResponse(optimized=optimized, source="groq")
+
+    # Fallback local: normaliza espaços e corta no limite de caracteres
+    fallback = " ".join(text.split())
+    if len(fallback) > max_chars:
+        fallback = fallback[: max_chars - 1].rstrip() + "…"
+    return OptimizePersonalityResponse(optimized=fallback, source="fallback")
+
+
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}

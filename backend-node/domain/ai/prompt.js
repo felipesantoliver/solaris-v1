@@ -130,6 +130,16 @@ const PERSONALITY_GUIDE = {
   empatico:     'Seja caloroso, empático e encorajador. Valide sentimentos antes de resolver problemas.',
 };
 
+// Chaves dos presets — exportado para o router de projetos validar/exibir opções
+// sem duplicar essa lista (fonte única de verdade).
+export const PERSONALITY_PRESET_KEYS = Object.freeze(Object.keys(PERSONALITY_GUIDE));
+
+// Um response_style é "preset" quando bate com uma das chaves acima; qualquer
+// outro valor é tratado como texto livre escrito pelo usuário.
+export function isPersonalityPreset(value) {
+  return !!value && Object.prototype.hasOwnProperty.call(PERSONALITY_GUIDE, value.trim());
+}
+
 const BASE_IDENTITY_INSTRUCTION = `
 Identidade:
 
@@ -202,6 +212,46 @@ async function synthesizeMemories(query, memories) {
   return result || { synthesis: '', usedIds: [] };
 }
 
+// ─── Otimização da personalidade customizada por projeto ──────────────────
+// Limites de caracteres: PERSONALITY_OPTIMIZED_MAX_CHARS é o teto do texto
+// final injetado no prompt (economia de tokens em toda mensagem do projeto).
+// PERSONALITY_RAW_INPUT_MAX_CHARS protege a chamada ao Python contra um texto
+// de entrada desproporcional digitado pelo usuário.
+const PERSONALITY_OPTIMIZED_MAX_CHARS = 280;
+const PERSONALITY_RAW_INPUT_MAX_CHARS = 1000;
+
+/**
+ * Recebe o response_style enviado na criação/edição de um projeto e devolve
+ * o valor a ser persistido:
+ * - Se for um preset (ex.: "tecnico"), retorna a própria chave sem chamar o
+ *   Python — assembleBaseSystemPrompt resolve o texto-guia depois.
+ * - Se for texto livre escrito pelo usuário, chama o serviço Python para
+ *   reescrever de forma compacta e objetiva (menos tokens, mesmo sentido).
+ *   Se o Python falhar (circuit breaker aberto/timeout), aplica localmente a
+ *   mesma rede de segurança (normaliza espaços + corta no limite) em vez de
+ *   bloquear a criação do projeto.
+ */
+export async function optimizePersonalityText(rawText) {
+  const text = (rawText || '').trim();
+  if (!text) return '';
+  if (isPersonalityPreset(text)) return text;
+
+  const truncatedInput = text.length > PERSONALITY_RAW_INPUT_MAX_CHARS
+    ? text.slice(0, PERSONALITY_RAW_INPUT_MAX_CHARS)
+    : text;
+
+  const result = await callPython('/tools/optimize-personality', {
+    text: truncatedInput,
+    max_chars: PERSONALITY_OPTIMIZED_MAX_CHARS,
+  });
+  if (result?.optimized) return result.optimized;
+
+  const normalized = truncatedInput.replace(/\s+/g, ' ');
+  return normalized.length > PERSONALITY_OPTIMIZED_MAX_CHARS
+    ? `${normalized.slice(0, PERSONALITY_OPTIMIZED_MAX_CHARS - 1).trimEnd()}…`
+    : normalized;
+}
+
 async function synthesizeHistory(messages, keepLast = 10) {
   if (!messages || messages.length < 15) return null;
   const result = await callPython('/history/synthesize', {
@@ -217,14 +267,31 @@ async function classifyIntent(query) {
   return result?.intent || 'general';
 }
 
+// Resolve o texto de personalidade do projeto: se response_style for um
+// preset conhecido, usa o texto-guia padrão; se for texto livre, já chega
+// aqui otimizado pelo serviço Python (ver optimizePersonalityText, chamado em
+// routers/projects.js na criação/edição do projeto). Retorna null quando o
+// projeto não tem personalidade própria definida — sinal para usar o fallback global.
+function resolveProjectPersonality(responseStyle) {
+  if (!responseStyle) return null;
+  const trimmed = responseStyle.trim();
+  if (!trimmed) return null;
+  return PERSONALITY_GUIDE[trimmed] || trimmed;
+}
+
 // ─── Montagem do system prompt com intenção ──────────────────────────────
 export function assembleBaseSystemPrompt({ settings, project, synthesis, memoryMode, intent }) {
-  let personalityText = PERSONALITY_GUIDE.direto;
-  let customTraits = '';
-  if (settings) {
-    personalityText = PERSONALITY_GUIDE[settings.personality] || PERSONALITY_GUIDE.direto;
-    customTraits = settings.custom_traits || '';
-  }
+  const customTraits = settings?.custom_traits || '';
+
+  // Prioridade da personalidade: response_style do PROJETO > personality
+  // GLOBAL do usuário > fallback "direto". A personalidade do projeto
+  // sobrescreve a global dentro daquele projeto (é uma escolha deliberada
+  // para aquele contexto de trabalho). Os "traços adicionais" do usuário
+  // (customTraits) continuam complementando em ambos os casos — eles são uma
+  // preferência pessoal do usuário, não algo que o projeto deva substituir.
+  const projectPersonality = project ? resolveProjectPersonality(project.response_style) : null;
+  const globalPersonality  = settings ? PERSONALITY_GUIDE[settings.personality] : null;
+  const personalityText    = projectPersonality || globalPersonality || PERSONALITY_GUIDE.direto;
 
   let prompt = `Você é o Solaris, um assistente de IA pessoal.\n\n`;
 

@@ -3,7 +3,7 @@
 import { Router } from 'express';
 import { randomUUID } from 'crypto';
 import { runAsync, getAsync, allAsync } from '../../db/database.js';
-import { invalidateSystemPromptCache } from '../ai/prompt.js';
+import { invalidateSystemPromptCache, optimizePersonalityText } from '../ai/prompt.js';
 import { extractUserId } from '../../middleware/auth.js';
 
 const router = Router();
@@ -36,9 +36,12 @@ router.post('/projects', async (req, res, next) => {
   if (!name) return res.status(400).json({ error: 'name obrigatório' });
   try {
     const id = randomUUID();
+    // Preset (ex.: "tecnico") é salvo direto; texto livre escrito pelo usuário
+    // passa pelo serviço Python para ser reescrito de forma compacta antes de salvar.
+    const finalResponseStyle = await optimizePersonalityText(response_style);
     await runAsync(
       'INSERT INTO projects (id, user_id, name, summary, detailed_objective, tags, response_style, memory_mode, gemini_version) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)',
-      [id, userId, name, summary || null, detailed_objective || null, JSON.stringify(tags), response_style, memory_mode, gemini_version]
+      [id, userId, name, summary || null, detailed_objective || null, JSON.stringify(tags), finalResponseStyle, memory_mode, gemini_version]
     );
     res.status(201).json(await getAsync('SELECT * FROM projects WHERE id = $1', [id]));
   } catch (err) { next(err); }
@@ -52,6 +55,13 @@ router.patch('/projects/:id', async (req, res, next) => {
     const project = await getAsync('SELECT id, memory_mode FROM projects WHERE id = $1 AND user_id = $2', [req.params.id, userId]);
     if (!project) return res.status(404).json({ error: 'Projeto não encontrado' });
     const newMemoryMode = memory_mode ?? project.memory_mode;
+    // Só chama a otimização quando response_style foi de fato enviado neste
+    // PATCH — evita custo/latência extra ao editar só nome, tags etc.
+    // typeof === 'string' trata omitido/null como "não mudou" (preserva valor
+    // atual via COALESCE), igual ao comportamento original.
+    const finalResponseStyle = typeof response_style === 'string'
+      ? await optimizePersonalityText(response_style)
+      : null;
     await runAsync(
       `UPDATE projects SET
         name = COALESCE($1, name),
@@ -63,7 +73,7 @@ router.patch('/projects/:id', async (req, res, next) => {
         gemini_version = COALESCE($7, gemini_version),
         updated_at = NOW()
       WHERE id = $8`,
-      [name ?? null, summary ?? null, detailed_objective ?? null, tags ? JSON.stringify(tags) : null, response_style ?? null, newMemoryMode, gemini_version ?? null, req.params.id]
+      [name ?? null, summary ?? null, detailed_objective ?? null, tags ? JSON.stringify(tags) : null, finalResponseStyle, newMemoryMode, gemini_version ?? null, req.params.id]
     );
     invalidateSystemPromptCache(userId, req.params.id);
     res.json(await getAsync('SELECT * FROM projects WHERE id = $1', [req.params.id]));
