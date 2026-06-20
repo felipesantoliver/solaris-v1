@@ -108,7 +108,15 @@ export const api = {
     return safeJson(res);
   },
 
-  async sendMessageStream(chatId, projectId, message, _userId, model, codingMode, onChunk, onTitle, onError, onDone, onMaxTokens) {
+  /**
+   * Envia mensagem via streaming (SSE). Trata eventos granulares de progresso
+   * (progress: searching/thinking/generating) além de chunk/title/maxTokens/done/error.
+   * onProgress é opcional e não interfere no fluxo já existente.
+   */
+  async sendMessageStream(
+    chatId, projectId, message, _userId, model, codingMode,
+    onChunk, onTitle, onError, onDone, onMaxTokens, onProgress
+  ) {
     const response = await fetch(`${API_BASE}/messages/stream`, {
       method: 'POST',
       headers: {
@@ -138,16 +146,19 @@ export const api = {
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
         for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
+          if (!line.startsWith('data: ')) continue; // ignora ": heartbeat" / ": processing"
           const data = line.slice(6).trim();
           if (data === '[DONE]') { safeDone(); continue; }
+          if (!data) continue;
           try {
             const parsed = JSON.parse(data);
-            if (parsed.error)              { onError?.(parsed.error); return; }
+            // Evento de progresso é mutuamente exclusivo dos demais (payload só tem `progress`)
+            if (parsed.progress)                { onProgress?.(parsed.progress); continue; }
+            if (parsed.error)                   { onError?.(parsed.error); return; }
             if (parsed.title && parsed.chat_id) onTitle?.(parsed.title, parsed.chat_id);
-            if (parsed.chunk)              onChunk?.(parsed.chunk);
-            if (parsed.maxTokens)          onMaxTokens?.();
-            if (parsed.done)               safeDone();
+            if (parsed.chunk)                   onChunk?.(parsed.chunk);
+            if (parsed.maxTokens)               onMaxTokens?.();
+            if (parsed.done)                    safeDone();
           } catch (e) { console.warn('SSE parse error:', e); }
         }
       }
