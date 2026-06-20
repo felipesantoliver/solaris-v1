@@ -65,7 +65,7 @@ A arquitetura é distribuída em quatro serviços independentes:
 
 ### 💬 Conversas
 
-**Streaming de respostas** — respostas chegam em tempo real via Server-Sent Events, com sequência de status visual: `Analisando contexto…` → `Consultando memórias…` → `Preparando resposta…`
+**Streaming de respostas** — respostas chegam em tempo real via Server-Sent Events. O backend emite eventos granulares de progresso (`searching`, `thinking`, `generating`) que o frontend traduz em um indicador visual: `Analisando contexto…` durante a busca em chats de projeto (RAG sobre fontes/documentos) ou `Consultando memórias…` em chats avulsos (memória global); `Preparando resposta…` enquanto o system prompt é montado; e o indicador desaparece no instante em que o texto da resposta começa a chegar, chunk a chunk.
 
 **Edição de mensagens** — qualquer mensagem pode ser editada. As mensagens seguintes são descartadas e a resposta é regenerada a partir daquele ponto. O histórico de edições é preservado no banco.
 
@@ -90,7 +90,9 @@ A arquitetura é distribuída em quatro serviços independentes:
 
 > O modo Pro está disponível **apenas para usuários autenticados**. No modo convidado, somente o Flash está habilitado.
 
-**7 personalidades configuráveis:**
+**Personalidade por projeto** — cada projeto pode ter sua própria personalidade (`response_style`), que tem prioridade sobre a personalidade global do usuário enquanto a conversa estiver dentro daquele projeto. Ao criar ou editar um projeto, é possível escolher um dos 7 presets abaixo **ou** escrever livremente a personalidade desejada. Texto livre é automaticamente reescrito por um modelo de linguagem (Groq, via microsserviço Python) em uma instrução de sistema compacta e objetiva antes de ser salvo — economiza tokens em toda mensagem trocada no projeto, já que esse texto entra no prompt de cada chamada ao modelo. Se a Groq estiver indisponível, um fallback local (normalização de espaços + corte por tamanho) garante que a criação do projeto nunca seja bloqueada por isso. Fora de um projeto (chat avulso), vale a personalidade global do usuário normalmente.
+
+**7 personalidades pré-definidas (presets):**
 
 | Personalidade | Descrição |
 |---|---|
@@ -102,9 +104,9 @@ A arquitetura é distribuída em quatro serviços independentes:
 | Bem-humorado | Descontraído, com analogias divertidas |
 | Empático | Caloroso, acolhedor e encorajador |
 
-**Traits personalizados** — instruções livres que complementam o comportamento da personalidade base.
+**Traits personalizados** — instruções livres do usuário que complementam a personalidade ativa (global ou de projeto) em qualquer um dos dois casos.
 
-> As personalidades acima são fixas no backend. Para controle total do comportamento do modelo, consulte o roadmap — personalidades completamente customizáveis (system prompt próprio por projeto) estão planejadas.
+> Os presets continuam fixos no backend — a flexibilidade está em poder sobrescrevê-los com texto livre por projeto, sem precisar editar código.
 
 ---
 
@@ -227,13 +229,13 @@ Usuário
 
 ## Banco de dados
 
-O backend Node aplica migrações automaticamente no startup (sem ferramenta externa). Schema atual: **versão 4**.
+O backend Node aplica migrações automaticamente no startup (sem ferramenta externa). Schema atual: **versão 5**.
 
 ### Tabelas
 
 | Tabela | Descrição |
 |---|---|
-| `projects` | Projetos do usuário: objetivo, tags, modo de memória, modelo |
+| `projects` | Projetos do usuário: objetivo, tags, modo de memória, modelo e personalidade própria (`response_style`, com prioridade sobre a personalidade global) |
 | `chats` | Conversas vinculadas a um projeto |
 | `messages` | Mensagens com histórico de edições (JSONB) |
 | `memories` | Memórias extraídas automaticamente após cada resposta, com embedding para busca |
@@ -266,24 +268,31 @@ Execute `backend-python/migrations/001_add_pgvector_file_chunks.sql` manualmente
 | `GET` | `/api/health` | Health check |
 | `GET` | `/api/projects` | Lista projetos do usuário |
 | `GET` | `/api/projects/:id` | Projeto com seus chats |
-| `POST` | `/api/projects` | Cria projeto |
+| `POST` | `/api/projects` | Cria projeto (aceita `response_style` como preset ou texto livre) |
 | `PATCH` | `/api/projects/:id` | Atualiza projeto |
 | `DELETE` | `/api/projects/:id` | Remove projeto |
-| `GET` | `/api/chats` | Lista chats (filtro por projeto) |
-| `POST` | `/api/chats` | Cria chat |
-| `DELETE` | `/api/chats/:id` | Remove chat |
-| `GET` | `/api/chats/:id/messages` | Mensagens paginadas |
-| `POST` | `/api/messages/stream` | Envia mensagem (SSE streaming) |
+| `GET` | `/api/projects/:projectId/chats` | Chats do projeto, paginado |
+| `POST` | `/api/projects/:id/chats` | Cria chat (`:id` pode ser `none` para chat avulso) |
+| `DELETE` | `/api/projects/:id/chats/:chatId` | Remove chat |
+| `PATCH` | `/api/chats/:chatId/title` | Renomeia chat |
+| `GET` | `/api/user/chats` | Chats avulsos do usuário, paginado |
+| `DELETE` | `/api/user/chats` | Remove todos os chats avulsos do usuário |
+| `GET` | `/api/messages/chat/:chatId` | Mensagens paginadas de um chat |
+| `POST` | `/api/messages/stream` | Envia mensagem (SSE streaming, eventos `progress`/`chunk`/`title`/`maxTokens`/`done`/`error`) |
 | `POST` | `/api/messages` | Envia mensagem (fallback não-streaming) |
-| `PATCH` | `/api/messages/:id` | Edita mensagem |
-| `POST` | `/api/files/upload` | Envia arquivo para um projeto |
+| `PATCH` | `/api/messages/:messageId` | Edita mensagem (descarta e regenera as seguintes) |
 | `GET` | `/api/files/:projectId` | Lista arquivos do projeto |
-| `DELETE` | `/api/files/:id` | Remove arquivo |
-| `POST` | `/api/sources` | Adiciona fonte externa |
-| `GET` | `/api/sources/:projectId` | Lista fontes do projeto |
-| `DELETE` | `/api/sources/:id` | Remove fonte |
-| `GET` | `/api/settings/:userId` | Configurações do usuário |
-| `POST` | `/api/settings` | Salva personalidade e traits |
+| `POST` | `/api/files/:projectId` | Envia arquivo para o projeto (multipart) |
+| `DELETE` | `/api/files/:projectId/:fileId` | Remove arquivo |
+| `GET` | `/api/files/:id/download` | Baixa o binário original do arquivo |
+| `GET` | `/api/projects/:projectId/sources` | Lista fontes externas do projeto |
+| `POST` | `/api/projects/:projectId/sources/url` | Adiciona fonte externa via URL |
+| `POST` | `/api/projects/:projectId/sources/text` | Adiciona fonte externa via texto livre |
+| `DELETE` | `/api/projects/:projectId/sources/:sourceId` | Remove fonte |
+| `GET` | `/api/settings` | Configurações do usuário autenticado (via header de auth) |
+| `POST` / `PUT` | `/api/settings` | Salva personalidade, traits, notificações e privacidade (upsert parcial) |
+| `POST` | `/api/migrate` | Migra histórico/memórias/configurações de convidado para conta logada |
+| `GET` | `/api/share/:chatId` | Visualização pública (somente leitura) de um chat compartilhado |
 | `POST` | `/api/voice/transcribe` | Transcrição de áudio (proxy Python) |
 
 ### Microsserviço Python
@@ -292,7 +301,7 @@ Execute `backend-python/migrations/001_add_pgvector_file_chunks.sql` manualmente
 |---|---|---|
 | `GET` | `/health` | Health check |
 | `POST` | `/voice/transcribe` | Transcrição via Whisper (GROQ) |
-| `POST` | `/files/extract` | Extração de texto de arquivo |
+| `POST` | `/files/extract-text` | Extração de texto de arquivo |
 | `POST` | `/embeddings/generate` | Embedding de um texto |
 | `POST` | `/embeddings/batch` | Embeddings em lote |
 | `POST` | `/search/rag` | Busca semântica em chunks (RAG) |
@@ -303,6 +312,7 @@ Execute `backend-python/migrations/001_add_pgvector_file_chunks.sql` manualmente
 | `POST` | `/intent/classify` | Classifica intenção da mensagem |
 | `POST` | `/tools/condense-chunk` | Condensa chunk de texto por heurística |
 | `POST` | `/tools/generate-title` | Gera título com fallback local |
+| `POST` | `/tools/optimize-personality` | Reescreve personalidade customizada (texto livre) de forma compacta; fallback local se a Groq estiver indisponível |
 
 ### Sandbox
 
@@ -407,7 +417,7 @@ Obtenha as chaves de API:
 
 6. Copie a URL pública após o deploy.
 
-> Na primeira execução, o banco é migrado automaticamente. Confirme nos logs: `✅ Schema atualizado para versão 4`.
+> Na primeira execução, o banco é migrado automaticamente. Confirme nos logs: `✅ Schema atualizado para versão 5`.
 
 ---
 
@@ -581,6 +591,8 @@ VITE_SUPABASE_ANON_KEY=eyJ...
 | Modo convidado com migração automática |
 | Edição de mensagens com histórico |
 | Fila de jobs assíncronos (BullMQ) para upload e indexação de arquivos |
+| Personalidade por projeto, com prioridade sobre a personalidade global e otimização automática de texto livre via IA |
+| Indicadores granulares de progresso no streaming (SSE: `searching` → `thinking` → `generating`) |
 
 ---
 
@@ -591,13 +603,13 @@ As funcionalidades abaixo estão organizadas da mais fácil para a mais complexa
 #### Médio — impacto significativo, esforço moderado
 
 | Funcionalidade | Descrição |
+|---|---|
 | Geração de imagens (Gemini Imagen) | Geração de imagens diretamente no chat via Gemini Imagen |
 
 #### Difícil — alta complexidade ou dependência de infraestrutura
 
 | Funcionalidade | Descrição |
 |---|---|
-
 | Agentes autônomos por projeto | Execução de tarefas multi-etapa com ferramentas (busca web, execução de código, leitura de arquivos) sem intervenção manual a cada passo |
 | Colaboração multiusuário em projetos | Projetos compartilhados com controle de acesso, memórias colaborativas e histórico unificado entre usuários |
 
