@@ -205,6 +205,25 @@ router.post('/agent/run', extractUserId, async (req, res) => {
   let stepN = 0;
   const nextId = (prefix) => `s-${prefix}-${++stepN}`;
 
+  // FIX 2.4: stepsLog só era persistido no INSERT final feliz — early-returns
+  // por `closed` e o catch abaixo descartavam toda a timeline já acumulada em
+  // memória. Extraído pra função reaproveitável (era só o trecho final de
+  // sucesso) e agora também chamada nos pontos de saída antecipada, sempre
+  // com o stepsLog que já existe até aquele momento. Falha ao persistir aqui
+  // só loga — não deve mascarar/sobrepor o erro original que levou a essa
+  // tentativa de salvar.
+  async function saveAgentRun(content) {
+    try {
+      await runAsync(
+        'INSERT INTO messages (chat_id, role, content, agent_steps) VALUES ($1,$2,$3,$4)',
+        [chatId, 'assistant', content, JSON.stringify(stepsLog)]
+      );
+      await runAsync('UPDATE chats SET updated_at = NOW() WHERE id = $1', [chatId]);
+    } catch (persistErr) {
+      console.error('Falha ao salvar timeline do agente:', persistErr);
+    }
+  }
+
   try {
     await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chatId, 'user', message]);
 
@@ -219,7 +238,15 @@ router.post('/agent/run', extractUserId, async (req, res) => {
     send(baseEvt({ type: 'done', stepId: thoughtId }));
     record({ id: thoughtId, type: 'thought', content: thoughtText, status: 'complete', startedAt: tStart, completedAt: Date.now() });
 
-    if (closed) return;
+    if (closed) {
+      record({
+        id: nextId('error'), type: 'error',
+        content: 'Conexão encerrada pelo cliente antes de iniciar o processamento.',
+        status: 'error', startedAt: Date.now(), completedAt: Date.now(),
+      });
+      await saveAgentRun('');
+      return;
+    }
 
     let memoryMode = 'projeto';
     if (projectId) {
@@ -315,7 +342,19 @@ router.post('/agent/run', extractUserId, async (req, res) => {
       break;
     }
 
-    if (closed) return;
+    if (closed) {
+      // Pode haver `finalText` já pronto aqui (o modelo respondeu, mas o
+      // cliente desconectou entre o fim da chamada e esta checagem) — nesse
+      // caso salvamos a resposta mesmo assim, só sinalizando que a conexão
+      // não estava mais ativa pra confirmar a entrega.
+      record({
+        id: nextId('error'), type: 'error',
+        content: 'Conexão encerrada pelo cliente durante a execução do agente.',
+        status: 'error', startedAt: Date.now(), completedAt: Date.now(),
+      });
+      await saveAgentRun(finalText ? processResponse(finalText) : '');
+      return;
+    }
 
     if (!finalText) {
       // Segurança: estourou as iterações sem uma resposta final (ou o modelo
@@ -332,17 +371,17 @@ router.post('/agent/run', extractUserId, async (req, res) => {
       (piece) => send(baseEvt({ type: 'final', stepId: finalId, content: piece, delta: true })),
       () => closed
     );
-    if (closed) return;
+    // FIX 2.4: antes, `if (closed) return;` aqui descartava a resposta final
+    // SEM SALVAR mesmo quando `cleanedFinal` já estava 100% pronto — só a
+    // "digitação" simulada na tela é que foi cortada por desconexão do
+    // cliente. `send()` já no-opa sozinho se `closed`, então deixamos o fluxo
+    // seguir e persistir normalmente em vez de jogar a resposta fora.
     send(baseEvt({ type: 'done', stepId: finalId }));
     record({ id: finalId, type: 'final', content: cleanedFinal, status: 'complete', startedAt: fStart, completedAt: Date.now() });
 
-    await runAsync(
-      'INSERT INTO messages (chat_id, role, content, agent_steps) VALUES ($1,$2,$3,$4)',
-      [chatId, 'assistant', cleanedFinal, JSON.stringify(stepsLog)]
-    );
-    await runAsync('UPDATE chats SET updated_at = NOW() WHERE id = $1', [chatId]);
+    await saveAgentRun(cleanedFinal);
 
-    res.write('data: [DONE]\n\n');
+    if (!closed && !res.writableEnded) res.write('data: [DONE]\n\n');
 
     // Título (1ª mensagem) e extração de memórias seguem em background, igual
     // ao /messages/stream — não há um evento dedicado a "title" no protocolo
@@ -360,10 +399,23 @@ router.post('/agent/run', extractUserId, async (req, res) => {
     }
   } catch (err) {
     console.error('Erro no agente:', err);
+    const errMessage = err.message || 'Erro interno no agente.';
+    const errStepId = nextId('error');
+    record({
+      id: errStepId, type: 'error', content: errMessage,
+      status: 'error', startedAt: Date.now(), completedAt: Date.now(),
+    });
+
     if (!closed && !res.writableEnded) {
-      send(baseEvt({ type: 'error', stepId: nextId('error'), errorMessage: err.message || 'Erro interno no agente.' }));
+      send(baseEvt({ type: 'error', stepId: errStepId, errorMessage }));
       res.write('data: [DONE]\n\n');
     }
+
+    // FIX 2.4: stepsLog acumulado até a exceção (thoughts/actions/observations
+    // que já tinham completado) não era salvo — o catch só avisava o cliente
+    // ao vivo (se ainda conectado) e descartava a timeline. content='' porque
+    // não há resposta final confiável neste ponto.
+    await saveAgentRun('');
   } finally {
     clearInterval(heartbeat);
     if (!res.writableEnded) res.end();
