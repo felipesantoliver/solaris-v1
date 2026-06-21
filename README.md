@@ -154,7 +154,7 @@ A validação é feita por análise estática de AST antes da execução, bloque
 
 ### 🤖 Modo Agente Autônomo
 
-Ativado pelo botão "Agente" ao lado do "Code" no campo de mensagem. Em vez do streaming direto do chat normal, a mensagem vai para `POST /api/agent/run` (SSE), que roda um loop real de function calling do Gemini: a cada rodada o modelo decide se chama uma ferramenta (`rag_search`, `python_sandbox`, `web_search`) ou se já tem o suficiente pra responder. Cada decisão vira um step na timeline (raciocínio, chamada de ferramenta, resultado, resposta final), renderizado em tempo real pelo componente `AgentChatTimeline`.
+Ativado pelo botão "Agente" ao lado do "Programação" no campo de mensagem. Em vez do streaming direto do chat normal, a mensagem vai para `POST /api/agent/run` (SSE), que roda um loop real de function calling do Gemini: a cada rodada o modelo decide se chama uma ferramenta (`rag_search`, `python_sandbox`, `web_search`) ou se já tem o suficiente pra responder. Cada decisão vira um step na timeline (raciocínio, chamada de ferramenta, resultado, resposta final), renderizado em tempo real pelo componente `AgentChatTimeline`.
 
 Com **Raciocínio Estendido** ativado (Modo Pro), o resumo do "pensamento" do Gemini (`thinkingConfig.includeThoughts`) também aparece como um step próprio na timeline, antes da resposta final.
 

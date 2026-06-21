@@ -286,7 +286,7 @@ export function MessageInput({
           <span className="sm:hidden" />
           <div className="flex items-center gap-4">
             {/* Botão Agente — liga o Modo Agente Autônomo (loop de ferramentas via
-                SSE). Mesmo padrão visual do botão Code, cor própria (fuchsia)
+                SSE). Mesmo padrão visual do botão Programação, cor própria (fuchsia)
                 pra não se confundir com o violeta do Raciocínio Estendido. */}
             <button
               onClick={() => setAgentMode(!agentMode)}
@@ -306,10 +306,10 @@ export function MessageInput({
               <span>Agente</span>
               {agentMode && <span className="w-1 h-1 rounded-full bg-fuchsia-400 animate-pulse shrink-0" />}
             </button>
-            {/* Botão Code — indicador tech discreto, funciona em light e dark */}
+            {/* Botão Programação — indicador tech discreto, funciona em light e dark */}
             <button
               onClick={() => setProgrammingMode(!programmingMode)}
-              title={programmingMode ? 'Desativar modo code' : 'Ativar modo code'}
+              title={programmingMode ? 'Desativar modo programação' : 'Ativar modo programação'}
               className={`relative flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[10px] font-medium uppercase tracking-widest transition-all duration-300 mb-2 ${
                 programmingMode
                   ? darkMode
@@ -321,7 +321,7 @@ export function MessageInput({
               }`}
             >
               <Code size={10} />
-              <span>Code</span>
+              <span>Programação</span>
               {programmingMode && (
                 <span
                   className={darkMode ? 'code-mode-dot-dark' : 'code-mode-dot-light'}

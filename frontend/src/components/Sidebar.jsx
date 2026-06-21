@@ -194,6 +194,25 @@ export const Sidebar = memo(function Sidebar({
             <span className={`ml-auto w-1.5 h-1.5 rounded-full ${darkMode ? 'bg-white' : 'bg-black'}`} />
           )}
         </button>
+
+        {/* Configurações — manual do agente, preferências e sobre */}
+        <button
+          onClick={() => {
+            if (onNavigate) onNavigate(activeView === 'help' ? 'chat' : 'help');
+            closeMobile();
+          }}
+          className={`flex items-center gap-3 w-full text-left transition-colors group ${
+            activeView === 'help'
+              ? (darkMode ? 'text-white' : 'text-black')
+              : theme.textSecondary
+          }`}
+        >
+          <Settings size={18} strokeWidth={1.2} className={activeView === 'help' ? 'text-current' : ''} />
+          <span className="text-sm font-light">Configurações</span>
+          {activeView === 'help' && (
+            <span className={`ml-auto w-1.5 h-1.5 rounded-full ${darkMode ? 'bg-white' : 'bg-black'}`} />
+          )}
+        </button>
       </div>
 
       {/* SolarSystem fora do overflow-y-auto para que as animações CSS nunca sejam

@@ -14,6 +14,7 @@ import { MessageInput } from './components/MessageInput';
 import { ProjectModal } from './components/ProjectModal';
 import { ProjectDetailModal } from './components/ProjectDetailModal';
 import { ProjectsView } from './components/ProjectsView';
+import { HelpCenterView } from './components/HelpCenterView';
 import { SettingsModal } from './components/SettingsModal';
 import { AuthModal } from './components/AuthModal';
 import { GuestBanner } from './components/GuestBanner';
@@ -518,7 +519,7 @@ export default function App() {
               className="code-mode-dot text-[9px] font-medium uppercase tracking-[0.25em]"
               style={{ color: darkMode ? 'rgb(103 232 249)' : 'rgb(8 145 178)' }}
             >
-              modo code: ativado
+              modo programação: ativado
             </p>
           </div>
         )}
@@ -531,6 +532,11 @@ export default function App() {
             onOpenProjectDetails={handleViewProjectDetails}
             onEditProject={setEditingProject}
             onDeleteProject={(proj) => setItemToDelete({ type: 'project', data: proj })}
+          />
+        ) : activeView === 'help' ? (
+          <HelpCenterView
+            darkMode={darkMode} setDarkMode={setDarkMode} theme={theme}
+            onBack={() => setActiveView('chat')}
           />
         ) : (
           <>

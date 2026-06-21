@@ -10,7 +10,7 @@ interface ExtendedReasoningToggleProps {
 }
 
 // Botão de "Raciocínio Estendido" para a barra de input — segue o mesmo
-// padrão visual do toggle "Code" já existente no MessageInput (pill com
+// padrão visual do toggle "Programação" já existente no MessageInput (pill com
 // borda, ícone + label, indicador de pulso quando ativo).
 export function ExtendedReasoningToggle({ enabled, onToggle, isPro, darkMode }: ExtendedReasoningToggleProps) {
   const [showProHint, setShowProHint] = useState(false);
