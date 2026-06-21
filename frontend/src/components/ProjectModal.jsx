@@ -19,6 +19,8 @@ export function ProjectModal({ project, onClose, onUpdate, darkMode, effectiveUs
   const [tags, setTags] = useState(Array.isArray(project?.tags) ? project.tags.join(', ') : '');
   const [responseStyle, setResponseStyle] = useState(project?.response_style || 'direto');
   const [memoryMode, setMemoryMode] = useState(project?.memory_mode || 'projeto');
+  const [instructions, setInstructions] = useState(project?.instructions || '');
+  const [sharedMemoryEnabled, setSharedMemoryEnabled] = useState(!!project?.shared_memory_enabled);
   const [loading, setLoading] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState('');
@@ -57,7 +59,8 @@ export function ProjectModal({ project, onClose, onUpdate, darkMode, effectiveUs
       const tagsArray = tags.split(',').map(t => t.trim()).filter(t => t);
       const updated = await onUpdate(project.id, {
         name, summary, detailed_objective: detailedObjective,
-        tags: tagsArray, response_style: responseStyle, memory_mode: memoryMode
+        tags: tagsArray, response_style: responseStyle, memory_mode: memoryMode,
+        instructions, shared_memory_enabled: sharedMemoryEnabled,
       });
       setSaved(true); setTimeout(() => setSaved(false), 2000);
       // A função onUpdate já tratou da atualização no componente pai,
@@ -107,6 +110,7 @@ export function ProjectModal({ project, onClose, onUpdate, darkMode, effectiveUs
         </div>
         <div className="flex border-b border-current/10">
           <button onClick={() => setActiveTab('edit')} className={`px-6 py-3 text-sm font-medium transition-all ${activeTab === 'edit' ? (darkMode ? 'border-b-2 border-white text-white' : 'border-b-2 border-black text-black') : t.muted}`}>Editar</button>
+          <button onClick={() => setActiveTab('instructions')} className={`px-6 py-3 text-sm font-medium transition-all ${activeTab === 'instructions' ? (darkMode ? 'border-b-2 border-white text-white' : 'border-b-2 border-black text-black') : t.muted}`}>Instruções</button>
           <button onClick={() => setActiveTab('sources')} className={`px-6 py-3 text-sm font-medium transition-all ${activeTab === 'sources' ? (darkMode ? 'border-b-2 border-white text-white' : 'border-b-2 border-black text-black') : t.muted}`}>Fontes</button>
         </div>
         <div className="flex-1 overflow-y-auto p-6">
@@ -118,6 +122,43 @@ export function ProjectModal({ project, onClose, onUpdate, darkMode, effectiveUs
               <div><label className={`text-xs uppercase tracking-wider ${t.muted}`}>Tags (separadas por vírgula)</label><input type="text" value={tags} onChange={e => setTags(e.target.value)} className={`w-full mt-1 px-4 py-2 rounded-xl border ${t.input}`} placeholder="ex: IA, backend, finanças" /></div>
               <div><label className={`text-xs uppercase tracking-wider ${t.muted}`}>Estilo de resposta</label><select value={responseStyle} onChange={e => setResponseStyle(e.target.value)} className={`w-full mt-1 px-4 py-2 rounded-xl border ${t.input}`}>{PERSONALITIES.map(p => (<option key={p.id} value={p.id}>{p.label}</option>))}</select></div>
               <div><label className={`text-xs uppercase tracking-wider ${t.muted}`}>Modo de memória</label><select value={memoryMode} onChange={e => setMemoryMode(e.target.value)} className={`w-full mt-1 px-4 py-2 rounded-xl border ${t.input}`}><option value="projeto">Apenas deste projeto</option><option value="global">Global (todos os projetos)</option><option value="nenhuma">Nenhuma (economiza tokens)</option></select><p className={`text-[10px] mt-1 ${t.muted}`}>Memórias são extraídas automaticamente de conversas importantes.</p></div>
+              {memoryMode === 'projeto' && (
+                <div className={`flex items-start gap-3 p-3 rounded-xl border ${t.border}`}>
+                  <input
+                    type="checkbox"
+                    id="shared-memory-toggle"
+                    checked={sharedMemoryEnabled}
+                    onChange={e => setSharedMemoryEnabled(e.target.checked)}
+                    className="mt-0.5"
+                  />
+                  <label htmlFor="shared-memory-toggle" className="text-xs cursor-pointer">
+                    <span className="font-medium">Compartilhar memória entre todos os chats do projeto</span>
+                    <p className={`mt-0.5 ${t.muted}`}>
+                      {sharedMemoryEnabled
+                        ? 'Ativado: o que for lembrado em um chat fica disponível para os outros chats deste projeto.'
+                        : 'Desativado: cada chat do projeto mantém sua própria memória, isolada dos demais.'}
+                    </p>
+                  </label>
+                </div>
+              )}
+              {error && <p className="text-red-400 text-xs">{error}</p>}
+              <button onClick={handleUpdate} disabled={loading} className={`w-full py-3 rounded-xl text-sm font-medium transition-all flex items-center justify-center gap-2 ${t.btn}`}>{loading ? <Loader2 size={16} className="animate-spin" /> : saved ? <Check size={16} /> : <Save size={16} />}{saved ? 'Salvo!' : 'Salvar alterações'}</button>
+            </div>
+          ) : activeTab === 'instructions' ? (
+            <div className="space-y-4">
+              <div>
+                <label className={`text-xs uppercase tracking-wider ${t.muted}`}>Instruções do projeto</label>
+                <p className={`text-[10px] mt-1 mb-1.5 ${t.muted}`}>
+                  Contexto persistente que o assistente usará em todos os chats deste projeto (injetado no system prompt).
+                </p>
+                <textarea
+                  value={instructions}
+                  onChange={e => setInstructions(e.target.value)}
+                  rows={10}
+                  className={`w-full px-4 py-3 rounded-xl border resize-none ${t.input}`}
+                  placeholder="Ex: Você é um assistente especialista em startups de tecnologia. Sempre responda de forma objetiva e com foco em crescimento..."
+                />
+              </div>
               {error && <p className="text-red-400 text-xs">{error}</p>}
               <button onClick={handleUpdate} disabled={loading} className={`w-full py-3 rounded-xl text-sm font-medium transition-all flex items-center justify-center gap-2 ${t.btn}`}>{loading ? <Loader2 size={16} className="animate-spin" /> : saved ? <Check size={16} /> : <Save size={16} />}{saved ? 'Salvo!' : 'Salvar alterações'}</button>
             </div>

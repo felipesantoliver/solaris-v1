@@ -24,12 +24,15 @@ const pythonCircuitBreaker = createCircuitBreaker({
 });
 
 // ─── Helpers de cache ──────────────────────────────────────────────────────
-export function getCacheKey(userId, projectId, memoryMode) {
-  return `${userId}:${projectId || 'none'}:${memoryMode}`;
+// 4.5: chatId entra na chave quando a memória do projeto é isolada por chat
+// (shared_memory_enabled = false) — cada chat tem seu próprio system prompt
+// cacheado, já que a síntese de memórias usada é diferente por chat.
+export function getCacheKey(userId, projectId, memoryMode, chatId) {
+  return `${userId}:${projectId || 'none'}:${memoryMode}:${chatId || 'none'}`;
 }
 
-export async function getCachedSystemPrompt(userId, projectId, memoryMode) {
-  const key = getCacheKey(userId, projectId, memoryMode);
+export async function getCachedSystemPrompt(userId, projectId, memoryMode, chatId) {
+  const key = getCacheKey(userId, projectId, memoryMode, chatId);
   const redisKey = `sysprompt:${key}`;
 
   const result = await withRedis(
@@ -54,8 +57,8 @@ export async function getCachedSystemPrompt(userId, projectId, memoryMode) {
   return result;
 }
 
-export async function setCachedSystemPrompt(userId, projectId, memoryMode, data) {
-  const key = getCacheKey(userId, projectId, memoryMode);
+export async function setCachedSystemPrompt(userId, projectId, memoryMode, data, chatId) {
+  const key = getCacheKey(userId, projectId, memoryMode, chatId);
   const redisKey = `sysprompt:${key}`;
   const ttlSeconds = Math.ceil(SYSTEM_PROMPT_CACHE_TTL / 1000);
 
@@ -333,6 +336,12 @@ export function assembleBaseSystemPrompt({ settings, project, synthesis, memoryM
     if (project.detailed_objective) prompt += `Objetivo detalhado: ${project.detailed_objective}\n`;
     if (project.tags && project.tags.length) prompt += `Tags: ${project.tags.join(', ')}\n`;
     prompt += `\n`;
+    // 4.6: instruções persistentes definidas pelo usuário para o projeto —
+    // aplicadas em todo chat dentro dele, separado do "objetivo detalhado"
+    // (que é mais um resumo/contexto do que está sendo construído).
+    if (project.instructions && project.instructions.trim()) {
+      prompt += `=== INSTRUÇÕES DO PROJETO ===\n${project.instructions.trim()}\n\n`;
+    }
   }
 
   prompt += `=== ESTILO ===\n${personalityText}\n`;
@@ -355,7 +364,7 @@ export function assembleBaseSystemPrompt({ settings, project, synthesis, memoryM
 }
 
 // ─── Busca com cache e síntese ────────────────────────────────────────────
-export async function getBaseSystemPromptWithCache(userId, projectId, memoryMode, userQuery = '') {
+export async function getBaseSystemPromptWithCache(userId, projectId, memoryMode, userQuery = '', chatId = null) {
   if (!userId) {
     const project = projectId
       ? await getAsync('SELECT * FROM projects WHERE id = $1', [projectId])
@@ -363,7 +372,7 @@ export async function getBaseSystemPromptWithCache(userId, projectId, memoryMode
     return assembleBaseSystemPrompt({ settings: null, project, synthesis: null, memoryMode, intent: 'general' });
   }
 
-  const cached = await getCachedSystemPrompt(userId, projectId, memoryMode);
+  const cached = await getCachedSystemPrompt(userId, projectId, memoryMode, chatId);
   if (cached) return cached;
 
   const [settings, project] = await Promise.all([
@@ -374,9 +383,16 @@ export async function getBaseSystemPromptWithCache(userId, projectId, memoryMode
   let memories = [];
   let synthesis = null;
 
+  // 4.5: dentro de um projeto, a memória pode ser compartilhada entre todos
+  // os chats (shared_memory_enabled = true → escopo por project_id, como
+  // antes) ou isolada por chat (false, padrão → escopo por chat_id).
+  const isProjectMemoryShared = !!project?.shared_memory_enabled;
+
   if (memoryMode !== 'nenhuma') {
     if (memoryMode === 'projeto' && projectId) {
-      memories = await allAsync('SELECT id, content, embedding FROM memories WHERE project_id = $1 ORDER BY created_at DESC LIMIT 20', [projectId]);
+      memories = isProjectMemoryShared
+        ? await allAsync('SELECT id, content, embedding FROM memories WHERE project_id = $1 ORDER BY created_at DESC LIMIT 20', [projectId])
+        : await allAsync('SELECT id, content, embedding FROM memories WHERE project_id = $1 AND chat_id = $2 ORDER BY created_at DESC LIMIT 20', [projectId, chatId]);
     } else if (memoryMode === 'global' && userId) {
       memories = await allAsync('SELECT id, content, embedding FROM memories WHERE project_id IS NULL AND user_id = $1 ORDER BY created_at DESC LIMIT 20', [userId]);
     }
@@ -396,7 +412,7 @@ export async function getBaseSystemPromptWithCache(userId, projectId, memoryMode
   }
 
   const systemPrompt = assembleBaseSystemPrompt({ settings, project, synthesis, memoryMode, intent });
-  await setCachedSystemPrompt(userId, projectId, memoryMode, systemPrompt);
+  await setCachedSystemPrompt(userId, projectId, memoryMode, systemPrompt, chatId);
   return systemPrompt;
 }
 
@@ -472,7 +488,7 @@ function jaccardSimilarity(textA, textB) {
 // ─── Extração e persistência de memórias ─────────────────────────────────
 // Problema 2 corrigido: função estava vazia — agora chama Python e persiste no banco.
 // Dedup por Jaccard (>0.7) adicionada para evitar memórias duplicadas.
-export async function extractMemories(projectId, userId, response, memoryMode) {
+export async function extractMemories(projectId, userId, response, memoryMode, chatId = null) {
   if (!response || !userId) return;
 
   try {
@@ -488,11 +504,28 @@ export async function extractMemories(projectId, userId, response, memoryMode) {
     const isProjectScope = memoryMode === 'projeto' && !!projectId;
     const scopeProjectId = isProjectScope ? projectId : null;
 
+    // 4.5: se a memória do projeto é isolada por chat (shared_memory_enabled
+    // = false), cada memória nova é gravada com chat_id preenchido e a
+    // checagem de duplicata também fica restrita àquele chat — não faz
+    // sentido comparar contra memórias de outro chat do mesmo projeto que o
+    // usuário nunca verá ali.
+    let isProjectMemoryShared = true;
+    if (isProjectScope) {
+      const project = await getAsync('SELECT shared_memory_enabled FROM projects WHERE id = $1', [scopeProjectId]);
+      isProjectMemoryShared = !!project?.shared_memory_enabled;
+    }
+    const scopeChatId = (isProjectScope && !isProjectMemoryShared) ? chatId : null;
+
     const existingMemories = isProjectScope
-      ? await allAsync(
-          'SELECT content FROM memories WHERE project_id = $1 ORDER BY created_at DESC LIMIT 50',
-          [scopeProjectId]
-        )
+      ? (isProjectMemoryShared
+          ? await allAsync(
+              'SELECT content FROM memories WHERE project_id = $1 ORDER BY created_at DESC LIMIT 50',
+              [scopeProjectId]
+            )
+          : await allAsync(
+              'SELECT content FROM memories WHERE project_id = $1 AND chat_id = $2 ORDER BY created_at DESC LIMIT 50',
+              [scopeProjectId, scopeChatId]
+            ))
       : await allAsync(
           'SELECT content FROM memories WHERE project_id IS NULL AND user_id = $1 ORDER BY created_at DESC LIMIT 50',
           [userId]
@@ -537,9 +570,9 @@ export async function extractMemories(projectId, userId, response, memoryMode) {
     for (let i = 0; i < toInsert.length; i++) {
       const embedding = embeddings?.[i] ?? null;
       await runAsync(
-        `INSERT INTO memories (project_id, user_id, content, source, embedding)
-         VALUES ($1, $2, $3, 'auto', $4)`,
-        [scopeProjectId, userId, toInsert[i], embedding ? JSON.stringify(embedding) : null]
+        `INSERT INTO memories (project_id, user_id, content, source, embedding, chat_id)
+         VALUES ($1, $2, $3, 'auto', $4, $5)`,
+        [scopeProjectId, userId, toInsert[i], embedding ? JSON.stringify(embedding) : null, scopeChatId]
       );
       inserted++;
     }

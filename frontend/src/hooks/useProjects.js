@@ -78,7 +78,7 @@ export function useProjects(effectiveUserId, authUser, model) {
     return () => window.removeEventListener('solaris:chat-title', handler);
   }, []);
 
-  const createProject = useCallback(async (name, summary = '', detailedObjective = '', tags = [], responseStyle = 'direto', memoryMode = 'projeto') => {
+  const createProject = useCallback(async (name, summary = '', detailedObjective = '', tags = [], responseStyle = 'direto', memoryMode = 'projeto', instructions = '', sharedMemoryEnabled = false) => {
     const newProject = await api.createProject({
       name,
       summary,
@@ -86,6 +86,8 @@ export function useProjects(effectiveUserId, authUser, model) {
       tags,
       response_style: responseStyle,
       memory_mode: memoryMode,
+      instructions,
+      shared_memory_enabled: sharedMemoryEnabled,
     }, authUser ? model : 'flash');
     setProjects(prev => [newProject, ...prev]);
     setActiveProjectId(newProject.id);

@@ -300,7 +300,11 @@ export default function App() {
   }, [setActiveProjectId, setActiveChatId, setMessages]);
 
   const handleCreateProjectFromView = useCallback(async (name, description, instructions) => {
-    await createProject(name, description, instructions);
+    // 4.6: instructions agora vai para o campo dedicado projects.instructions,
+    // não mais para detailed_objective (que é um campo semanticamente
+    // diferente — "objetivo detalhado" do projeto, exibido como tal no
+    // ProjectModal — e era sobrescrito incorretamente antes desta correção).
+    await createProject(name, description, '', [], 'direto', 'projeto', instructions);
   }, [createProject]);
 
   // Callbacks inline que iam para a Sidebar como arrow functions — agora estáveis

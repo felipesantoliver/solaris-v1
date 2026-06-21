@@ -2,9 +2,9 @@
 
 import { getPool } from './database.js';
 
-// 4.1: incrementado para 7 — permite anexar arquivo em chat sem projeto
-// (files.chat_id opcional, files.project_id passa a ser opcional).
-const CURRENT_SCHEMA_VERSION = 7;
+// 4.5/4.6: incrementado para 8 — adiciona projects.instructions,
+// projects.shared_memory_enabled e memories.chat_id (memória isolada por chat).
+const CURRENT_SCHEMA_VERSION = 8;
 
 async function ensureSchemaVersionTable(client) {
   await client.query(`
@@ -329,6 +329,33 @@ export async function initDb() {
 
       await setSchemaVersion(client, 7);
       console.log('✅ Migração v7 aplicada.');
+    }
+
+    // ========== MIGRAÇÃO v8 ==========
+    // 4.5: memória compartilhada (ou isolada) entre chats do mesmo projeto.
+    // 4.6: campo de instruções persistentes do projeto, usado no system prompt.
+    if (currentVersion < 8) {
+      console.log('🔄 Aplicando migração v8 (instructions/shared_memory_enabled em projects, chat_id em memories)...');
+
+      const migrations = [
+        `ALTER TABLE projects ADD COLUMN IF NOT EXISTS instructions TEXT`,
+        // Default FALSE: cada chat do projeto começa com memória isolada;
+        // o usuário liga o compartilhamento explicitamente pelo toggle no frontend.
+        `ALTER TABLE projects ADD COLUMN IF NOT EXISTS shared_memory_enabled BOOLEAN DEFAULT FALSE`,
+        `ALTER TABLE memories ADD COLUMN IF NOT EXISTS chat_id TEXT REFERENCES chats(id) ON DELETE CASCADE`,
+        `CREATE INDEX IF NOT EXISTS idx_memories_chat_id ON memories(chat_id) WHERE chat_id IS NOT NULL`,
+      ];
+
+      for (const sql of migrations) {
+        await client.query(sql).catch(err => {
+          if (!err.message?.includes('already exists') && !err.message?.includes('duplicate column')) {
+            console.warn(`⚠️ Migração v8 ignorada: ${err.message}`);
+          }
+        });
+      }
+
+      await setSchemaVersion(client, 8);
+      console.log('✅ Migração v8 aplicada.');
     }
 
     console.log(`✅ Schema atualizado para versão ${CURRENT_SCHEMA_VERSION}`);

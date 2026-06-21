@@ -184,7 +184,7 @@ async function buildChatContext(chatId, projectId, userId, message, isCodingMode
   if (onProgress) onProgress('thinking');
 
   // 3. System prompt base (com cache)
-  const baseSystemPrompt = await getBaseSystemPromptWithCache(userId, projectId, memoryMode, message);
+  const baseSystemPrompt = await getBaseSystemPromptWithCache(userId, projectId, memoryMode, message, chatId);
 
   let finalSystemPrompt = baseSystemPrompt;
   if (isCodingMode) {
@@ -396,7 +396,7 @@ router.post('/messages/stream', extractUserId, async (req, res, next) => {
     }
 
     if (projectId || memoryMode === 'global') {
-      extractMemories(projectId, userId, cleanedResponse, memoryMode).catch(console.error);
+      extractMemories(projectId, userId, cleanedResponse, memoryMode, chat_id).catch(console.error);
       invalidateSystemPromptCache(userId, projectId, { debounce: true });
     }
 
@@ -451,7 +451,7 @@ router.post('/messages', extractUserId, async (req, res, next) => {
     }
 
     if (projectId || memoryMode === 'global') {
-      extractMemories(projectId, userId, responseText, memoryMode).catch(console.error);
+      extractMemories(projectId, userId, responseText, memoryMode, chat_id).catch(console.error);
       invalidateSystemPromptCache(userId, projectId);
     }
 
