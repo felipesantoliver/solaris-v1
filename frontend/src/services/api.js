@@ -108,6 +108,16 @@ export const api = {
     return safeJson(res);
   },
 
+  // Edita o conteúdo de uma mensagem existente (mantém histórico de versões no backend).
+  async editMessage(messageId, content) {
+    const res = await fetch(`${API_BASE}/messages/${messageId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...(await getAuthHeaders()) },
+      body: JSON.stringify({ content }),
+    });
+    return safeJson(res);
+  },
+
   /**
    * Envia mensagem via streaming (SSE). Trata eventos granulares de progresso
    * (progress: searching/thinking/generating) além de chunk/title/maxTokens/done/error.

@@ -2,8 +2,8 @@
 
 import { getPool } from './database.js';
 
-// Problema 5: incrementado para 5 — adiciona preferências de notificações/privacidade em user_settings
-const CURRENT_SCHEMA_VERSION = 5;
+// Problema 5: incrementado para 6 — adiciona agent_steps em messages (timeline do Modo Agente)
+const CURRENT_SCHEMA_VERSION = 6;
 
 async function ensureSchemaVersionTable(client) {
   await client.query(`
@@ -279,6 +279,25 @@ export async function initDb() {
 
       await setSchemaVersion(client, 5);
       console.log('✅ Migração v5 aplicada.');
+    }
+
+    // ========== MIGRAÇÃO v6 ==========
+    // Modo Agente Autônomo: persiste a timeline de steps (thought/action/
+    // observation/extended_reasoning/final) junto da mensagem do assistente,
+    // pra ela continuar aparecendo (com a UI de timeline) depois de um reload.
+    if (currentVersion < 6) {
+      console.log('🔄 Aplicando migração v6 (agent_steps em messages)...');
+
+      await client.query(
+        `ALTER TABLE messages ADD COLUMN IF NOT EXISTS agent_steps JSONB`
+      ).catch(err => {
+        if (!err.message?.includes('already exists') && !err.message?.includes('duplicate column')) {
+          console.warn(`⚠️ Migração v6 ignorada: ${err.message}`);
+        }
+      });
+
+      await setSchemaVersion(client, 6);
+      console.log('✅ Migração v6 aplicada.');
     }
 
     console.log(`✅ Schema atualizado para versão ${CURRENT_SCHEMA_VERSION}`);

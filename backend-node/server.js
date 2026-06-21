@@ -21,6 +21,7 @@ import filesRouter from './domain/routers/files.js';
 import sourcesRouter from './domain/routers/sources.js';
 import settingsRouter from './domain/routers/settings.js';
 import voiceRouter from './domain/routers/voice.js';
+import agentRouter from './domain/routers/agent.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -53,6 +54,7 @@ app.use('/api', filesRouter);
 app.use('/api', sourcesRouter);
 app.use('/api', settingsRouter);
 app.use('/api', voiceRouter);
+app.use('/api', agentRouter);
 
 // ─── Error handler (deve ser o último) ────────────────────────────────
 app.use(errorHandler);

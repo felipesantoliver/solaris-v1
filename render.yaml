@@ -24,6 +24,10 @@ services:
         sync: false
       - key: GROQ_API_KEY
         sync: false
+      - key: SANDBOX_URL
+        sync: false
+      - key: INTERNAL_TOKEN
+        sync: false
 
   # Serviço Python (microsserviço FastAPI)
   - type: web
@@ -46,3 +50,19 @@ services:
         sync: false
       - key: EMBEDDING_MODEL
         value: sentence-transformers/all-MiniLM-L6-v2
+
+  # Serviço de sandbox Python (execução isolada de código — ferramenta
+  # python_sandbox do Modo Agente). Já estava documentado no README ("Passo 2
+  # — Sandbox") mas nunca tinha sido registrado aqui, então nunca era
+  # implantado de fato. Precisa subir ANTES do solaris-node (mesma ordem do
+  # README) — copie a URL pública dele para SANDBOX_URL acima.
+  - type: web
+    name: solaris-sandbox
+    env: docker
+    rootDir: sandbox
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: INTERNAL_TOKEN
+        sync: false
+      - key: PORT
+        value: 8000

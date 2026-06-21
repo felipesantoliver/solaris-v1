@@ -203,3 +203,123 @@ export async function geminiChat(messages, systemPrompt, modelKey = 'flash') {
     clearTimeout(timeout);
   }
 }
+
+// ─── Modo Agente Autônomo: function calling real do Gemini ────────────────
+// Declaração das ferramentas que o modelo pode decidir chamar. A execução de
+// fato (rag_search/python_sandbox/web_search) acontece no router do agente
+// (domain/routers/agent.js) — aqui só descrevemos a "assinatura" pro Gemini.
+export const AGENT_TOOLS = [
+  {
+    functionDeclarations: [
+      {
+        name: 'rag_search',
+        description: 'Busca trechos relevantes nos documentos e fontes anexados ao projeto atual. Só funciona dentro de um projeto com arquivos indexados.',
+        parameters: {
+          type: 'OBJECT',
+          properties: { query: { type: 'STRING', description: 'O que buscar nos documentos do projeto' } },
+          required: ['query'],
+        },
+      },
+      {
+        name: 'python_sandbox',
+        description: 'Executa um trecho de código Python (sem acesso a rede ou disco) em um sandbox isolado e retorna stdout/stderr. Útil para cálculos, manipulação de dados e validação de lógica.',
+        parameters: {
+          type: 'OBJECT',
+          properties: { code: { type: 'STRING', description: 'Código Python completo a ser executado' } },
+          required: ['code'],
+        },
+      },
+      {
+        name: 'web_search',
+        description: 'Busca informações atuais na internet.',
+        parameters: {
+          type: 'OBJECT',
+          properties: { query: { type: 'STRING', description: 'Termo de busca' } },
+          required: ['query'],
+        },
+      },
+    ],
+  },
+];
+
+// Converte o formato interno {role:'user'|'assistant', content} (usado em todo
+// o resto do app) pro formato nativo do Gemini ({role:'user'|'model', parts}).
+// Usado só pra SEMEAR o array `contents` na 1ª iteração do loop — depois disso,
+// o próprio agent.js vai empilhando turnos nativos (com functionCall/functionResponse).
+export function toGeminiContents(messages) {
+  return (messages || []).map(msg => ({
+    role: msg.role === 'assistant' ? 'model' : 'user',
+    parts: [{ text: msg.content }],
+  }));
+}
+
+// Uma "rodada" de decisão do agente: manda o histórico (já em formato nativo
+// Gemini) + as ferramentas disponíveis, e devolve o que o modelo decidiu fazer
+// — texto final, chamadas de função, e (opcionalmente) o resumo do raciocínio.
+//
+// Não é streaming de propósito: streaming + function calling simultâneos
+// complicariam bastante o parsing sem trazer ganho real aqui, já que cada
+// "rodada" tende a ser curta (uma decisão de ferramenta ou a resposta final).
+// O efeito de digitação no texto final é simulado no router (streamTextAsDeltas).
+export async function callGeminiWithTools(contents, systemPrompt, modelKey = 'flash', { signal, includeThoughts = false } = {}) {
+  const { baseUrl, key } = getGeminiConfig(modelKey);
+  const url = `${baseUrl}:generateContent?key=${key}`;
+
+  const body = {
+    system_instruction: { parts: [{ text: systemPrompt }] },
+    contents,
+    tools: AGENT_TOOLS,
+    generationConfig: {
+      maxOutputTokens: MAX_OUTPUT_TOKENS[modelKey] ?? MAX_OUTPUT_TOKENS.flash,
+      thinkingConfig: includeThoughts
+        ? { thinkingBudget: -1, includeThoughts: true } // -1 = orçamento dinâmico (o modelo decide quanto "pensar")
+        : { thinkingBudget: 0 },
+    },
+  };
+
+  const res = await withRetry(async () => {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal,
+    });
+    if (r.status === 429) {
+      const err = new Error('Gemini rate limit (429)');
+      err.status = 429;
+      throw err;
+    }
+    return r;
+  });
+
+  if (!res.ok) {
+    const errorText = await res.text();
+    const err = new Error(`Erro na IA: ${res.status} - ${errorText}`);
+    err.status = res.status;
+    throw err;
+  }
+
+  const data = await res.json();
+  const candidate = data.candidates?.[0];
+  const parts = candidate?.content?.parts || [];
+
+  let text = '';
+  let thought = '';
+  const functionCalls = [];
+  for (const part of parts) {
+    if (part.functionCall) functionCalls.push({ name: part.functionCall.name, args: part.functionCall.args || {}, id: part.functionCall.id });
+    else if (part.thought) thought += part.text || '';
+    else if (part.text) text += part.text;
+  }
+
+  return {
+    text,
+    thought,
+    functionCalls,
+    finishReason: candidate?.finishReason,
+    // Conteúdo bruto retornado pelo Gemini — deve ser empilhado verbatim em
+    // `contents` antes da próxima rodada (recomendação oficial da API pra
+    // manter o contexto de function calling coerente entre turnos).
+    rawModelContent: candidate?.content,
+  };
+}

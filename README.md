@@ -148,6 +148,16 @@ A validação é feita por análise estática de AST antes da execução, bloque
 
 > ⚠️ **Limitação conhecida:** o sandbox não suporta bibliotecas de visualização (`matplotlib`, `plotly`). Código que gera gráficos pode ser executado, mas o output gráfico não é exibido — apenas texto e dados. Suporte a gráficos está no roadmap.
 
+---
+
+### 🤖 Modo Agente Autônomo
+
+Ativado pelo botão "Agente" ao lado do "Code" no campo de mensagem. Em vez do streaming direto do chat normal, a mensagem vai para `POST /api/agent/run` (SSE), que roda um loop real de function calling do Gemini: a cada rodada o modelo decide se chama uma ferramenta (`rag_search`, `python_sandbox`, `web_search`) ou se já tem o suficiente pra responder. Cada decisão vira um step na timeline (raciocínio, chamada de ferramenta, resultado, resposta final), renderizado em tempo real pelo componente `AgentChatTimeline`.
+
+Com **Raciocínio Estendido** ativado (Modo Pro), o resumo do "pensamento" do Gemini (`thinkingConfig.includeThoughts`) também aparece como um step próprio na timeline, antes da resposta final.
+
+`rag_search` e `python_sandbox` chamam, respectivamente, o microsserviço Python (RAG) e o sandbox Docker já usados pelo resto do app — nenhuma ferramenta nova precisa ser implantada. `web_search` está com a ferramenta declarada (o modelo pode "tentar" chamá-la), mas sem provedor configurado ainda: a chamada retorna um erro gracioso em vez de um resultado inventado.
+
 **Syntax highlighting** — modo programador com destaque de código via `react-syntax-highlighter`.
 
 **Renderização Markdown** — suporte completo a tabelas, listas, blocos de código e formatação GFM via `react-markdown` + `remark-gfm`.
@@ -229,7 +239,7 @@ Usuário
 
 ## Banco de dados
 
-O backend Node aplica migrações automaticamente no startup (sem ferramenta externa). Schema atual: **versão 5**.
+O backend Node aplica migrações automaticamente no startup (sem ferramenta externa). Schema atual: **versão 6**.
 
 ### Tabelas
 
@@ -281,6 +291,7 @@ Execute `backend-python/migrations/001_add_pgvector_file_chunks.sql` manualmente
 | `POST` | `/api/messages/stream` | Envia mensagem (SSE streaming, eventos `progress`/`chunk`/`title`/`maxTokens`/`done`/`error`) |
 | `POST` | `/api/messages` | Envia mensagem (fallback não-streaming) |
 | `PATCH` | `/api/messages/:messageId` | Edita mensagem (descarta e regenera as seguintes) |
+| `POST` | `/api/agent/run` | Modo Agente Autônomo (SSE, eventos `thought`/`extended_reasoning`/`action`/`observation`/`final`/`error`/`done`) — loop de function calling com `rag_search`/`python_sandbox`/`web_search` |
 | `GET` | `/api/files/:projectId` | Lista arquivos do projeto |
 | `POST` | `/api/files/:projectId` | Envia arquivo para o projeto (multipart) |
 | `DELETE` | `/api/files/:projectId/:fileId` | Remove arquivo |
@@ -417,7 +428,7 @@ Obtenha as chaves de API:
 
 6. Copie a URL pública após o deploy.
 
-> Na primeira execução, o banco é migrado automaticamente. Confirme nos logs: `✅ Schema atualizado para versão 5`.
+> Na primeira execução, o banco é migrado automaticamente. Confirme nos logs: `✅ Schema atualizado para versão 6`.
 
 ---
 
@@ -593,6 +604,7 @@ VITE_SUPABASE_ANON_KEY=eyJ...
 | Fila de jobs assíncronos (BullMQ) para upload e indexação de arquivos |
 | Personalidade por projeto, com prioridade sobre a personalidade global e otimização automática de texto livre via IA |
 | Indicadores granulares de progresso no streaming (SSE: `searching` → `thinking` → `generating`) |
+| Modo Agente Autônomo (`POST /api/agent/run`, SSE): loop de function calling real do Gemini com `rag_search` (documentos do projeto) e `python_sandbox` (execução isolada via serviço separado); raciocínio estendido (Pro) via `thinkingConfig.includeThoughts`. `web_search` está com a "assinatura" da ferramenta pronta, mas sem provedor configurado — devolve erro gracioso até integrar um (Tavily/SerpAPI/etc.) |
 
 ---
 
@@ -605,12 +617,12 @@ As funcionalidades abaixo estão organizadas da mais fácil para a mais complexa
 | Funcionalidade | Descrição |
 |---|---|
 | Geração de imagens (Gemini Imagen) | Geração de imagens diretamente no chat via Gemini Imagen |
+| Busca web real no Modo Agente | Integrar um provedor (Tavily/SerpAPI/Bing) na ferramenta `web_search`, hoje um stub |
 
 #### Difícil — alta complexidade ou dependência de infraestrutura
 
 | Funcionalidade | Descrição |
 |---|---|
-| Agentes autônomos por projeto | Execução de tarefas multi-etapa com ferramentas (busca web, execução de código, leitura de arquivos) sem intervenção manual a cada passo |
 | Colaboração multiusuário em projetos | Projetos compartilhados com controle de acesso, memórias colaborativas e histórico unificado entre usuários |
 
 ---

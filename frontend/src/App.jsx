@@ -5,7 +5,9 @@ import {
 import { useAuth } from './hooks/useAuth';
 import { useProjects } from './hooks/useProjects';
 import { useChat } from './hooks/useChat';
+import { useAgentStream } from './hooks/useAgentStream';
 import { api } from './services/api';
+import { API_BASE, getAuthHeaders } from './config/supabase';
 import { Sidebar } from './components/Sidebar';
 import { ChatWindow } from './components/ChatWindow';
 import { MessageInput } from './components/MessageInput';
@@ -35,6 +37,11 @@ export default function App() {
   const [showShareModal, setShowShareModal] = useState(false);
   const [activeView, setActiveView] = useState('chat');
   const [input, setInput] = useState('');
+  // Modo Agente Autônomo (loop de ferramentas via SSE) e Raciocínio Estendido
+  // — este último só tem efeito quando agentMode + model 'pro' estão ativos
+  // (ver ExtendedReasoningToggle / MessageInput).
+  const [agentMode, setAgentMode] = useState(false);
+  const [extendedReasoning, setExtendedReasoning] = useState(false);
   // Aviso de expiração do modo convidado: usa sessionStorage (não localStorage) de
   // propósito — assim, se o usuário dispensar o aviso, ele não volta a aparecer
   // nesta mesma sessão do navegador, mas reaparece numa próxima visita (depois de
@@ -55,13 +62,28 @@ export default function App() {
   const {
     projects, activeProjectId, setActiveProjectId, chatHistory, setChatHistory,
     createProject, updateProject, deleteProject, createChatInProject, deleteChat,
-    updateChatTitle, deleteAllChats
+    updateChatTitle, deleteAllChats, loadProjectChats, fetchNoProjectChats,
   } = useProjects(effectiveUserId, authUser, model);
 
   const {
     messages, setMessages, activeChatId, setActiveChatId, isLoading, isStreaming,
-    statusMessage, sendError, setSendError, sendMessage, editMessage, loadMessages
+    statusMessage, sendError, setSendError, sendMessage, editMessage, loadMessages,
+    maxTokensReached, continueGeneration,
   } = useChat(effectiveUserId, authUser, model, activeProjectId);
+
+  // ─── Modo Agente Autônomo ────────────────────────────────────────────────
+  // Hook de baixo nível já existia (useAgentStream) mas não estava conectado
+  // a nada — nem App.jsx nem o backend tinham a outra ponta. `agentAssistantIndexRef`
+  // aponta pro índice, em `messages`, do balão de assistente que está recebendo
+  // os steps do run atual (sincronizado pelo useEffect logo abaixo).
+  const agentStream = useAgentStream({
+    endpoint: `${API_BASE}/agent/run`,
+    getAuthHeaders,
+  });
+  const agentAssistantIndexRef = useRef(null);
+  const isNewAgentChatRef = useRef(false);
+  const agentBusy = agentStream.status === 'connecting' || agentStream.status === 'running';
+  const combinedIsStreaming = isStreaming || agentBusy;
 
   const [editingMsgIndex, setEditingMsgIndex] = useState(null);
   const [editValue, setEditValue] = useState('');
@@ -69,6 +91,28 @@ export default function App() {
   useEffect(() => { localStorage.setItem('solaris_dark', darkMode); }, [darkMode]);
   useEffect(() => { localStorage.setItem('solaris_programming_mode', programmingMode); }, [programmingMode]);
   useEffect(() => { if (!authUser && model === 'pro') setModel('flash'); }, [authUser, model]);
+
+  // Sincroniza os steps do run do agente com o balão de assistente correspondente.
+  // O hook useAgentStream sempre devolve um array NOVO quando há novidade — por
+  // isso dá pra usá-lo como dependência direta sem deep-compare.
+  useEffect(() => {
+    const idx = agentAssistantIndexRef.current;
+    if (idx === null || agentStream.steps.length === 0) return;
+    setMessages(prev => {
+      if (!prev[idx]) return prev;
+      const finalStep = [...agentStream.steps].reverse().find(s => s.type === 'final');
+      const next = [...prev];
+      next[idx] = { ...next[idx], agentSteps: agentStream.steps, content: finalStep?.content || '' };
+      return next;
+    });
+  }, [agentStream.steps, setMessages]);
+
+  useEffect(() => {
+    if (agentStream.status === 'error' && agentStream.error) setSendError(agentStream.error);
+    if (agentStream.status === 'done' || agentStream.status === 'aborted' || agentStream.status === 'idle') {
+      agentAssistantIndexRef.current = null;
+    }
+  }, [agentStream.status, agentStream.error, setSendError]);
 
   // Sincroniza as preferências de notificações/privacidade do backend para o
   // cache local (localStorage) assim que sabemos quem é o usuário (logado ou
@@ -107,18 +151,68 @@ export default function App() {
   }, []);
 
   const handleSend = async () => {
-    await sendMessage(input, activeChatId, activeProjectId, async (projectId) => {
-      const nc = await createChatInProject(projectId);
-      return nc;
-    }, programmingMode);
+    if (!input.trim() || isLoading || combinedIsStreaming) return;
+    if (agentMode) {
+      await handleSendAgent();
+    } else {
+      await sendMessage(input, activeChatId, activeProjectId, async (projectId) => {
+        const nc = await createChatInProject(projectId);
+        return nc;
+      }, programmingMode);
+    }
     setInput('');
   };
+
+  // Envia mensagem no Modo Agente Autônomo — usa o endpoint SSE separado
+  // (/agent/run) via useAgentStream em vez do streaming "normal" de useChat.
+  const handleSendAgent = async () => {
+    const trimmed = input.trim();
+    if (!trimmed) return;
+
+    let chatId = activeChatId;
+    isNewAgentChatRef.current = false;
+    if (!chatId) {
+      try {
+        const nc = await createChatInProject(activeProjectId);
+        chatId = nc.id;
+        isNewAgentChatRef.current = true;
+        setActiveChatId(chatId);
+      } catch (err) {
+        console.error(err);
+        setSendError('Não foi possível criar a conversa.');
+        return;
+      }
+    }
+
+    setSendError('');
+    setMessages(prev => {
+      const next = [...prev, { role: 'user', content: trimmed }, { role: 'assistant', content: '', model, agentSteps: [] }];
+      agentAssistantIndexRef.current = next.length - 1;
+      return next;
+    });
+
+    agentStream.reset();
+    await agentStream.start({ chatId, projectId: activeProjectId, message: trimmed, model, extendedReasoning });
+
+    // O backend gera o título do chat (1ª mensagem) de forma assíncrona e não
+    // há um evento dedicado pra isso no protocolo do agente — então, se este
+    // run criou a conversa, força um refresh da lista pra pegar o título novo.
+    if (isNewAgentChatRef.current) {
+      if (activeProjectId) loadProjectChats(activeProjectId);
+      else fetchNoProjectChats();
+      isNewAgentChatRef.current = false;
+    }
+  };
+
+  const handleContinue = useCallback(() => {
+    continueGeneration(activeChatId, activeProjectId);
+  }, [continueGeneration, activeChatId, activeProjectId]);
 
   const handleEdit = (index, content) => { setEditingMsgIndex(index); setEditValue(content); };
   const handleEditCancel = () => { setEditingMsgIndex(null); setEditValue(''); };
 
   const handleEditSave = async () => {
-    if (!editValue.trim() || isLoading || isStreaming || editingMsgIndex === null) return;
+    if (!editValue.trim() || isLoading || combinedIsStreaming || editingMsgIndex === null) return;
     const original = messages[editingMsgIndex];
     await editMessage(editingMsgIndex, editValue.trim(), original.content, activeChatId, activeProjectId);
     setEditingMsgIndex(null);
@@ -355,20 +449,23 @@ export default function App() {
           <>
             <ChatWindow
               messages={messages} darkMode={darkMode} theme={theme}
-              isLoading={isLoading} isStreaming={isStreaming} statusMessage={statusMessage}
+              isLoading={isLoading} isStreaming={combinedIsStreaming} statusMessage={statusMessage}
               displayName={displayName} activeProjectId={activeProjectId}
               onEdit={handleEdit} editingMsgIndex={editingMsgIndex}
               editValue={editValue} setEditValue={setEditValue}
               onEditSave={handleEditSave} onEditCancel={handleEditCancel}
               programmingMode={programmingMode}
+              maxTokensReached={maxTokensReached} onContinue={handleContinue}
             />
             <MessageInput
               input={input} setInput={setInput} onSend={handleSend}
-              isLoading={isLoading} isStreaming={isStreaming}
+              isLoading={isLoading} isStreaming={combinedIsStreaming}
               darkMode={darkMode} theme={theme} model={model} setModel={setModel}
               authUser={authUser} programmingMode={programmingMode}
               setProgrammingMode={setProgrammingMode} sendError={sendError}
               uploadStatus={uploadStatus} onFileUpload={handleFileUpload} fileInputRef={fileInputRef}
+              agentMode={agentMode} setAgentMode={setAgentMode}
+              extendedReasoning={extendedReasoning} setExtendedReasoning={setExtendedReasoning}
             />
           </>
         )}

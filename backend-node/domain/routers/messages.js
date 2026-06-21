@@ -25,7 +25,7 @@ const RATE_LIMITS = {
   auth:  { max: 40, windowMs: 60_000 },
 };
 
-async function checkRateLimit(userId) {
+export async function checkRateLimit(userId) {
   const isGuest = !userId || userId.length < 36;
   const { max, windowMs } = isGuest ? RATE_LIMITS.guest : RATE_LIMITS.auth;
   const key = `ratelimit:${userId}`;
@@ -60,7 +60,7 @@ setInterval(() => {
 // ─── Geração de título com Groq via Python ──────────────────────────────
 const PYTHON_SERVICE_URL = process.env.PYTHON_SERVICE_URL || 'http://localhost:8000';
 
-async function generateLocalTitle(firstMessage) {
+export async function generateLocalTitle(firstMessage) {
   const FALLBACK = 'Nova conversa';
   if (!firstMessage || typeof firstMessage !== 'string') return FALLBACK;
 
@@ -120,12 +120,12 @@ function cleanAssistantMessage(text) {
   return cleanedLines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
-function processResponse(text) {
+export function processResponse(text) {
   return sanitizeModelResponse(cleanAssistantMessage(text));
 }
 
 // ─── RAG: busca via microsserviço Python ───────────────────────────────────
-async function searchRelevantChunks(projectId, query) {
+export async function searchRelevantChunks(projectId, query) {
   if (!projectId) return [];
   try {
     const ac = new AbortController();
@@ -214,7 +214,7 @@ router.get('/messages/chat/:chatId', async (req, res, next) => {
     const total = parseInt(totalResult.rows[0]?.total || 0);
 
     const dataResult = await pool.query(
-      `SELECT id, role, content, edited, edit_history, created_at
+      `SELECT id, role, content, edited, edit_history, agent_steps, created_at
        FROM messages
        WHERE chat_id = $1
        ORDER BY created_at DESC
@@ -224,11 +224,15 @@ router.get('/messages/chat/:chatId', async (req, res, next) => {
 
     const rows = dataResult.rows.reverse();
 
-    const cleanedRows = rows.map(msg =>
-      msg.role === 'assistant' && msg.content
-        ? { ...msg, content: processResponse(msg.content) }
-        : msg
-    );
+    const cleanedRows = rows.map(msg => {
+      const { agent_steps, ...rest } = msg;
+      const base = rest.role === 'assistant' && rest.content
+        ? { ...rest, content: processResponse(rest.content) }
+        : rest;
+      // agent_steps (JSONB) já vem desserializado pelo driver `pg` — só
+      // remapeia pro nome camelCase que o frontend (MessageBubble) espera.
+      return Array.isArray(agent_steps) ? { ...base, agentSteps: agent_steps } : base;
+    });
 
     res.json({
       data: cleanedRows,

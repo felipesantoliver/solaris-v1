@@ -28,7 +28,7 @@ export function ChatWindow({
   }, [messages, isLoading, isStreaming, maxTokensReached]);
 
   const lastMsg = messages[messages.length - 1];
-  const assistantPlaceholderEmpty = lastMsg?.role === 'assistant' && !lastMsg?.content;
+  const assistantPlaceholderEmpty = lastMsg?.role === 'assistant' && !lastMsg?.content && !Array.isArray(lastMsg?.agentSteps);
   const showDots = isLoading || (isStreaming && assistantPlaceholderEmpty);
 
   const WelcomeScreen = () => (
