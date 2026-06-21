@@ -299,12 +299,18 @@ router.post('/messages/stream', extractUserId, async (req, res, next) => {
 
   res.write(': processing\n\n');
 
+  // BUGFIX: o heartbeat NÃO pode ser cancelado a cada sendEvent() — antes,
+  // clearInterval(heartbeat) rodava em toda chamada (inclusive a cada chunk
+  // do Gemini), matando o heartbeat já no 1º token. Se o modelo ficar 30-60s
+  // sem emitir token (ex: prompt longo, raciocínio), a conexão cai por
+  // inatividade e o frontend trava em "gerando" pra sempre. Padrão alinhado
+  // com agent.js: heartbeat condicional, nunca cancelado dentro do send(),
+  // só limpo no finally.
   const heartbeat = setInterval(() => {
     if (!res.writableEnded) res.write(': heartbeat\n\n');
   }, 15_000);
 
   const sendEvent = (data) => {
-    clearInterval(heartbeat);
     if (!res.writableEnded) res.write(`data: ${JSON.stringify(data)}\n\n`);
   };
 
