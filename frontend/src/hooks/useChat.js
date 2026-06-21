@@ -63,7 +63,7 @@ export function useChat(effectiveUserId, authUser, model, activeProjectId) {
 
   // ─── Stream da resposta do assistente ───────────────────────────────────
   // Compartilhado entre envio normal, edição (regerar) e "continuar resposta".
-  const streamAssistantReply = useCallback(async (chatId, projectId, message, codingMode) => {
+  const streamAssistantReply = useCallback(async (chatId, projectId, message, codingMode, skipUserInsert = false) => {
     setIsStreaming(true);
     setStatusMessage(progressLabel('searching', projectId)); // estado otimista até o 1º evento
     fullTextRef.current = '';
@@ -88,13 +88,14 @@ export function useChat(effectiveUserId, authUser, model, activeProjectId) {
         () => {}, // onDone — nada extra a fazer aqui, o finally abaixo encerra o streaming
         () => setMaxTokensReached(true),
         (stage) => setStatusMessage(progressLabel(stage, projectId)),
+        skipUserInsert,
       );
     } catch (err) {
       // Stream falhou antes mesmo de começar (rede, servidor fora do ar, etc.)
       // — tenta o modo de compatibilidade não-streaming antes de desistir.
       console.error('Falha no streaming, tentando modo de compatibilidade:', err);
       try {
-        const res = await api.sendMessageFallback(chatId, projectId, message, effectiveUserId, model);
+        const res = await api.sendMessageFallback(chatId, projectId, message, effectiveUserId, model, skipUserInsert);
         setMessages(prev => {
           const next = [...prev];
           const last = next[next.length - 1];
@@ -161,11 +162,23 @@ export function useChat(effectiveUserId, authUser, model, activeProjectId) {
     setSendError('');
     setMaxTokensReached(false);
 
-    // Persiste a edição (mantém histórico de versões) — não bloqueia a
-    // regeneração se falhar. Mensagens ainda não recarregadas do banco nesta
-    // sessão não têm `id` ainda; nesse caso só a regeneração local acontece.
+    // Persiste a edição (mantém histórico de versões no backend). O PATCH
+    // também é responsável por apagar, no banco, tudo que veio depois desta
+    // mensagem (ver messages.js) — por isso é AGUARDADO antes de regenerar:
+    // se disparássemos o stream em paralelo (fire-and-forget), o INSERT da
+    // nova resposta do assistente poderia correr antes do DELETE do backend
+    // terminar, ou (sem id ainda) duplicar a mensagem de usuário no histórico.
+    // Mensagens ainda não recarregadas do banco nesta sessão não têm `id`
+    // ainda; nesse caso só a regeneração local acontece (nada a apagar no
+    // servidor, pois a mensagem nunca foi persistida).
     if (target.id) {
-      api.editMessage(target.id, trimmed).catch(err => console.warn('Falha ao salvar edição:', err));
+      try {
+        await api.editMessage(target.id, trimmed);
+      } catch (err) {
+        console.warn('Falha ao salvar edição:', err);
+        setSendError('Não foi possível salvar a edição. Tente novamente.');
+        return;
+      }
     }
 
     // Descarta tudo após a mensagem editada — a conversa é regerada a partir dela.
@@ -175,7 +188,9 @@ export function useChat(effectiveUserId, authUser, model, activeProjectId) {
       { role: 'assistant', content: '', model, codingMode: target.codingMode },
     ]);
 
-    await streamAssistantReply(chatId, projectId, trimmed, target.codingMode);
+    // skipUserInsert=true: a mensagem editada já existe no banco (UPDATE feito
+    // pelo PATCH acima) — não inserir uma nova linha 'user' duplicada.
+    await streamAssistantReply(chatId, projectId, trimmed, target.codingMode, !!target.id);
   }, [messages, model, streamAssistantReply]);
 
   // ─── Continua uma resposta truncada por limite de tokens ────────────────

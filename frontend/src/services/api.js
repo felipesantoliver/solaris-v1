@@ -76,6 +76,17 @@ export const api = {
     return safeJson(res);
   },
 
+  // 4.3: Move um chat existente para dentro de um projeto, ou para fora de
+  // qualquer projeto (projectId null/undefined → chat avulso).
+  async moveChat(chatId, projectId) {
+    const res = await fetch(`${API_BASE}/chats/${chatId}/project`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...(await getAuthHeaders()) },
+      body: JSON.stringify({ project_id: projectId || null }),
+    });
+    return safeJson(res);
+  },
+
   // Lista chats de um projeto com paginação
   async getProjectChats(projectId, { page = 1, limit = 30 } = {}) {
     const url = new URL(`${API_BASE}/projects/${projectId}/chats`);
@@ -125,7 +136,7 @@ export const api = {
    */
   async sendMessageStream(
     chatId, projectId, message, _userId, model, codingMode,
-    onChunk, onTitle, onError, onDone, onMaxTokens, onProgress
+    onChunk, onTitle, onError, onDone, onMaxTokens, onProgress, skipUserInsert = false
   ) {
     const response = await fetch(`${API_BASE}/messages/stream`, {
       method: 'POST',
@@ -135,7 +146,7 @@ export const api = {
         'x-coding-mode': codingMode ? 'true' : 'false',
         ...(await getAuthHeaders()),
       },
-      body: JSON.stringify({ project_id: projectId || null, chat_id: chatId, message }),
+      body: JSON.stringify({ project_id: projectId || null, chat_id: chatId, message, skip_user_insert: skipUserInsert }),
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
@@ -177,11 +188,11 @@ export const api = {
     }
   },
 
-  async sendMessageFallback(chatId, projectId, message, _userId, model) {
+  async sendMessageFallback(chatId, projectId, message, _userId, model, skipUserInsert = false) {
     const res = await fetch(`${API_BASE}/messages`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-model': model, ...(await getAuthHeaders()) },
-      body: JSON.stringify({ project_id: projectId || null, chat_id: chatId, message }),
+      body: JSON.stringify({ project_id: projectId || null, chat_id: chatId, message, skip_user_insert: skipUserInsert }),
     });
     return safeJson(res);
   },
@@ -218,10 +229,17 @@ export const api = {
   },
 
   // ─── Files ────────────────────────────────────────────────────────────────
-  async uploadFile(projectId, file) {
+  // 4.1: upload de arquivo — projectId quando há projeto ativo (rota
+  // original /files/:projectId), ou chatId quando o anexo é feito num chat
+  // avulso (nova rota /files/chat/:chatId). Pelo menos um dos dois precisa
+  // ser informado pelo chamador.
+  async uploadFile(projectId, file, chatId) {
     const fd = new FormData();
     fd.append('file', file);
-    const res = await fetch(`${API_BASE}/files/${projectId}`, {
+    const endpoint = projectId
+      ? `${API_BASE}/files/${projectId}`
+      : `${API_BASE}/files/chat/${chatId}`;
+    const res = await fetch(endpoint, {
       method: 'POST',
       headers: await getAuthHeaders(),
       body: fd,

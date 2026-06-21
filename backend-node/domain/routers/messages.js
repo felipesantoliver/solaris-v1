@@ -124,15 +124,20 @@ export function processResponse(text) {
 }
 
 // ─── RAG: busca via microsserviço Python ───────────────────────────────────
-export async function searchRelevantChunks(projectId, query) {
-  if (!projectId) return [];
+// 4.1: aceita chatId além de projectId — necessário para encontrar arquivos
+// anexados direto num chat sem projeto (ver migração v7: files.project_id
+// passou a ser opcional). Quando há projectId, ele tem prioridade (cobre
+// também os arquivos de chats dentro do projeto); chatId é o fallback usado
+// só quando não há projeto.
+export async function searchRelevantChunks(projectId, query, chatId) {
+  if (!projectId && !chatId) return [];
   try {
     const ac = new AbortController();
     const t  = setTimeout(() => ac.abort(), 10_000);
     const response = await fetch(`${PYTHON_SERVICE_URL}/search/rag`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ project_id: projectId, query }),
+      body: JSON.stringify({ project_id: projectId || null, chat_id: projectId ? null : (chatId || null), query }),
       signal: ac.signal,
     });
     clearTimeout(t);
@@ -165,9 +170,11 @@ async function buildChatContext(chatId, projectId, userId, message, isCodingMode
     if (proj?.memory_mode) memoryMode = proj.memory_mode;
   }
 
-  // 2. RAG (se houver projeto) em paralelo com o histórico de mensagens
+  // 2. RAG (se houver projeto OU arquivos anexados ao chat) em paralelo com
+  //    o histórico de mensagens. 4.1: antes só rodava com projectId — agora
+  //    também roda em chats avulsos, usando chatId como escopo de busca.
   const [relevantChunks, history] = await Promise.all([
-    projectId ? searchRelevantChunks(projectId, message) : Promise.resolve([]),
+    (projectId || chatId) ? searchRelevantChunks(projectId, message, chatId) : Promise.resolve([]),
     allAsync(
       'SELECT role, content FROM messages WHERE chat_id = $1 ORDER BY created_at ASC',
       [chatId]
@@ -265,6 +272,22 @@ router.patch('/messages/:messageId', extractUserId, async (req, res, next) => {
 
     editHistory.push({ content: existing.content, edited_at: new Date().toISOString() });
 
+    // FIX 2.3: o README promete que editar uma mensagem descarta as posteriores
+    // e regenera a partir dela — mas este handler só fazia UPDATE na mensagem
+    // editada, nunca tocando nas seguintes. Resultado: o histórico acumulava a
+    // resposta antiga (agora desalinhada) + a nova resposta gerada pelo
+    // frontend, duplicando/corrompendo a conversa.
+    // Agora: apaga tudo que foi criado DEPOIS da mensagem editada (na mesma
+    // chat) antes de devolver — a editada passa a ser o novo fim do histórico.
+    // Usa `id` (SERIAL, estritamente crescente) em vez de `created_at` para
+    // o corte — evita falso-negativo em mensagens com timestamp idêntico.
+    await runAsync(
+      `DELETE FROM messages
+       WHERE chat_id = (SELECT chat_id FROM messages WHERE id = $1)
+         AND id > $1`,
+      [messageId]
+    );
+
     await runAsync(
       `UPDATE messages SET content = $1, edited = true, edit_history = $2, updated_at = NOW()
        WHERE id = $3`,
@@ -283,7 +306,7 @@ router.post('/messages/stream', extractUserId, async (req, res, next) => {
     return res.status(429).json({ error: 'Muitas requisições. Aguarde antes de enviar outra mensagem.' });
   }
 
-  const { project_id, chat_id, message } = req.body;
+  const { project_id, chat_id, message, skip_user_insert } = req.body;
   if (!chat_id || !message) return res.status(400).json({ error: 'chat_id e message obrigatórios' });
   const projectId = (project_id && project_id !== 'none') ? project_id : null;
 
@@ -320,7 +343,14 @@ router.post('/messages/stream', extractUserId, async (req, res, next) => {
   };
 
   try {
-    await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'user', message]);
+    // FIX 2.3: ao regenerar a partir de uma mensagem editada, o PATCH
+    // /messages/:messageId já fez o UPDATE da mensagem do usuário (e apagou
+    // tudo depois dela) — inserir uma nova linha 'user' aqui duplicaria a
+    // mensagem editada no histórico. O frontend (editMessage) envia
+    // skip_user_insert=true nesse fluxo; envio normal continua inserindo.
+    if (!skip_user_insert) {
+      await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'user', message]);
+    }
 
     sendProgress('searching'); // antes do RAG (disparado dentro de buildChatContext)
 
@@ -390,12 +420,17 @@ router.post('/messages', extractUserId, async (req, res, next) => {
     return res.status(429).json({ error: 'Muitas requisições. Aguarde antes de enviar outra mensagem.' });
   }
 
-  const { project_id, chat_id, message } = req.body;
+  const { project_id, chat_id, message, skip_user_insert } = req.body;
   if (!chat_id || !message) return res.status(400).json({ error: 'chat_id e message obrigatórios' });
   const projectId = (project_id && project_id !== 'none') ? project_id : null;
 
   try {
-    await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'user', message]);
+    // FIX 2.3 (mesmo raciocínio do /messages/stream): evita duplicar a
+    // mensagem do usuário quando este fallback é acionado durante uma
+    // regeneração pós-edição.
+    if (!skip_user_insert) {
+      await runAsync('INSERT INTO messages (chat_id, role, content) VALUES ($1,$2,$3)', [chat_id, 'user', message]);
+    }
 
     // Handler de fallback nunca leu x-coding-mode no original — mantido como false.
     // Sem onProgress: nenhum evento SSE de progresso aqui (não é streaming).

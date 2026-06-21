@@ -20,8 +20,15 @@ export function useProjects(effectiveUserId, authUser, model) {
   const fetchNoProjectChats = useCallback(async () => {
     if (!effectiveUserId) return;
     try {
-      const data = await api.getUserChats();
-      if (!activeProjectId) setChatHistory(Array.isArray(data) ? data : []);
+      // FIX 4.7: api.getUserChats() retorna um objeto paginado
+      // { data, total, page, limit, hasMore } — não um array. O código antigo
+      // fazia `Array.isArray(data) ? data : []`, que SEMPRE caía no `[]`
+      // (porque `data` aqui era o objeto, não array), apagando a lista de
+      // chats avulsos toda vez que este efeito rodava de novo (ex: ao voltar
+      // o foco/visibilidade da aba, remount em StrictMode, etc.) — por isso
+      // o sumiço acontecia sempre, de forma determinística.
+      const res = await api.getUserChats();
+      if (!activeProjectId) setChatHistory(Array.isArray(res?.data) ? res.data : []);
     } catch {}
   }, [effectiveUserId, activeProjectId]);
 
@@ -117,6 +124,23 @@ export function useProjects(effectiveUserId, authUser, model) {
     return result;
   }, []);
 
+  // 4.3: Move um chat para dentro de um projeto (ou para fora, se targetProjectId
+  // for null/undefined). Atualiza a lista local sem precisar de reload:
+  // o chat some da lista atualmente exibida assim que deixa de pertencer a ela
+  // (contexto mudou — projeto diferente do ativo, ou saiu/entrou em "sem projeto").
+  const moveChatToProject = useCallback(async (chatId, targetProjectId) => {
+    const normalizedTarget = targetProjectId || null;
+    const updated = await api.moveChat(chatId, normalizedTarget);
+    setChatHistory(prev => {
+      // O chat deixou de pertencer ao contexto atualmente exibido (activeProjectId
+      // ou "sem projeto", quando activeProjectId é null) — remove da lista.
+      const stillBelongsHere = normalizedTarget === (activeProjectId || null);
+      if (!stillBelongsHere) return prev.filter(c => c.id !== chatId);
+      return prev.map(c => c.id === chatId ? { ...c, ...updated } : c);
+    });
+    return updated;
+  }, [activeProjectId]);
+
   const deleteAllChats = useCallback(async () => {
     const result = await api.deleteAllUserChats();
     setChatHistory([]);
@@ -139,6 +163,7 @@ export function useProjects(effectiveUserId, authUser, model) {
     createChatInProject,
     deleteChat,
     updateChatTitle,
+    moveChatToProject,
     deleteAllChats,
   };
 }
