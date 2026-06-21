@@ -271,6 +271,21 @@ export const api = {
     return safeJson(res);
   },
 
+  // Lista os arquivos já anexados a um projeto (rota original GET /files/:projectId).
+  // Usado pela aba "Fontes" da nova tela de detalhes do projeto.
+  async getProjectFiles(projectId) {
+    const res = await fetch(`${API_BASE}/files/${projectId}`, { headers: await getAuthHeaders() });
+    return safeJson(res);
+  },
+
+  async deleteProjectFile(projectId, fileId) {
+    const res = await fetch(`${API_BASE}/files/${projectId}/${fileId}`, {
+      method: 'DELETE',
+      headers: await getAuthHeaders(),
+    });
+    return safeJson(res);
+  },
+
   // ─── Sources ──────────────────────────────────────────────────────────────
   async getSources(projectId) {
     const res = await fetch(`${API_BASE}/projects/${projectId}/sources`, { headers: await getAuthHeaders() });

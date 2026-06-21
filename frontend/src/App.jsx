@@ -12,6 +12,7 @@ import { Sidebar } from './components/Sidebar';
 import { ChatWindow } from './components/ChatWindow';
 import { MessageInput } from './components/MessageInput';
 import { ProjectModal } from './components/ProjectModal';
+import { ProjectDetailModal } from './components/ProjectDetailModal';
 import { ProjectsView } from './components/ProjectsView';
 import { SettingsModal } from './components/SettingsModal';
 import { AuthModal } from './components/AuthModal';
@@ -28,6 +29,10 @@ export default function App() {
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showShareToast, setShowShareToast] = useState(false);
   const [editingProject, setEditingProject] = useState(null);
+  // Projeto aberto na nova tela dedicada (3 abas: Chats/Fontes/Instruções) —
+  // disparado pelo clique no corpo do card em ProjectsView. Independente de
+  // editingProject (modal de edição rápida via ícone de lápis, inalterado).
+  const [viewingProjectId, setViewingProjectId] = useState(null);
   const [itemToDelete, setItemToDelete] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [draggedItemId, setDraggedItemId] = useState(null);
@@ -300,6 +305,26 @@ export default function App() {
     setMessages([]);
   }, [setActiveProjectId, setActiveChatId, setMessages]);
 
+  // Abre a nova tela dedicada do projeto (3 abas) — disparada pelo clique no
+  // corpo do card em ProjectsView. Não altera activeProjectId/chatHistory:
+  // a tela busca seus próprios dados, então olhar os detalhes de um projeto
+  // não interfere no que está aberto no chat/sidebar.
+  const handleViewProjectDetails = useCallback((project) => {
+    setViewingProjectId(project.id);
+  }, []);
+
+  // Navegação disparada de dentro da tela de detalhes (clique num chat da
+  // aba "Chats", ou criação de um novo chat por lá): entra de fato no
+  // projeto/chat escolhido e fecha a tela de detalhes.
+  const handleOpenChatFromProjectDetail = useCallback((projectId, chatId) => {
+    setActiveProjectId(projectId);
+    setActiveChatId(chatId);
+    setActiveView('chat');
+    setInput('');
+    setSendError('');
+    setViewingProjectId(null);
+  }, [setActiveProjectId, setActiveChatId, setSendError]);
+
   const handleCreateProjectFromView = useCallback(async (name, description, instructions) => {
     // 4.6: instructions agora vai para o campo dedicado projects.instructions,
     // não mais para detailed_objective (que é um campo semanticamente
@@ -383,6 +408,15 @@ export default function App() {
       )}
       {editingProject && (
         <ProjectModal project={editingProject} onClose={() => setEditingProject(null)} onUpdate={updateProject} darkMode={darkMode} effectiveUserId={effectiveUserId} />
+      )}
+      {viewingProjectId && (
+        <ProjectDetailModal
+          project={projects.find(p => p.id === viewingProjectId) || null}
+          onClose={() => setViewingProjectId(null)}
+          onUpdateProject={updateProject}
+          onOpenChat={handleOpenChatFromProjectDetail}
+          darkMode={darkMode}
+        />
       )}
       <ConfirmDialog
         isOpen={!!itemToDelete} onClose={() => setItemToDelete(null)} onConfirm={handleDeleteConfirm}
@@ -494,6 +528,7 @@ export default function App() {
             darkMode={darkMode} theme={theme} projects={projects}
             onCreateProject={handleCreateProjectFromView}
             onOpenProject={handleOpenProject}
+            onOpenProjectDetails={handleViewProjectDetails}
             onEditProject={setEditingProject}
             onDeleteProject={(proj) => setItemToDelete({ type: 'project', data: proj })}
           />

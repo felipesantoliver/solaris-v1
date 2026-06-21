@@ -122,7 +122,7 @@ function NewProjectModal({ darkMode, theme, onClose, onCreate }) {
 }
 
 // ─── Project Card ─────────────────────────────────────────────────────────────
-function ProjectCard({ project, darkMode, theme, onOpen, onEdit, onDelete }) {
+function ProjectCard({ project, darkMode, theme, onOpen, onOpenDetails, onEdit, onDelete }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [hovered, setHovered] = useState(false);
 
@@ -153,7 +153,7 @@ function ProjectCard({ project, darkMode, theme, onOpen, onEdit, onDelete }) {
     <div
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => { setHovered(false); setMenuOpen(false); }}
-      onClick={() => onOpen(project)}
+      onClick={() => onOpenDetails(project)}
       className={`
         relative group cursor-pointer rounded-2xl border transition-all duration-300
         ${cardBase}
@@ -183,7 +183,7 @@ function ProjectCard({ project, darkMode, theme, onOpen, onEdit, onDelete }) {
           <div className={`flex items-center gap-1 transition-all duration-200 ${hovered ? 'opacity-100' : 'opacity-0'}`}>
             <button
               onClick={e => { e.stopPropagation(); onOpen(project); }}
-              title="Abrir"
+              title="Ir direto para o chat"
               className={`p-1.5 rounded-lg transition-colors ${
                 darkMode ? 'hover:bg-white/10 text-white/50 hover:text-white' : 'hover:bg-black/8 text-black/40 hover:text-black'
               }`}
@@ -217,12 +217,20 @@ function ProjectCard({ project, darkMode, theme, onOpen, onEdit, onDelete }) {
                   }`}
                 >
                   <button
+                    onClick={() => { setMenuOpen(false); onOpenDetails(project); }}
+                    className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs transition-colors ${
+                      darkMode ? 'hover:bg-white/5 text-white/70' : 'hover:bg-black/4 text-black/70'
+                    }`}
+                  >
+                    <FolderOpen size={13} /> Ver detalhes
+                  </button>
+                  <button
                     onClick={() => { setMenuOpen(false); onOpen(project); }}
                     className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs transition-colors ${
                       darkMode ? 'hover:bg-white/5 text-white/70' : 'hover:bg-black/4 text-black/70'
                     }`}
                   >
-                    <FolderOpen size={13} /> Abrir
+                    <ExternalLink size={13} /> Ir para o chat
                   </button>
                   <button
                     onClick={() => { setMenuOpen(false); onEdit(project); }}
@@ -324,6 +332,7 @@ export function ProjectsView({
   projects,
   onCreateProject,
   onOpenProject,
+  onOpenProjectDetails,
   onEditProject,
   onDeleteProject,
 }) {
@@ -429,6 +438,7 @@ export function ProjectsView({
                   darkMode={darkMode}
                   theme={theme}
                   onOpen={onOpenProject}
+                  onOpenDetails={onOpenProjectDetails}
                   onEdit={onEditProject}
                   onDelete={onDeleteProject}
                 />
