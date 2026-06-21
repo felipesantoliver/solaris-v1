@@ -2,8 +2,9 @@
 
 import { getPool } from './database.js';
 
-// Problema 5: incrementado para 6 — adiciona agent_steps em messages (timeline do Modo Agente)
-const CURRENT_SCHEMA_VERSION = 6;
+// 4.1: incrementado para 7 — permite anexar arquivo em chat sem projeto
+// (files.chat_id opcional, files.project_id passa a ser opcional).
+const CURRENT_SCHEMA_VERSION = 7;
 
 async function ensureSchemaVersionTable(client) {
   await client.query(`
@@ -298,6 +299,36 @@ export async function initDb() {
 
       await setSchemaVersion(client, 6);
       console.log('✅ Migração v6 aplicada.');
+    }
+
+    // ========== MIGRAÇÃO v7 ==========
+    // 4.1: Anexar arquivo em qualquer chat, não só dentro de projeto.
+    // - files.project_id passa a ser opcional (era NOT NULL).
+    // - files.chat_id (novo, opcional, FK pra chats) guarda o chat de destino
+    //   quando o upload acontece fora de um projeto.
+    // - CHECK garante que pelo menos um dos dois esteja preenchido — um
+    //   arquivo nunca pode ficar "solto" sem nenhum dono.
+    if (currentVersion < 7) {
+      console.log('🔄 Aplicando migração v7 (chat_id em files, project_id opcional)...');
+
+      const migrations = [
+        `ALTER TABLE files ALTER COLUMN project_id DROP NOT NULL`,
+        `ALTER TABLE files ADD COLUMN IF NOT EXISTS chat_id TEXT REFERENCES chats(id) ON DELETE CASCADE`,
+        `ALTER TABLE files DROP CONSTRAINT IF EXISTS files_owner_check`,
+        `ALTER TABLE files ADD CONSTRAINT files_owner_check CHECK (project_id IS NOT NULL OR chat_id IS NOT NULL)`,
+        `CREATE INDEX IF NOT EXISTS idx_files_chat_id ON files(chat_id)`,
+      ];
+
+      for (const sql of migrations) {
+        await client.query(sql).catch(err => {
+          if (!err.message?.includes('already exists') && !err.message?.includes('duplicate column')) {
+            console.warn(`⚠️ Migração v7 ignorada: ${err.message}`);
+          }
+        });
+      }
+
+      await setSchemaVersion(client, 7);
+      console.log('✅ Migração v7 aplicada.');
     }
 
     console.log(`✅ Schema atualizado para versão ${CURRENT_SCHEMA_VERSION}`);

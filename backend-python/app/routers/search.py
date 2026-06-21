@@ -30,7 +30,8 @@ def _get_cached_query_embedding(query: str, embedder):
 
 
 class RAGRequest(BaseModel):
-    project_id: str
+    project_id: str | None = None
+    chat_id: str | None = None
     query: str
 
 
@@ -64,10 +65,15 @@ def _embedding_to_vector_literal(embedding) -> str:
 @router.post("/rag")
 async def search_rag(request: RAGRequest):
     project_id = request.project_id
+    chat_id = request.chat_id
     query = request.query.strip()
 
-    if not project_id:
-        raise HTTPException(status_code=400, detail="project_id é obrigatório.")
+    # 4.1: a busca RAG agora aceita project_id OU chat_id — necessário porque
+    # arquivos anexados direto num chat sem projeto não têm project_id (ver
+    # migração v7 no Node: files.project_id passou a ser opcional). Pelo menos
+    # um dos dois precisa vir preenchido para delimitar o escopo da busca.
+    if not project_id and not chat_id:
+        raise HTTPException(status_code=400, detail="project_id ou chat_id é obrigatório.")
     if not query:
         raise HTTPException(status_code=400, detail="query não pode ser vazia.")
 
@@ -85,22 +91,29 @@ async def search_rag(request: RAGRequest):
     #    Traz um conjunto maior (LIMIT 20) ordenado por distância para depois
     #    filtrar por score >= 0.65 e devolver só os 3 melhores — preserva o
     #    comportamento original sem perder a ordenação por relevância.
+    #    Filtra por f.project_id quando fornecido; senão por f.chat_id —
+    #    nunca pelos dois ao mesmo tempo (um chat dentro de projeto já tem
+    #    seus arquivos indexados com project_id preenchido, então a busca por
+    #    projeto já cobre esse caso).
     pool = await get_pg_pool()
+
+    scope_column = "f.project_id" if project_id else "f.chat_id"
+    scope_value = project_id if project_id else chat_id
 
     try:
         async with pool.acquire() as conn:
             rows = await conn.fetch(
-                """
+                f"""
                 SELECT fc.id, fc.chunk_text, 1 - (fc.embedding_v <=> $1::vector) AS score
                 FROM file_chunks fc
                 JOIN files f ON f.id = fc.file_id
-                WHERE f.project_id = $2
+                WHERE {scope_column} = $2
                   AND fc.embedding_v IS NOT NULL
                 ORDER BY fc.embedding_v <=> $1::vector
                 LIMIT 20
                 """,
                 embedding_literal,
-                project_id,
+                scope_value,
             )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro na consulta vetorial ao banco: {str(e)}")
