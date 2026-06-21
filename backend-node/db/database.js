@@ -87,7 +87,12 @@ export async function getPool() {
 export async function runAsync(sql, params = []) {
   const p = await getPool();
   const result = await p.query(sql, params);
-  return { lastID: result.oid ?? null, changes: result.rowCount };
+  // Antes retornava também { lastID: result.oid ?? null }, herdado de uma API
+  // estilo sqlite3. `result.oid` nunca funciona em Postgres moderno (o
+  // suporte a `WITH OIDS` foi removido no PG 12), então `lastID` era sempre
+  // null/0 — e, conferido no código, nada consumia esse campo. Removido.
+  // Se precisar do ID inserido no futuro, use `INSERT ... RETURNING id`.
+  return { changes: result.rowCount };
 }
 
 export async function getAsync(sql, params = []) {

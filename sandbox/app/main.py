@@ -31,9 +31,6 @@ class PythonExecResponse(BaseModel):
 class BatchEmbeddingsRequest(BaseModel):
     texts: List[str]
 
-class CondenseChunkRequest(BaseModel):
-    chunk: str
-
 # ─── Validação AST ────────────────────────────────────────────────
 ALLOWED_MODULES = {
     "math", "statistics", "json", "re", "datetime",
@@ -201,32 +198,8 @@ async def python_exec(
 #         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ─── Condense Chunk (chamado pelo backend-python ou Node) ────────────────
-@app.post("/tools/condense-chunk")
-async def condense_chunk(req: CondenseChunkRequest):
-    """
-    Recebe um chunk de texto (>200 caracteres) e retorna uma versão condensada
-    com a frase mais relevante. Usa estratégia simples: extrai a primeira frase
-    que contém palavras-chave ou, se não encontrar, a primeira frase longa.
-    """
-    text = req.chunk.strip()
-    if len(text) <= 200:
-        return {"condensed": text}
-
-    # Divisão em frases (simples)
-    import re
-    sentences = re.split(r'(?<=[.!?])\s+', text)
-    if not sentences:
-        return {"condensed": text[:200] + "..."}
-
-    # Palavras-chave para priorizar
-    keywords = ["porque", "assim", "portanto", "consequentemente", "resultado", "conclusão", "importante", "crítico", "essencial"]
-    for sent in sentences:
-        if any(kw in sent.lower() for kw in keywords):
-            return {"condensed": sent.strip()}
-
-    # Se nenhuma frase com keyword, pega a mais longa (mas não maior que 200)
-    best = max(sentences, key=len)
-    if len(best) > 200:
-        best = best[:200] + "..."
-    return {"condensed": best.strip()}
+# ─── Condense Chunk ───────────────────────────────────────────────────────
+# Removido: era duplicata morta de /tools/condense-chunk, que vive em
+# backend-python/app/main.py (versão mais completa: max_chars configurável,
+# mais keywords). Nenhum dos dois é chamado pelo Node hoje; se for reativado
+# no futuro, deve ficar centralizado lá — o sandbox é só para python-exec.

@@ -1,7 +1,6 @@
 // domain/ai/prompt.js — Montagem de system prompt com síntese de memórias, histórico e classificação de intenção
 
 import { getAsync, allAsync, runAsync } from '../../db/database.js';
-import { generateEmbedding, cosineSimilarity } from './embeddings.js';
 import { getRedisClient, withRedis } from '../../utils/redis.js';
 import { createCircuitBreaker } from '../../utils/circuitBreaker.js';
 
@@ -207,9 +206,42 @@ async function synthesizeMemories(query, memories) {
   if (!memories || memories.length === 0) return { synthesis: '', usedIds: [] };
   const result = await callPython('/memories/synthesize', {
     query,
-    memories: memories.map(m => ({ id: m.id, content: m.content })),
+    memories: memories.map(m => ({ id: m.id, content: m.content, embedding: m.embedding ?? null })),
   });
+  // O Python só recalcula embedding pra quem não mandou um salvo (memória
+  // antiga, criada antes desse cache existir). O que ele calculou na hora
+  // volta aqui pra persistirmos — assim cada memória só é codificada UMA vez
+  // na vida inteira. Roda em background: não vale atrasar a resposta ao
+  // usuário por causa de um backfill.
+  if (result?.computed_embeddings && Object.keys(result.computed_embeddings).length > 0) {
+    persistComputedMemoryEmbeddings(result.computed_embeddings).catch((err) => {
+      console.error('❌ Falha ao persistir embeddings (backfill) de memórias:', err.message);
+    });
+  }
   return result || { synthesis: '', usedIds: [] };
+}
+
+// ─── Embeddings de memórias: cálculo em lote e persistência ───────────────
+// Codifica vários textos numa única chamada ao Python (mais barato que N
+// chamadas individuais) — usado só para popular memories.embedding (cache
+// persistente, sobrevive a restart/múltiplas instâncias). Não tem relação
+// com a indexação de chunks de arquivo para RAG, que continua em
+// embeddings.js/file_chunks.
+async function generateEmbeddingsBatch(texts) {
+  if (!texts || texts.length === 0) return null;
+  const result = await callPython('/embeddings/batch', { texts });
+  return result?.embeddings ?? null;
+}
+
+// Persiste de volta em memories.embedding os vetores que o Python calculou
+// na hora dentro de /memories/synthesize (memórias sem embedding salvo).
+async function persistComputedMemoryEmbeddings(computedEmbeddings) {
+  const entries = Object.entries(computedEmbeddings);
+  if (entries.length === 0) return;
+  await Promise.all(entries.map(([id, embedding]) =>
+    runAsync('UPDATE memories SET embedding = $1 WHERE id = $2::int', [JSON.stringify(embedding), id])
+  ));
+  console.log(`🧠 ${entries.length} embedding(s) de memória(s) calculado(s) via backfill e persistido(s).`);
 }
 
 // ─── Otimização da personalidade customizada por projeto ──────────────────
@@ -344,9 +376,9 @@ export async function getBaseSystemPromptWithCache(userId, projectId, memoryMode
 
   if (memoryMode !== 'nenhuma') {
     if (memoryMode === 'projeto' && projectId) {
-      memories = await allAsync('SELECT id, content FROM memories WHERE project_id = $1 ORDER BY created_at DESC LIMIT 20', [projectId]);
+      memories = await allAsync('SELECT id, content, embedding FROM memories WHERE project_id = $1 ORDER BY created_at DESC LIMIT 20', [projectId]);
     } else if (memoryMode === 'global' && userId) {
-      memories = await allAsync('SELECT id, content FROM memories WHERE project_id IS NULL AND user_id = $1 ORDER BY created_at DESC LIMIT 20', [userId]);
+      memories = await allAsync('SELECT id, content, embedding FROM memories WHERE project_id IS NULL AND user_id = $1 ORDER BY created_at DESC LIMIT 20', [userId]);
     }
   }
 
@@ -468,6 +500,7 @@ export async function extractMemories(projectId, userId, response, memoryMode) {
 
     let inserted = 0;
     let skippedDuplicates = 0;
+    const toInsert = [];
 
     for (const content of result) {
       if (!content || typeof content !== 'string' || content.trim().length < 10) continue;
@@ -484,17 +517,34 @@ export async function extractMemories(projectId, userId, response, memoryMode) {
         continue;
       }
 
-      await runAsync(
-        `INSERT INTO memories (project_id, user_id, content, source)
-         VALUES ($1, $2, $3, 'auto')`,
-        [scopeProjectId, userId, trimmed]
-      );
+      toInsert.push(trimmed);
+      existingMemories.push({ content: trimmed }); // evita duplicata dentro do próprio lote
+    }
 
-      existingMemories.push({ content: trimmed });
+    if (toInsert.length === 0) {
+      console.log(`🧠 0 memória(s) salva(s), ${skippedDuplicates} duplicata(s) ignorada(s).`);
+      return;
+    }
+
+    // Calcula os embeddings em lote (no máximo 2 textos, já que /memories/extract
+    // limita a isso) e já persiste tudo junto. Memória não tem endpoint de edição
+    // — o conteúdo nunca muda — então calcular agora evita reencodar essa mesma
+    // memória em toda síntese futura que a usar (ver synthesizeMemories acima).
+    // Se o Python falhar aqui, embedding fica null e é preenchido depois, de
+    // forma lazy, na primeira síntese que tocar essa memória (backfill).
+    const embeddings = await generateEmbeddingsBatch(toInsert);
+
+    for (let i = 0; i < toInsert.length; i++) {
+      const embedding = embeddings?.[i] ?? null;
+      await runAsync(
+        `INSERT INTO memories (project_id, user_id, content, source, embedding)
+         VALUES ($1, $2, $3, 'auto', $4)`,
+        [scopeProjectId, userId, toInsert[i], embedding ? JSON.stringify(embedding) : null]
+      );
       inserted++;
     }
 
-    console.log(`🧠 ${inserted} memória(s) salva(s), ${skippedDuplicates} duplicata(s) ignorada(s).`);
+    console.log(`🧠 ${inserted} memória(s) salva(s) (${embeddings ? 'com' : 'sem'} embedding), ${skippedDuplicates} duplicata(s) ignorada(s).`);
   } catch (err) {
     console.error('❌ Falha ao extrair/persistir memórias:', err.message, err.stack);
   }

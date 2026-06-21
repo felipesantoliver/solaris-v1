@@ -10,7 +10,7 @@ export function useProjects(effectiveUserId, authUser, model) {
   const fetchProjects = useCallback(async () => {
     if (!effectiveUserId) return;
     try {
-      const data = await api.getProjects(effectiveUserId);
+      const data = await api.getProjects();
       setProjects(Array.isArray(data) ? data : []);
     } catch {
       setProjects([]);
@@ -20,7 +20,7 @@ export function useProjects(effectiveUserId, authUser, model) {
   const fetchNoProjectChats = useCallback(async () => {
     if (!effectiveUserId) return;
     try {
-      const data = await api.getUserChats(effectiveUserId);
+      const data = await api.getUserChats();
       if (!activeProjectId) setChatHistory(Array.isArray(data) ? data : []);
     } catch {}
   }, [effectiveUserId, activeProjectId]);
@@ -37,12 +37,12 @@ export function useProjects(effectiveUserId, authUser, model) {
       return;
     }
     try {
-      const project = await api.getProject(projectId, effectiveUserId);
+      const project = await api.getProject(projectId);
       setChatHistory(project.chats || []);
     } catch {
       setChatHistory([]);
     }
-  }, [effectiveUserId]);
+  }, []);
 
   // Carregar chats quando o projeto ativo muda
   useEffect(() => {
@@ -79,49 +79,49 @@ export function useProjects(effectiveUserId, authUser, model) {
       tags,
       response_style: responseStyle,
       memory_mode: memoryMode,
-    }, effectiveUserId, authUser ? model : 'flash');
+    }, authUser ? model : 'flash');
     setProjects(prev => [newProject, ...prev]);
     setActiveProjectId(newProject.id);
     return newProject;
-  }, [effectiveUserId, authUser, model]);
+  }, [authUser, model]);
 
   const updateProject = useCallback(async (id, updates) => {
-    const updated = await api.updateProject(id, updates, effectiveUserId);
+    const updated = await api.updateProject(id, updates);
     setProjects(prev => prev.map(p => p.id === id ? updated : p));
     return updated;
-  }, [effectiveUserId]);
+  }, []);
 
   const deleteProject = useCallback(async (id) => {
-    await api.deleteProject(id, effectiveUserId);
+    await api.deleteProject(id);
     setProjects(prev => prev.filter(p => p.id !== id));
     if (activeProjectId === id) {
       setActiveProjectId(null);
       setChatHistory([]);
     }
-  }, [effectiveUserId, activeProjectId]);
+  }, [activeProjectId]);
 
   const createChatInProject = useCallback(async (projectId) => {
-    const newChat = await api.createChat(projectId, effectiveUserId, authUser ? model : 'flash');
+    const newChat = await api.createChat(projectId, authUser ? model : 'flash');
     setChatHistory(prev => [newChat, ...prev]);
     return newChat;
-  }, [effectiveUserId, authUser, model]);
+  }, [authUser, model]);
 
   const deleteChat = useCallback(async (projectId, chatId) => {
-    await api.deleteChat(projectId, chatId, effectiveUserId);
+    await api.deleteChat(projectId, chatId);
     setChatHistory(prev => prev.filter(c => c.id !== chatId));
-  }, [effectiveUserId]);
+  }, []);
 
   const updateChatTitle = useCallback(async (chatId, title) => {
-    const result = await api.updateChatTitle(chatId, title, effectiveUserId);
+    const result = await api.updateChatTitle(chatId, title);
     setChatHistory(prev => prev.map(c => c.id === chatId ? { ...c, title: result.title } : c));
     return result;
-  }, [effectiveUserId]);
+  }, []);
 
   const deleteAllChats = useCallback(async () => {
-    const result = await api.deleteAllUserChats(effectiveUserId);
+    const result = await api.deleteAllUserChats();
     setChatHistory([]);
     return result;
-  }, [effectiveUserId]);
+  }, []);
 
   return {
     projects,

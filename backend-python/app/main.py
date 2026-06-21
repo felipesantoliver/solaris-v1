@@ -105,48 +105,6 @@ async def condense_chunk(req: CondenseChunkRequest):
     return {"condensed": best.strip()}
 
 
-class GenerateTitleRequest(BaseModel):
-    message: str
-    max_length: int = 50
-
-class GenerateTitleResponse(BaseModel):
-    title: str
-    source: str  # "groq" ou "fallback"
-
-@app.post("/tools/generate-title", response_model=GenerateTitleResponse)
-async def generate_title_ultra(req: GenerateTitleRequest):
-    """
-    Gera um título curto para a conversa a partir da primeira mensagem.
-    Usa Groq se disponível, senão fallback local.
-    """
-    from app.utils.groq_client import groq_available, groq_complete
-    message = req.message.strip()
-    if not message:
-        return GenerateTitleResponse(title="Nova conversa", source="fallback")
-
-    # Tenta Groq (rápido)
-    if groq_available():
-        prompt = f"""
-Crie um título curto e descritivo (máximo {req.max_length} caracteres, sem aspas) para uma conversa que começa com:
-"{message}"
-Retorne apenas o título.
-"""
-        result = groq_complete(prompt, max_tokens=30)
-        if result:
-            title = result.strip().strip('"').strip("'").replace("\n", " ").strip()
-            if 3 <= len(title) <= req.max_length:
-                return GenerateTitleResponse(title=title, source="groq")
-
-    # Fallback local: primeiras palavras
-    words = message.split()
-    title = " ".join(words[:6])
-    if len(title) > req.max_length:
-        title = title[:req.max_length]
-    if not title:
-        title = "Nova conversa"
-    return GenerateTitleResponse(title=title, source="fallback")
-
-
 class OptimizePersonalityRequest(BaseModel):
     text: str
     max_chars: int = 280

@@ -20,7 +20,7 @@ export const api = {
     return safeJson(res);
   },
 
-  async createProject(data, _userId, model) {
+  async createProject(data, model) {
     const res = await fetch(`${API_BASE}/projects`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-model': model, ...(await getAuthHeaders()) },
@@ -47,7 +47,7 @@ export const api = {
   },
 
   // ─── Chats ────────────────────────────────────────────────────────────────
-  async createChat(projectId, _userId, model) {
+  async createChat(projectId, model) {
     const endpoint = projectId
       ? `${API_BASE}/projects/${projectId}/chats`
       : `${API_BASE}/projects/none/chats`;
