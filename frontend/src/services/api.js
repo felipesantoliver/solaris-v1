@@ -76,6 +76,26 @@ export const api = {
     return safeJson(res);
   },
 
+  // Menu de contexto da sidebar: arquivar (sai da listagem padrão) e fixar
+  // (ordena no topo, antes das demais — ver ORDER BY pinned DESC no backend).
+  async archiveChat(chatId, archived = true) {
+    const res = await fetch(`${API_BASE}/chats/${chatId}/archive`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...(await getAuthHeaders()) },
+      body: JSON.stringify({ archived }),
+    });
+    return safeJson(res);
+  },
+
+  async pinChat(chatId, pinned = true) {
+    const res = await fetch(`${API_BASE}/chats/${chatId}/pin`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...(await getAuthHeaders()) },
+      body: JSON.stringify({ pinned }),
+    });
+    return safeJson(res);
+  },
+
   // 4.3: Move um chat existente para dentro de um projeto, ou para fora de
   // qualquer projeto (projectId null/undefined → chat avulso).
   async moveChat(chatId, projectId) {
@@ -87,20 +107,24 @@ export const api = {
     return safeJson(res);
   },
 
-  // Lista chats de um projeto com paginação
-  async getProjectChats(projectId, { page = 1, limit = 30 } = {}) {
+  // Lista chats de um projeto com paginação. includeArchived=true também
+  // traz conversas arquivadas (usado pela futura seção "Arquivados").
+  async getProjectChats(projectId, { page = 1, limit = 30, includeArchived = false } = {}) {
     const url = new URL(`${API_BASE}/projects/${projectId}/chats`);
     url.searchParams.set('page', page);
     url.searchParams.set('limit', limit);
+    if (includeArchived) url.searchParams.set('include_archived', 'true');
     const res = await fetch(url, { headers: await getAuthHeaders() });
     return safeJson(res);
   },
 
-  // Lista chats avulsos do usuário com paginação
-  async getUserChats({ page = 1, limit = 30 } = {}) {
+  // Lista chats avulsos do usuário com paginação. includeArchived=true também
+  // traz conversas arquivadas (usado pela futura seção "Arquivados").
+  async getUserChats({ page = 1, limit = 30, includeArchived = false } = {}) {
     const url = new URL(`${API_BASE}/user/chats`);
     url.searchParams.set('page', page);
     url.searchParams.set('limit', limit);
+    if (includeArchived) url.searchParams.set('include_archived', 'true');
     const res = await fetch(url, { headers: await getAuthHeaders() });
     return safeJson(res);
   },

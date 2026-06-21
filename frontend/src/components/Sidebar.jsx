@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect, memo } from 'react';
 import {
   PencilLine, Search, FolderPlus, Folder, History, Trash2, Pencil, ChevronDown,
-  Settings, User, GripVertical, Check, X, LayoutGrid, MoreVertical, FolderInput, FolderMinus
+  Settings, User, GripVertical, Check, X, LayoutGrid, MoreVertical, FolderInput, FolderMinus,
+  Pin, PinOff, Archive
 } from 'lucide-react';
 import { SolarSystem } from './ui/SolarSystem';
 
@@ -20,6 +21,8 @@ export const Sidebar = memo(function Sidebar({
   onDeleteProject,
   onDeleteChat,
   onMoveChat,
+  onPinChat,
+  onArchiveChat,
   onEditProject,
   onNewChat,
   onStartRenameChat,
@@ -66,6 +69,30 @@ export const Sidebar = memo(function Sidebar({
     setMoveMenuChatId(null);
     setMoveSubmenuOpen(false);
     if (onMoveChat) onMoveChat(chat, targetProjectId);
+  };
+
+  const handlePinChat = (chat) => {
+    setMoveMenuChatId(null);
+    setMoveSubmenuOpen(false);
+    if (onPinChat) onPinChat(chat);
+  };
+
+  const handleArchiveChat = (chat) => {
+    setMoveMenuChatId(null);
+    setMoveSubmenuOpen(false);
+    if (onArchiveChat) onArchiveChat(chat);
+  };
+
+  const handleRenameChat = (e, chat) => {
+    setMoveMenuChatId(null);
+    setMoveSubmenuOpen(false);
+    onStartRenameChat(e, chat);
+  };
+
+  const handleDeleteChatClick = (chat) => {
+    setMoveMenuChatId(null);
+    setMoveSubmenuOpen(false);
+    onDeleteChat(chat);
   };
 
   const visibleProjects = projects.slice(0, 3);
@@ -241,7 +268,11 @@ export const Sidebar = memo(function Sidebar({
                 className={`flex items-center justify-between p-2 -ml-2 rounded-lg cursor-pointer transition-all group/chat ${activeChatId === chat.id ? theme.projectActive : theme.projectHover}`}
               >
                 <div className="flex items-center gap-3 overflow-hidden flex-1 min-w-0">
-                  <History size={14} className={`shrink-0 ${activeChatId === chat.id ? 'text-current opacity-60' : theme.textMuted}`} />
+                  {chat.pinned ? (
+                    <Pin size={13} className="shrink-0 text-amber-400 fill-amber-400/30" />
+                  ) : (
+                    <History size={14} className={`shrink-0 ${activeChatId === chat.id ? 'text-current opacity-60' : theme.textMuted}`} />
+                  )}
                   {editingChatTitleId === chat.id ? (
                     <input
                       autoFocus
@@ -262,9 +293,8 @@ export const Sidebar = memo(function Sidebar({
                   )}
                 </div>
                 <div className="flex items-center gap-0.5 opacity-0 group-hover/chat:opacity-100 transition-all duration-200 shrink-0">
-                  <button onClick={e => onStartRenameChat(e, chat)} title="Renomear" className={`p-1 hover:text-current transition-colors ${theme.textMuted}`}>
-                    <Pencil size={11} />
-                  </button>
+                  {/* Menu de contexto único (três pontinhos): fixar, renomear,
+                      mover para projeto, arquivar e excluir. */}
                   <div className="relative">
                     <button
                       onClick={e => {
@@ -281,8 +311,24 @@ export const Sidebar = memo(function Sidebar({
                       <div
                         ref={moveMenuRef}
                         onClick={e => e.stopPropagation()}
-                        className={`absolute right-0 top-full mt-1 z-50 min-w-[160px] rounded-xl border ${theme.border} ${darkMode ? 'bg-[#141414]' : 'bg-white'} shadow-xl py-1.5 animate-in fade-in zoom-in-95 duration-150`}
+                        className={`absolute right-0 top-full mt-1 z-50 min-w-[180px] rounded-xl border ${theme.border} ${darkMode ? 'bg-[#141414]' : 'bg-white'} shadow-xl py-1.5 animate-in fade-in zoom-in-95 duration-150`}
                       >
+                        <button
+                          onClick={() => handlePinChat(chat)}
+                          className={`flex items-center gap-2 w-full px-3 py-1.5 text-left text-xs font-light transition-colors ${theme.projectHover} ${theme.textSecondary} hover:text-current`}
+                        >
+                          {chat.pinned ? <PinOff size={12} /> : <Pin size={12} />}
+                          <span>{chat.pinned ? 'Desafixar' : 'Fixar conversa'}</span>
+                        </button>
+
+                        <button
+                          onClick={e => handleRenameChat(e, chat)}
+                          className={`flex items-center gap-2 w-full px-3 py-1.5 text-left text-xs font-light transition-colors ${theme.projectHover} ${theme.textSecondary} hover:text-current`}
+                        >
+                          <Pencil size={12} />
+                          <span>Renomear</span>
+                        </button>
+
                         <div className="relative">
                           <button
                             onClick={() => setMoveSubmenuOpen(!moveSubmenuOpen)}
@@ -319,12 +365,27 @@ export const Sidebar = memo(function Sidebar({
                             </div>
                           )}
                         </div>
+
+                        <button
+                          onClick={() => handleArchiveChat(chat)}
+                          className={`flex items-center gap-2 w-full px-3 py-1.5 text-left text-xs font-light transition-colors ${theme.projectHover} ${theme.textSecondary} hover:text-current`}
+                        >
+                          <Archive size={12} />
+                          <span>Arquivar</span>
+                        </button>
+
+                        <div className={`my-1.5 border-t ${theme.border}`} />
+
+                        <button
+                          onClick={() => handleDeleteChatClick(chat)}
+                          className="flex items-center gap-2 w-full px-3 py-1.5 text-left text-xs font-light text-red-500 hover:bg-red-500/10 transition-colors"
+                        >
+                          <Trash2 size={12} />
+                          <span>Excluir</span>
+                        </button>
                       </div>
                     )}
                   </div>
-                  <button onClick={e => { e.stopPropagation(); onDeleteChat(chat); }} className="p-1 hover:text-red-500 transition-all duration-200">
-                    <Trash2 size={12} />
-                  </button>
                 </div>
               </div>
             ))}

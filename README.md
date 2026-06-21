@@ -73,6 +73,8 @@ A arquitetura é distribuída em quatro serviços independentes:
 
 **Geração automática de título** — gerado via Groq na primeira mensagem, com fallback para as primeiras 7 palavras.
 
+**Menu de contexto da conversa** — cada conversa na sidebar tem um menu (três pontinhos) com cinco ações: **fixar** (mantém a conversa no topo da lista, antes das demais, independente da data); **renomear** (edição inline do título); **mover para projeto** (realoca a conversa entre projetos ou para fora de qualquer projeto); **arquivar** (some da listagem padrão sem apagar nada — recuperável via `include_archived=true`; a tela dedicada de "Arquivados" ainda não existe); e **excluir** (soft delete via `deleted_at`, com confirmação antes de aplicar — preserva mensagens e arquivos da conversa em vez de um DELETE definitivo em cascata).
+
 **Rate limiting** — dois níveis de proteção, implementado com Redis (com fallback em memória):
 
 | Tipo de usuário | Limite |
@@ -239,14 +241,14 @@ Usuário
 
 ## Banco de dados
 
-O backend Node aplica migrações automaticamente no startup (sem ferramenta externa). Schema atual: **versão 6**.
+O backend Node aplica migrações automaticamente no startup (sem ferramenta externa). Schema atual: **versão 10**.
 
 ### Tabelas
 
 | Tabela | Descrição |
 |---|---|
 | `projects` | Projetos do usuário: objetivo, tags, modo de memória, modelo e personalidade própria (`response_style`, com prioridade sobre a personalidade global) |
-| `chats` | Conversas vinculadas a um projeto |
+| `chats` | Conversas vinculadas a um projeto (ou avulsas). Suporta fixar (`pinned`), arquivar (`archived_at`) e exclusão reversível (`deleted_at`, soft delete) |
 | `messages` | Mensagens com histórico de edições (JSONB) |
 | `memories` | Memórias extraídas automaticamente após cada resposta, com embedding para busca |
 | `files` | Arquivos: metadados + texto extraído + binário (BYTEA) |
@@ -281,11 +283,14 @@ Execute `backend-python/migrations/001_add_pgvector_file_chunks.sql` manualmente
 | `POST` | `/api/projects` | Cria projeto (aceita `response_style` como preset ou texto livre) |
 | `PATCH` | `/api/projects/:id` | Atualiza projeto |
 | `DELETE` | `/api/projects/:id` | Remove projeto |
-| `GET` | `/api/projects/:projectId/chats` | Chats do projeto, paginado |
+| `GET` | `/api/projects/:projectId/chats` | Chats do projeto, paginado (`?include_archived=true` inclui arquivados; padrão ignora) |
 | `POST` | `/api/projects/:id/chats` | Cria chat (`:id` pode ser `none` para chat avulso) |
-| `DELETE` | `/api/projects/:id/chats/:chatId` | Remove chat |
+| `DELETE` | `/api/projects/:id/chats/:chatId` | Remove chat (soft delete via `deleted_at`) |
 | `PATCH` | `/api/chats/:chatId/title` | Renomeia chat |
-| `GET` | `/api/user/chats` | Chats avulsos do usuário, paginado |
+| `PATCH` | `/api/chats/:chatId/project` | Move chat para outro projeto (ou para fora de qualquer projeto, com `project_id: null`) |
+| `PATCH` | `/api/chats/:chatId/archive` | Arquiva/desarquiva chat (`{ archived: true }` ou `{ archived: false }`) |
+| `PATCH` | `/api/chats/:chatId/pin` | Fixa/desafixa chat no topo da sidebar (`{ pinned: true }` ou `{ pinned: false }`) |
+| `GET` | `/api/user/chats` | Chats avulsos do usuário, paginado (`?include_archived=true` inclui arquivados; padrão ignora) |
 | `DELETE` | `/api/user/chats` | Remove todos os chats avulsos do usuário |
 | `GET` | `/api/messages/chat/:chatId` | Mensagens paginadas de um chat |
 | `POST` | `/api/messages/stream` | Envia mensagem (SSE streaming, eventos `progress`/`chunk`/`title`/`maxTokens`/`done`/`error`) |
@@ -428,7 +433,7 @@ Obtenha as chaves de API:
 
 6. Copie a URL pública após o deploy.
 
-> Na primeira execução, o banco é migrado automaticamente. Confirme nos logs: `✅ Schema atualizado para versão 6`.
+> Na primeira execução, o banco é migrado automaticamente. Confirme nos logs: `✅ Schema atualizado para versão 10`.
 
 ---
 
@@ -605,6 +610,7 @@ VITE_SUPABASE_ANON_KEY=eyJ...
 | Personalidade por projeto, com prioridade sobre a personalidade global e otimização automática de texto livre via IA |
 | Indicadores granulares de progresso no streaming (SSE: `searching` → `thinking` → `generating`) |
 | Modo Agente Autônomo (`POST /api/agent/run`, SSE): loop de function calling real do Gemini com `rag_search` (documentos do projeto) e `python_sandbox` (execução isolada via serviço separado); raciocínio estendido (Pro) via `thinkingConfig.includeThoughts`. `web_search` está com a "assinatura" da ferramenta pronta, mas sem provedor configurado — devolve erro gracioso até integrar um (Tavily/SerpAPI/etc.) |
+| Menu de contexto da conversa na sidebar: fixar, renomear, mover para projeto, arquivar e excluir (soft delete) |
 
 ---
 
@@ -616,6 +622,7 @@ As funcionalidades abaixo estão organizadas da mais fácil para a mais complexa
 
 | Funcionalidade | Descrição |
 |---|---|
+| Seção "Arquivados" na sidebar | UI para listar/restaurar conversas arquivadas — o backend já suporta (`?include_archived=true`), falta a tela |
 | Geração de imagens (Gemini Imagen) | Geração de imagens diretamente no chat via Gemini Imagen |
 | Busca web real no Modo Agente | Integrar um provedor (Tavily/SerpAPI/Bing) na ferramenta `web_search`, hoje um stub |
 

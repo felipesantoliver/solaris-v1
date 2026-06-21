@@ -62,7 +62,8 @@ export default function App() {
   const {
     projects, activeProjectId, setActiveProjectId, chatHistory, setChatHistory,
     createProject, updateProject, deleteProject, createChatInProject, deleteChat,
-    updateChatTitle, moveChatToProject, deleteAllChats, loadProjectChats, fetchNoProjectChats,
+    updateChatTitle, archiveChat, pinChat, moveChatToProject, deleteAllChats,
+    loadProjectChats, fetchNoProjectChats,
   } = useProjects(effectiveUserId, authUser, model);
 
   const {
@@ -321,6 +322,31 @@ export default function App() {
       setSendError('Não foi possível mover a conversa. Tente novamente.');
     }
   }, [moveChatToProject, setSendError]);
+  // Menu de contexto da sidebar: fixar/desafixar alterna o estado atual do
+  // chat (chat.pinned vem do backend já refletido em chatHistory).
+  const handlePinChat = useCallback(async (chat) => {
+    try {
+      await pinChat(chat.id, !chat.pinned);
+    } catch (err) {
+      console.error('Falha ao fixar conversa:', err);
+      setSendError('Não foi possível fixar a conversa. Tente novamente.');
+    }
+  }, [pinChat, setSendError]);
+  // Arquivar: por enquanto só a ação "arquivar" está exposta no menu (a
+  // conversa some da lista atual) — desarquivar virá junto da seção
+  // "Arquivados" numa próxima etapa de UI.
+  const handleArchiveChat = useCallback(async (chat) => {
+    try {
+      await archiveChat(chat.id, true);
+      if (activeChatId === chat.id) {
+        setActiveChatId(null);
+        setMessages([]);
+      }
+    } catch (err) {
+      console.error('Falha ao arquivar conversa:', err);
+      setSendError('Não foi possível arquivar a conversa. Tente novamente.');
+    }
+  }, [archiveChat, activeChatId, setActiveChatId, setMessages, setSendError]);
   const handleOpenSettings  = useCallback(() => setShowSettingsModal(true), []);
   const handleDismissGuestBanner = useCallback(() => {
     sessionStorage.setItem('solaris_guest_banner_dismissed', 'true');
@@ -377,6 +403,8 @@ export default function App() {
         onDeleteProject={handleDeleteProject}
         onDeleteChat={handleDeleteChat}
         onMoveChat={handleMoveChat}
+        onPinChat={handlePinChat}
+        onArchiveChat={handleArchiveChat}
         onEditProject={setEditingProject} onNewChat={handleNewChat}
         onStartRenameChat={startRenameChatTitle}
         editingChatTitleId={editingChatTitleId} editingChatTitleValue={editingChatTitleValue}

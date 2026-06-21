@@ -21,10 +21,20 @@ router.get('/projects', async (req, res, next) => {
 // Obter projeto específico com seus chats
 router.get('/projects/:id', async (req, res, next) => {
   const userId = req.userId;
+  // Espelha o mesmo filtro de GET /projects/:projectId/chats e GET /user/chats
+  // (domain/routers/chats.js): por padrão chats arquivados ficam de fora;
+  // soft-deletados (deleted_at) nunca aparecem aqui.
+  const includeArchived = req.query.include_archived === 'true' || req.query.include_archived === '1';
+  const archivedClause = includeArchived ? '' : 'AND archived_at IS NULL';
   try {
     const project = await getAsync('SELECT * FROM projects WHERE id = $1 AND user_id = $2', [req.params.id, userId]);
     if (!project) return res.status(404).json({ error: 'Projeto não encontrado' });
-    const chats = await allAsync('SELECT * FROM chats WHERE project_id = $1 ORDER BY updated_at DESC', [req.params.id]);
+    const chats = await allAsync(
+      `SELECT * FROM chats
+       WHERE project_id = $1 AND deleted_at IS NULL ${archivedClause}
+       ORDER BY pinned DESC, updated_at DESC`,
+      [req.params.id]
+    );
     res.json({ ...project, chats });
   } catch (err) { next(err); }
 });

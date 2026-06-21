@@ -8,7 +8,10 @@ import { getPool } from './database.js';
 // segurança best-effort para file_chunks.embedding_v / embedding_model (ver
 // migração v9 abaixo e backend-python/migrations/001 e 002, que continuam
 // sendo o caminho oficial documentado no README).
-const CURRENT_SCHEMA_VERSION = 9;
+// Menu de contexto da conversa (sidebar): incrementado para 10 — adiciona
+// chats.archived_at, chats.deleted_at (soft delete) e chats.pinned (ver
+// migração v10 abaixo).
+const CURRENT_SCHEMA_VERSION = 10;
 
 async function ensureSchemaVersionTable(client) {
   await client.query(`
@@ -403,6 +406,40 @@ export async function initDb() {
 
       await setSchemaVersion(client, 9);
       console.log('✅ Migração v9 aplicada.');
+    }
+
+    // ========== MIGRAÇÃO v10 ==========
+    // Menu de contexto da conversa (sidebar): Arquivar, Excluir (soft delete)
+    // e Fixar.
+    // - chats.archived_at: quando preenchido, a conversa some da listagem
+    //   padrão mas continua acessível via include_archived=true (seção
+    //   "Arquivados" fica para uma próxima etapa de UI).
+    // - chats.deleted_at: soft delete — preserva mensagens/arquivos em vez de
+    //   um DELETE em cascata definitivo, permitindo recuperação futura.
+    // - chats.pinned: conversas fixadas ordenam antes das demais
+    //   (ORDER BY pinned DESC, updated_at DESC).
+    if (currentVersion < 10) {
+      console.log('🔄 Aplicando migração v10 (archived_at/deleted_at/pinned em chats)...');
+
+      const migrations = [
+        `ALTER TABLE chats ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ`,
+        `ALTER TABLE chats ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ`,
+        `ALTER TABLE chats ADD COLUMN IF NOT EXISTS pinned BOOLEAN DEFAULT FALSE`,
+        `CREATE INDEX IF NOT EXISTS idx_chats_archived_at ON chats(archived_at) WHERE archived_at IS NOT NULL`,
+        `CREATE INDEX IF NOT EXISTS idx_chats_deleted_at ON chats(deleted_at) WHERE deleted_at IS NOT NULL`,
+        `CREATE INDEX IF NOT EXISTS idx_chats_pinned ON chats(pinned) WHERE pinned = TRUE`,
+      ];
+
+      for (const sql of migrations) {
+        await client.query(sql).catch(err => {
+          if (!err.message?.includes('already exists') && !err.message?.includes('duplicate column')) {
+            console.warn(`⚠️ Migração v10 ignorada: ${err.message}`);
+          }
+        });
+      }
+
+      await setSchemaVersion(client, 10);
+      console.log('✅ Migração v10 aplicada.');
     }
 
     console.log(`✅ Schema atualizado para versão ${CURRENT_SCHEMA_VERSION}`);

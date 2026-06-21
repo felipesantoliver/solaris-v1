@@ -1,6 +1,17 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '../services/api';
 
+// Mesma ordenação aplicada no backend (ORDER BY pinned DESC, updated_at DESC)
+// — usada para resincronizar a lista localmente depois de fixar/desafixar um
+// chat sem precisar recarregar tudo do servidor.
+function sortChats(list) {
+  return [...list].sort((a, b) => {
+    const pa = a.pinned ? 1 : 0, pb = b.pinned ? 1 : 0;
+    if (pa !== pb) return pb - pa;
+    return new Date(b.updated_at || 0) - new Date(a.updated_at || 0);
+  });
+}
+
 export function useProjects(effectiveUserId, authUser, model) {
   const [projects, setProjects] = useState([]);
   const [activeProjectId, setActiveProjectId] = useState(null);
@@ -126,6 +137,23 @@ export function useProjects(effectiveUserId, authUser, model) {
     return result;
   }, []);
 
+  // Menu de contexto da sidebar: arquivar remove o chat da lista atualmente
+  // exibida (a seção "Arquivados" fica para uma próxima etapa de UI).
+  const archiveChat = useCallback(async (chatId, archived = true) => {
+    const updated = await api.archiveChat(chatId, archived);
+    setChatHistory(prev => prev.filter(c => c.id !== chatId));
+    return updated;
+  }, []);
+
+  // Menu de contexto da sidebar: fixar reordena a lista localmente (mesma
+  // regra do backend — pinned primeiro, depois updated_at desc) sem precisar
+  // recarregar do servidor.
+  const pinChat = useCallback(async (chatId, pinned = true) => {
+    const updated = await api.pinChat(chatId, pinned);
+    setChatHistory(prev => sortChats(prev.map(c => c.id === chatId ? { ...c, ...updated } : c)));
+    return updated;
+  }, []);
+
   // 4.3: Move um chat para dentro de um projeto (ou para fora, se targetProjectId
   // for null/undefined). Atualiza a lista local sem precisar de reload:
   // o chat some da lista atualmente exibida assim que deixa de pertencer a ela
@@ -165,6 +193,8 @@ export function useProjects(effectiveUserId, authUser, model) {
     createChatInProject,
     deleteChat,
     updateChatTitle,
+    archiveChat,
+    pinChat,
     moveChatToProject,
     deleteAllChats,
   };
