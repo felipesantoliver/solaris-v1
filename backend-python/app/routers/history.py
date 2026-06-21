@@ -74,8 +74,6 @@ async def synthesize_history(request: HistorySynthesisRequest):
     if not older:
         return HistorySynthesisResponse(summary="", recent_messages=recent)
 
-    clusters = cluster_messages(older, threshold=0.75)
-
     summary = ""
 
     if groq_available():
@@ -92,10 +90,17 @@ Retorne apenas o resumo, sem introdução ou conclusão.
         if groq_result and 100 <= len(groq_result) <= 600:
             summary = groq_result
         else:
+            # FIX: cluster_messages() só roda aqui (fallback: resposta da
+            # Groq inválida) — antes era chamado incondicionalmente antes
+            # do if/else e descartado no caminho feliz, gerando embeddings
+            # de todas as mensagens (CPU) sem necessidade.
+            clusters = cluster_messages(older, threshold=0.75)
             cluster_summaries = [summarize_cluster_spacy(cluster) for cluster in clusters if cluster]
             if cluster_summaries:
                 summary = "Resumo do histórico anterior:\n" + "\n".join(cluster_summaries)
     else:
+        # FIX: idem — só roda quando a Groq está indisponível (fallback real).
+        clusters = cluster_messages(older, threshold=0.75)
         cluster_summaries = [summarize_cluster_spacy(cluster) for cluster in clusters if cluster]
         if cluster_summaries:
             summary = "Resumo do histórico anterior:\n" + "\n".join(cluster_summaries)
