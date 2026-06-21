@@ -25,8 +25,7 @@ const RATE_LIMITS = {
   auth:  { max: 40, windowMs: 60_000 },
 };
 
-export async function checkRateLimit(userId) {
-  const isGuest = !userId || userId.length < 36;
+export async function checkRateLimit(userId, isGuest) {
   const { max, windowMs } = isGuest ? RATE_LIMITS.guest : RATE_LIMITS.auth;
   const key = `ratelimit:${userId}`;
 
@@ -201,20 +200,18 @@ async function buildChatContext(chatId, projectId, userId, message, isCodingMode
 router.get('/messages/chat/:chatId', async (req, res, next) => {
   const chatId = req.params.chatId;
   const page   = parseInt(req.query.page)  || 1;
-  const limit  = parseInt(req.query.limit) || 30;
+  const limit  = parseInt(req.query.limit) || 50;
   const offset = (page - 1) * limit;
 
   try {
-    const pool = await getPool();
-
-    const totalResult = await pool.query(
-      'SELECT COUNT(*) AS total FROM messages WHERE chat_id = $1',
+    const totalResult = await getAsync(
+      'SELECT COUNT(*) AS count FROM messages WHERE chat_id = $1',
       [chatId]
     );
-    const total = parseInt(totalResult.rows[0]?.total || 0);
+    const total = parseInt(totalResult?.count) || 0;
 
-    const dataResult = await pool.query(
-      `SELECT id, role, content, edited, edit_history, agent_steps, created_at
+    const dataResult = await getPool().query(
+      `SELECT id, chat_id, role, content, edited, edit_history, agent_steps, created_at
        FROM messages
        WHERE chat_id = $1
        ORDER BY created_at DESC
@@ -282,7 +279,7 @@ router.patch('/messages/:messageId', extractUserId, async (req, res, next) => {
 router.post('/messages/stream', extractUserId, async (req, res, next) => {
   const userId = req.userId;
 
-  if (!(await checkRateLimit(userId))) {
+  if (!(await checkRateLimit(userId, req.isGuest))) {
     return res.status(429).json({ error: 'Muitas requisições. Aguarde antes de enviar outra mensagem.' });
   }
 
@@ -383,7 +380,7 @@ router.post('/messages/stream', extractUserId, async (req, res, next) => {
 router.post('/messages', extractUserId, async (req, res, next) => {
   const userId = req.userId;
 
-  if (!(await checkRateLimit(userId))) {
+  if (!(await checkRateLimit(userId, req.isGuest))) {
     return res.status(429).json({ error: 'Muitas requisições. Aguarde antes de enviar outra mensagem.' });
   }
 

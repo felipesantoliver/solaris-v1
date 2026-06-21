@@ -2,6 +2,7 @@ import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { Send, Loader2, Mic, MicOff, Plus, AlertTriangle, Check, Code, Sparkles } from 'lucide-react';
 import { ModelToggle } from './ui/ModelToggle';
 import { ExtendedReasoningToggle } from './ui/ExtendedReasoningToggle';
+import { getGuestId } from '../config/supabase';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
 
@@ -113,7 +114,7 @@ export function MessageInput({
       const formData = new FormData();
       formData.append('audio', audioBlob, `recording.${ext}`);
 
-      const userId = authUser?.id || localStorage.getItem('guestId') || '';
+      const userId = authUser?.id || getGuestId() || '';
 
       const response = await fetch(`${API_BASE}/api/voice/transcribe`, {
         method: 'POST',

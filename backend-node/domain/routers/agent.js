@@ -146,7 +146,7 @@ router.post('/agent/run', extractUserId, async (req, res) => {
     return res.status(400).json({ error: 'chatId e message são obrigatórios' });
   }
 
-  if (!(await checkRateLimit(userId))) {
+  if (!(await checkRateLimit(userId, req.isGuest))) {
     return res.status(429).json({ error: 'Muitas requisições. Aguarde antes de enviar outra mensagem.' });
   }
 

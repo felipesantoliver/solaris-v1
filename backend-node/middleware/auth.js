@@ -45,6 +45,7 @@ export async function extractUserId(req, res, next) {
 
       // Token válido – define o userId autenticado
       req.userId = user.id;
+      req.isGuest = false;
       return next();
     } catch (err) {
       console.error('❌ Erro ao validar token com Supabase:', err.message);
@@ -56,6 +57,7 @@ export async function extractUserId(req, res, next) {
   const guestId = req.headers['x-user-id'];
   if (guestId) {
     req.userId = guestId;
+    req.isGuest = true;
     return next();
   }
 
