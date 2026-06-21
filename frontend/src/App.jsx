@@ -62,7 +62,7 @@ export default function App() {
   const {
     projects, activeProjectId, setActiveProjectId, chatHistory, setChatHistory,
     createProject, updateProject, deleteProject, createChatInProject, deleteChat,
-    updateChatTitle, deleteAllChats, loadProjectChats, fetchNoProjectChats,
+    updateChatTitle, moveChatToProject, deleteAllChats, loadProjectChats, fetchNoProjectChats,
   } = useProjects(effectiveUserId, authUser, model);
 
   const {
@@ -221,18 +221,26 @@ export default function App() {
 
   const handleShare = useCallback(() => setShowShareModal(true), []);
 
+  // 4.1: anexar arquivo já não exige projeto ativo. Com projeto ativo,
+  // continua indo para a rota original (/files/:projectId) — o arquivo entra
+  // na base de conhecimento do projeto inteiro. Sem projeto, o arquivo é
+  // anexado ao chat atual (rota nova /files/chat/:chatId); se ainda não há
+  // chat (primeira interação), cria um chat avulso antes do upload, mesmo
+  // padrão usado por sendMessage/ensureChat.
   const handleFileUpload = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
     e.target.value = '';
-    if (!activeProjectId) {
-      setUploadStatus({ type: 'error', message: 'Selecione um projeto para enviar arquivos.' });
-      setTimeout(() => setUploadStatus(null), 3000);
-      return;
-    }
+
     setUploadStatus({ type: 'uploading', message: `Enviando ${file.name}...` });
     try {
-      await api.uploadFile(activeProjectId, file, effectiveUserId);
+      let targetChatId = activeChatId;
+      if (!activeProjectId && !targetChatId) {
+        const nc = await createChatInProject(null);
+        targetChatId = nc.id;
+        setActiveChatId(targetChatId);
+      }
+      await api.uploadFile(activeProjectId, file, targetChatId);
       setUploadStatus({ type: 'success', message: `${file.name} enviado com sucesso!` });
       setTimeout(() => setUploadStatus(null), 3000);
     } catch (err) {
@@ -298,6 +306,17 @@ export default function App() {
   // Callbacks inline que iam para a Sidebar como arrow functions — agora estáveis
   const handleDeleteProject = useCallback((proj) => setItemToDelete({ type: 'project', data: proj }), []);
   const handleDeleteChat    = useCallback((chat) => setItemToDelete({ type: 'chat',    data: chat }), []);
+  // 4.3: move um chat existente para dentro de um projeto (ou para fora, se
+  // targetProjectId for null). A conversa aberta no momento (se for a movida)
+  // permanece aberta — só a Sidebar reflete a mudança de contexto.
+  const handleMoveChat = useCallback(async (chat, targetProjectId) => {
+    try {
+      await moveChatToProject(chat.id, targetProjectId);
+    } catch (err) {
+      console.error('Falha ao mover conversa:', err);
+      setSendError('Não foi possível mover a conversa. Tente novamente.');
+    }
+  }, [moveChatToProject, setSendError]);
   const handleOpenSettings  = useCallback(() => setShowSettingsModal(true), []);
   const handleDismissGuestBanner = useCallback(() => {
     sessionStorage.setItem('solaris_guest_banner_dismissed', 'true');
@@ -353,6 +372,7 @@ export default function App() {
         onCreateProject={createProject}
         onDeleteProject={handleDeleteProject}
         onDeleteChat={handleDeleteChat}
+        onMoveChat={handleMoveChat}
         onEditProject={setEditingProject} onNewChat={handleNewChat}
         onStartRenameChat={startRenameChatTitle}
         editingChatTitleId={editingChatTitleId} editingChatTitleValue={editingChatTitleValue}

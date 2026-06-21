@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, memo } from 'react';
 import {
   PencilLine, Search, FolderPlus, Folder, History, Trash2, Pencil, ChevronDown,
-  Settings, User, GripVertical, Check, X, LayoutGrid
+  Settings, User, GripVertical, Check, X, LayoutGrid, MoreVertical, FolderInput, FolderMinus
 } from 'lucide-react';
 import { SolarSystem } from './ui/SolarSystem';
 
@@ -19,6 +19,7 @@ export const Sidebar = memo(function Sidebar({
   onCreateProject,
   onDeleteProject,
   onDeleteChat,
+  onMoveChat,
   onEditProject,
   onNewChat,
   onStartRenameChat,
@@ -41,6 +42,31 @@ export const Sidebar = memo(function Sidebar({
   const [newProjectName, setNewProjectName] = useState('');
   const [showMoreProjects, setShowMoreProjects] = useState(false);
   const moreProjectsRef = useRef(null);
+
+  // 4.3: menu de contexto "mover para projeto" — guarda o id do chat cujo
+  // menu está aberto (null = nenhum) e se o submenu de projetos está expandido.
+  const [moveMenuChatId, setMoveMenuChatId] = useState(null);
+  const [moveSubmenuOpen, setMoveSubmenuOpen] = useState(false);
+  const moveMenuRef = useRef(null);
+
+  // Fecha o menu de mover ao clicar fora dele
+  useEffect(() => {
+    if (!moveMenuChatId) return;
+    const handleClickOutside = (e) => {
+      if (moveMenuRef.current && !moveMenuRef.current.contains(e.target)) {
+        setMoveMenuChatId(null);
+        setMoveSubmenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [moveMenuChatId]);
+
+  const handleMoveChat = (chat, targetProjectId) => {
+    setMoveMenuChatId(null);
+    setMoveSubmenuOpen(false);
+    if (onMoveChat) onMoveChat(chat, targetProjectId);
+  };
 
   const visibleProjects = projects.slice(0, 3);
   const extraProjects   = projects.slice(3);
@@ -239,6 +265,63 @@ export const Sidebar = memo(function Sidebar({
                   <button onClick={e => onStartRenameChat(e, chat)} title="Renomear" className={`p-1 hover:text-current transition-colors ${theme.textMuted}`}>
                     <Pencil size={11} />
                   </button>
+                  <div className="relative">
+                    <button
+                      onClick={e => {
+                        e.stopPropagation();
+                        setMoveSubmenuOpen(false);
+                        setMoveMenuChatId(moveMenuChatId === chat.id ? null : chat.id);
+                      }}
+                      title="Mais opções"
+                      className={`p-1 hover:text-current transition-colors ${theme.textMuted}`}
+                    >
+                      <MoreVertical size={11} />
+                    </button>
+                    {moveMenuChatId === chat.id && (
+                      <div
+                        ref={moveMenuRef}
+                        onClick={e => e.stopPropagation()}
+                        className={`absolute right-0 top-full mt-1 z-50 min-w-[160px] rounded-xl border ${theme.border} ${darkMode ? 'bg-[#141414]' : 'bg-white'} shadow-xl py-1.5 animate-in fade-in zoom-in-95 duration-150`}
+                      >
+                        <div className="relative">
+                          <button
+                            onClick={() => setMoveSubmenuOpen(!moveSubmenuOpen)}
+                            className={`flex items-center gap-2 w-full px-3 py-1.5 text-left text-xs font-light transition-colors ${theme.projectHover} ${theme.textSecondary} hover:text-current`}
+                          >
+                            <FolderInput size={12} />
+                            <span className="flex-1">Mover para projeto</span>
+                            <ChevronDown size={10} className="-rotate-90 opacity-50" />
+                          </button>
+                          {moveSubmenuOpen && (
+                            <div className={`absolute right-full top-0 mr-1 min-w-[160px] max-h-56 overflow-y-auto custom-scrollbar rounded-xl border ${theme.border} ${darkMode ? 'bg-[#141414]' : 'bg-white'} shadow-xl py-1.5`}>
+                              {chat.project_id && (
+                                <button
+                                  onClick={() => handleMoveChat(chat, null)}
+                                  className={`flex items-center gap-2 w-full px-3 py-1.5 text-left text-xs font-light transition-colors ${theme.projectHover} ${theme.textSecondary} hover:text-current`}
+                                >
+                                  <FolderMinus size={12} />
+                                  <span>Sem projeto</span>
+                                </button>
+                              )}
+                              {projects.filter(p => p.id !== chat.project_id).length === 0 && (
+                                <p className={`px-3 py-1.5 text-[11px] font-light whitespace-nowrap ${theme.textMuted}`}>Nenhum outro projeto</p>
+                              )}
+                              {projects.filter(p => p.id !== chat.project_id).map(p => (
+                                <button
+                                  key={p.id}
+                                  onClick={() => handleMoveChat(chat, p.id)}
+                                  className={`flex items-center gap-2 w-full px-3 py-1.5 text-left text-xs font-light truncate transition-colors ${theme.projectHover} ${theme.textSecondary} hover:text-current`}
+                                >
+                                  <Folder size={12} className="shrink-0" />
+                                  <span className="truncate">{p.name}</span>
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
                   <button onClick={e => { e.stopPropagation(); onDeleteChat(chat); }} className="p-1 hover:text-red-500 transition-all duration-200">
                     <Trash2 size={12} />
                   </button>
