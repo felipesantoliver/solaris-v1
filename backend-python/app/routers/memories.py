@@ -2,7 +2,7 @@ import json
 import numpy as np
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Dict
 
 from app.ml_models import get_embedder, get_nlp
 from app.utils.groq_client import groq_available, groq_complete
@@ -86,6 +86,11 @@ async def extract_memories(request: MemoryExtractRequest):
 class MemoryItem(BaseModel):
     id: str
     content: str
+    # Embedding já salvo em memories.embedding (persistido pelo Node na
+    # criação da memória). None para memórias antigas, criadas antes desse
+    # cache existir — essas são recodificadas abaixo e o resultado volta no
+    # campo computed_embeddings, pro Node fazer o backfill.
+    embedding: Optional[List[float]] = None
 
 
 class SynthesisRequest(BaseModel):
@@ -96,21 +101,37 @@ class SynthesisRequest(BaseModel):
 class SynthesisResponse(BaseModel):
     synthesis: str
     used_memory_ids: List[str]
+    # id -> embedding, só para as memórias que chegaram sem embedding salvo e
+    # precisaram ser calculadas aqui. O Node persiste isso de volta em
+    # memories.embedding (backfill) — assim cada memória só é codificada
+    # uma vez na vida inteira, nunca de novo.
+    computed_embeddings: Dict[str, List[float]] = {}
 
 
 @router.post("/synthesize", response_model=SynthesisResponse)
 async def synthesize_memories(request: SynthesisRequest):
     if not request.memories:
-        return SynthesisResponse(synthesis="", used_memory_ids=[])
+        return SynthesisResponse(synthesis="", used_memory_ids=[], computed_embeddings={})
 
     embedder = get_embedder()
 
     query_emb = embedder.encode(request.query, convert_to_numpy=True)
 
+    # Só recodifica quem chegou sem embedding salvo — e faz isso em UM lote
+    # só (em vez de uma chamada ao encoder por memória, até 20x por mensagem).
+    missing = [mem for mem in request.memories if mem.embedding is None]
+    computed_embeddings: Dict[str, List[float]] = {}
+    if missing:
+        fresh = embedder.encode([mem.content for mem in missing], convert_to_numpy=True)
+        for mem, emb in zip(missing, fresh):
+            computed_embeddings[mem.id] = emb.tolist()
+
+    def embedding_for(mem: MemoryItem) -> List[float]:
+        return mem.embedding if mem.embedding is not None else computed_embeddings[mem.id]
+
     scored = []
     for mem in request.memories:
-        mem_emb = embedder.encode(mem.content, convert_to_numpy=True)
-        sim = cosine_similarity(query_emb, mem_emb)
+        sim = cosine_similarity(query_emb, embedding_for(mem))
         if sim > 0.4:
             scored.append((sim, mem))
 
@@ -118,7 +139,7 @@ async def synthesize_memories(request: SynthesisRequest):
     top_memories = scored[:8]
 
     if not top_memories:
-        return SynthesisResponse(synthesis="", used_memory_ids=[])
+        return SynthesisResponse(synthesis="", used_memory_ids=[], computed_embeddings=computed_embeddings)
 
     if groq_available():
         mem_texts = [f"- {mem.content}" for _, mem in top_memories]
@@ -136,7 +157,7 @@ Retorne apenas o parágrafo, sem introdução ou conclusão.
         groq_result = groq_complete(prompt, max_tokens=300)
         if groq_result and 50 <= len(groq_result) <= 400:
             used_ids = [mem.id for _, mem in top_memories]
-            return SynthesisResponse(synthesis=groq_result, used_memory_ids=used_ids)
+            return SynthesisResponse(synthesis=groq_result, used_memory_ids=used_ids, computed_embeddings=computed_embeddings)
 
     # Fallback: extração com spaCy
     nlp = get_nlp()
@@ -155,4 +176,4 @@ Retorne apenas o parágrafo, sem introdução ou conclusão.
     synthesis = " ".join(all_sentences)
     used_ids = [mem.id for _, mem in top_memories]
 
-    return SynthesisResponse(synthesis=synthesis, used_memory_ids=used_ids)
+    return SynthesisResponse(synthesis=synthesis, used_memory_ids=used_ids, computed_embeddings=computed_embeddings)
