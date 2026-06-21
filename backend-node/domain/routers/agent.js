@@ -129,11 +129,27 @@ function chunkText(text, size = 8) {
   return out;
 }
 
+// FIX: delay fixo de 12ms/chunk sem teto fazia uma resposta de ~4000 chars
+// (≈500 chunks com o `size` default de chunkText) virar ~6s de atraso
+// artificial. Agora o delay por chunk é calculado em função de
+// text.length pra manter a duração total dentro de um teto — respostas
+// curtas mantêm o ritmo de digitação original (12ms/chunk); só respostas
+// longas são "comprimidas" para caber no teto.
+const TYPING_CHUNK_SIZE = 8;       // mesmo `size` default de chunkText()
+const TYPING_DEFAULT_DELAY_MS = 12; // delay por chunk pra respostas curtas
+const TYPING_TOTAL_CAP_MS = 1800;   // teto de duração total (~1.5-2s)
+
+function typingDelayMs(textLength) {
+  const estimatedChunks = Math.max(1, Math.ceil(textLength / TYPING_CHUNK_SIZE));
+  return Math.min(TYPING_DEFAULT_DELAY_MS, TYPING_TOTAL_CAP_MS / estimatedChunks);
+}
+
 async function streamTextAsDeltas(text, onPiece, isClosed) {
+  const delay = typingDelayMs((text || '').length);
   for (const piece of chunkText(text)) {
     if (isClosed()) return;
     onPiece(piece);
-    await new Promise(r => setTimeout(r, 12));
+    await new Promise(r => setTimeout(r, delay));
   }
 }
 
