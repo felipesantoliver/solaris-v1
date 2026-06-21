@@ -4,7 +4,11 @@ import { getPool } from './database.js';
 
 // 4.5/4.6: incrementado para 8 — adiciona projects.instructions,
 // projects.shared_memory_enabled e memories.chat_id (memória isolada por chat).
-const CURRENT_SCHEMA_VERSION = 8;
+// Correção do pipeline de embeddings (RAG): incrementado para 9 — rede de
+// segurança best-effort para file_chunks.embedding_v / embedding_model (ver
+// migração v9 abaixo e backend-python/migrations/001 e 002, que continuam
+// sendo o caminho oficial documentado no README).
+const CURRENT_SCHEMA_VERSION = 9;
 
 async function ensureSchemaVersionTable(client) {
   await client.query(`
@@ -356,6 +360,49 @@ export async function initDb() {
 
       await setSchemaVersion(client, 8);
       console.log('✅ Migração v8 aplicada.');
+    }
+
+    // ========== MIGRAÇÃO v9 ==========
+    // Correção do pipeline de embeddings (RAG): indexFileChunks() passou a
+    // gravar file_chunks.embedding_v (vector) e file_chunks.embedding_model
+    // (TEXT) — ver domain/ai/embeddings.js. Essas colunas já existem em
+    // ambientes onde a migração manual backend-python/migrations/001 e 002
+    // foi executada no SQL Editor do Supabase (caminho OFICIAL, documentado
+    // no README). Este bloco é só uma rede de segurança best-effort: torna a
+    // mesma alteração idempotente e automática no boot do Node, para
+    // ambientes novos não ficarem com "schema Node atualizado, mas RAG
+    // quebrado por falta de coluna". Cada statement é best-effort porque
+    // CREATE EXTENSION pode exigir privilégio que a role da aplicação não
+    // tem em alguns provedores gerenciados — nesse caso a migração manual
+    // continua sendo necessária (ver README, seção "Migration pgvector").
+    if (currentVersion < 9) {
+      console.log('🔄 Aplicando migração v9 (pgvector em file_chunks: embedding_v, embedding_model)...');
+
+      const migrations = [
+        `CREATE EXTENSION IF NOT EXISTS vector`,
+        `ALTER TABLE file_chunks ADD COLUMN IF NOT EXISTS embedding_v vector(384)`,
+        `ALTER TABLE file_chunks ADD COLUMN IF NOT EXISTS embedding_model TEXT`,
+      ];
+
+      for (const sql of migrations) {
+        await client.query(sql).catch(err => {
+          if (!err.message?.includes('already exists') && !err.message?.includes('duplicate column')) {
+            console.warn(`⚠️ Migração v9 ignorada (best-effort — confira a migração manual no README se o RAG continuar sem resultados): ${err.message}`);
+          }
+        });
+      }
+
+      // Índice HNSW para busca aproximada por similaridade de cosseno —
+      // mesmo índice da migração manual 001; IF NOT EXISTS torna a
+      // repetição aqui inofensiva.
+      await client.query(
+        `CREATE INDEX IF NOT EXISTS idx_file_chunks_embedding_v_hnsw
+         ON file_chunks
+         USING hnsw (embedding_v vector_cosine_ops)`
+      ).catch(() => {});
+
+      await setSchemaVersion(client, 9);
+      console.log('✅ Migração v9 aplicada.');
     }
 
     console.log(`✅ Schema atualizado para versão ${CURRENT_SCHEMA_VERSION}`);

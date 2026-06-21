@@ -64,6 +64,14 @@ def _embedding_to_vector_literal(embedding) -> str:
 
 @router.post("/rag")
 async def search_rag(request: RAGRequest):
+    # Tarefa 5 (correção do pipeline de embeddings): este endpoint é chamado
+    # em TODA resposta de chat com RAG ativo (ver messages.js ->
+    # searchRelevantChunks). Por isso, embedder.encode() só pode rodar aqui
+    # sobre a QUERY do usuário (com cache, ver _get_cached_query_embedding) —
+    # NUNCA sobre fc.chunk_text. Os chunks já chegam com embedding_v
+    # persistido pela indexação (indexFileChunks, no Node), feita uma única
+    # vez no upload do arquivo/fonte; recodificá-los aqui transformaria toda
+    # resposta de chat numa operação de embedding em lote, sem necessidade.
     project_id = request.project_id
     chat_id = request.chat_id
     query = request.query.strip()
