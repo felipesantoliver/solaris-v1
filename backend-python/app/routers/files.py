@@ -52,6 +52,13 @@ async def extract_text(
 
         return JSONResponse(content={"text": text.strip(), "pages": pages})
 
+    except HTTPException:
+        # Re-propaga HTTPException sem embrulhar em 500 — HTTPException é
+        # subclasse de Exception, então sem este except específico antes do
+        # genérico, o 415 levantado acima (tipo de arquivo não suportado)
+        # seria capturado abaixo e virava um 500 opaco. Mesmo padrão do
+        # voice.py (/transcribe).
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro na extração de texto: {str(e)}")
     finally:

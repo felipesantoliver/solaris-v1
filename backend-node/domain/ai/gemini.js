@@ -187,9 +187,25 @@ export async function geminiChat(messages, systemPrompt, modelKey = 'flash') {
       throw err;
     }
     const data         = await res.json();
-    const candidate    = data.candidates[0];
-    const text         = candidate.content.parts[0].text;
-    const finishReason = candidate.finishReason;
+    // FIX: mesmo padrão de optional chaining já usado em streamGeminiChat.
+    // `data.candidates` pode vir vazio/ausente quando o safety filter do
+    // Gemini bloqueia a resposta — o acesso direto `data.candidates[0]
+    // .content.parts[0].text` lançava TypeError não tratado, virando um
+    // 500 opaco pro usuário (sem dizer que o motivo foi o filtro de segurança).
+    const candidate    = data.candidates?.[0];
+    const text         = candidate?.content?.parts?.[0]?.text;
+    const finishReason = candidate?.finishReason;
+
+    if (!text) {
+      // Sem texto: prompt/resposta bloqueado pelo safety filter
+      // (promptFeedback.blockReason) ou candidate finalizado sem `parts`
+      // por outro motivo (ex: finishReason SAFETY/RECITATION/OTHER).
+      // Mensagem legível em vez do TypeError cru.
+      const reason = data.promptFeedback?.blockReason || finishReason || 'desconhecido';
+      const err = new Error(`O Gemini não retornou uma resposta de texto (motivo: ${reason}). Tente reformular a mensagem.`);
+      err.status = 400;
+      throw err;
+    }
 
     return { text, maxTokens: finishReason === 'MAX_TOKENS' };
   } catch (err) {
