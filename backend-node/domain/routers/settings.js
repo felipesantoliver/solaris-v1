@@ -1,5 +1,22 @@
-// domain/routers/settings.js — Configurações e preferências do usuário
-// (personalidade do assistente + notificações + privacidade)
+// domain/routers/settings.js
+//
+// Rotas de configuracoes e preferencias do usuario.
+//
+// Gerencia personalidade do assistente, tracos customizados, preferencias
+// de notificacao (browser e som) e privacidade (personalizacao e uso de dados).
+// Tambem oferece migracao de dados de convidado para conta autenticada
+// e compartilhamento publico de chat (somente leitura).
+//
+// Convidados tambem tem suas preferencias persistidas, vinculadas ao guestId
+// em vez de uma conta. extractUserId trata ambos os casos (auth e guest)
+// de forma transparente.
+//
+// Agrupamento logico:
+//   1. Constantes e valores padrao
+//   2. Obter configuracoes do usuario
+//   3. Salvar/atualizar configuracoes (upsert parcial)
+//   4. Migracao de guest para usuario autenticado
+//   5. Compartilhamento publico de chat
 
 import { Router } from 'express';
 import { runAsync, getAsync, allAsync } from '../../db/database.js';
@@ -9,7 +26,13 @@ import { extractUserId } from '../../middleware/auth.js';
 const router = Router();
 router.use(extractUserId);
 
-// Valores padrão usados quando o usuário (ou convidado) ainda não tem registro salvo.
+// ---------------------------------------------------------------------------
+// 1. CONSTANTES E VALORES PADRAO
+// ---------------------------------------------------------------------------
+
+// Valores default usados quando o usuario (ou convidado) ainda nao tem
+// registro salvo na tabela user_settings. Servem como fallback para o
+// frontend e como valores iniciais no upsert.
 const DEFAULT_SETTINGS = {
   personality: 'direto',
   custom_traits: '',
@@ -19,11 +42,24 @@ const DEFAULT_SETTINGS = {
   privacy_usage: true,
 };
 
-// Obter configurações e preferências do usuário.
-// req.userId pode ser o id de uma conta autenticada (Supabase) ou o guestId
-// de um usuário anônimo (header x-user-id) — extractUserId trata os dois casos
-// da mesma forma, então convidados também têm suas preferências persistidas,
-// só que vinculadas ao guestId em vez de a uma conta.
+// ---------------------------------------------------------------------------
+// 2. OBTER CONFIGURACOES DO USUARIO
+// ---------------------------------------------------------------------------
+
+/**
+ * Retorna as configuracoes atuais do usuario.
+ *
+ * Mescla os valores salvos no banco com DEFAULT_SETTINGS: campos que
+ * existem no banco sobrescrevem o default; campos ausentes usam o default.
+ * Isso garante que novos campos adicionados em migracoes futuras tenham
+ * um valor inicial seguro sem precisar de backfill.
+ *
+ * req.userId pode ser um UUID de conta autenticada (Supabase) ou o guestId
+ * de um usuario anonimo (header x-user-id). extractUserId trata ambos os
+ * casos, entao convidados tambem tem suas preferencias persistidas.
+ *
+ * GET /api/settings
+ */
 router.get('/settings', async (req, res, next) => {
   const userId = req.userId;
   try {
@@ -32,16 +68,40 @@ router.get('/settings', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// Salva/atualiza configurações — aceita atualização PARCIAL do payload.
-// Qualquer campo omitido no body preserva o valor já salvo no banco (ou o
-// default acima, se for a primeira vez que esse usuário salva algo). Isso
-// permite que a aba "Personalização" e a aba "Notificações/Privacidade" do
-// frontend salvem independentemente, sem uma sobrescrever os campos da outra.
+// ---------------------------------------------------------------------------
+// 3. SALVAR/ATUALIZAR CONFIGURACOES (UPSERT PARCIAL)
+// ---------------------------------------------------------------------------
+
+/**
+ * Salva ou atualiza configuracoes do usuario com upsert parcial.
+ *
+ * Comportamento por campo:
+ *   - Campos enviados no body: atualizados com o novo valor.
+ *   - Campos OMITIDOS (undefined): mantem o valor atual no banco (via
+ *     COALESCE no SQL). Isso permite que abas diferentes do frontend
+ *     (Personalizacao e Notificacoes/Privacidade) salvem independentemente,
+ *     sem uma sobrescrever os campos da outra.
+ *   - Primeira vez do usuario: se nao existir registro, o INSERT cria
+ *     usando COALESCE com os defaults definidos em DEFAULT_SETTINGS.
+ *
+ * Invalidacao de cache:
+ *   O system prompt depende de personality e custom_traits. O cache so
+ *   e invalidado quando esses campos mudam — alteracoes apenas em
+ *   notificacoes ou privacidade nao disparam invalidacao.
+ *
+ * Suporta POST (compatibilidade com cliente atual) e PUT (verbo semântico
+ * correto para recurso idempotente como preferencias de usuario).
+ *
+ * POST /api/settings
+ * PUT  /api/settings
+ */
 async function upsertSettings(req, res, next) {
   const userId = req.userId;
   const b = req.body || {};
 
-  // undefined -> null, para o COALESCE do SQL abaixo preservar o valor atual da coluna
+  // Converte undefined para null: COALESCE no SQL interpreta null como
+  // "mantenha o valor atual" (usa o nome da propria coluna no UPDATE,
+  // ou o valor default no INSERT).
   const personality        = b.personality          !== undefined ? b.personality        : null;
   const customTraits       = b.custom_traits         !== undefined ? b.custom_traits       : null;
   const notifBrowser       = b.notif_browser         !== undefined ? !!b.notif_browser     : null;
@@ -70,7 +130,8 @@ async function upsertSettings(req, res, next) {
       [userId, personality, customTraits, notifBrowser, notifSound, privacyPersonalize, privacyUsage]
     );
 
-    // O system prompt depende de personalidade/traços — só invalida o cache quando eles mudam
+    // Invalida cache do system prompt apenas se personalidade ou traits mudaram.
+    // Notificacoes e privacidade nao afetam o prompt, entao nao disparam invalidacao.
     if (personality !== null || customTraits !== null) {
       invalidateSystemPromptCache(userId, null);
     }
@@ -79,39 +140,52 @@ async function upsertSettings(req, res, next) {
   } catch (err) { next(err); }
 }
 
-// POST mantido por compatibilidade com o cliente atual; PUT é o verbo semanticamente
-// correto para "atualizar/criar" um recurso idempotente como as preferências do usuário.
+// Registra ambos os verbos: POST para compatibilidade, PUT para semantica correta.
 router.post('/settings', upsertSettings);
 router.put('/settings', upsertSettings);
 
-// Migração de guest para usuário logado (rota sem middleware, pois usa body)
-//
-// Cobre TODO o histórico do convidado, não só os projetos:
-//   - projects        -> projetos criados como convidado
-//   - chats            -> conversas avulsas (fora de projeto, project_id IS NULL)
-//                         e também as ligadas a projeto, mantendo user_id consistente
-//   - memories         -> memórias/personalização extraídas fora de projeto
-//   - user_settings    -> preferências (personalidade, notificações, privacidade)
-// `messages` não precisa de update direto: pertence a `chats` via chat_id, então
-// migrar `chats.user_id` já preserva as mensagens junto.
+// ---------------------------------------------------------------------------
+// 4. MIGRACAO DE GUEST PARA USUARIO AUTENTICADO
+// ---------------------------------------------------------------------------
+
+/**
+ * Migra TODO o historico do convidado para a conta recem-logada.
+ *
+ * Rota sem middleware extractUserId: usa guest_id e user_id diretamente
+ * do body. Isso e necessario porque o usuario pode estar migrando de um
+ * guestId que nao corresponde ao token de autenticacao atual.
+ *
+ * Dados migrados:
+ *   - projects: projetos criados como convidado.
+ *   - chats: conversas avulsas (fora de projeto) E conversas dentro de
+ *     projetos, mantendo user_id consistente. Mensagens nao precisam de
+ *     update direto: pertencem a chats via chat_id; migrar chats.user_id
+ *     ja preserva as mensagens junto.
+ *   - memories: memorias extraidas fora de projeto, vinculadas ao guest.
+ *   - user_settings: preferencias do convidado migradas para a conta.
+ *
+ * Protecao de user_settings:
+ *   Se a conta autenticada JA TEM preferencias salvas (ex.: usuario logou
+ *   anteriormente em outro navegador), as preferencias do guest NAO
+ *   sobrescrevem as existentes — o registro do guest e apenas deletado.
+ *   Isso evita que um guestId "vazio" de um navegador novo apague
+ *   preferencias ja configuradas na conta.
+ *
+ * POST /api/migrate
+ */
 router.post('/migrate', async (req, res, next) => {
   const { guest_id, user_id } = req.body;
   if (!guest_id || !user_id || guest_id === user_id) return res.json({ ok: true, migrated: 0 });
   try {
     const result = await runAsync('UPDATE projects SET user_id = $1 WHERE user_id = $2', [user_id, guest_id]);
 
-    // Conversas avulsas (e também as de projeto, por consistência) — preserva o histórico de chat.
+    // Migra conversas avulsas e de projeto, mantendo user_id consistente
     await runAsync('UPDATE chats SET user_id = $1, updated_at = NOW() WHERE user_id = $2', [user_id, guest_id]);
 
-    // Memórias extraídas fora de projeto, vinculadas diretamente ao convidado.
+    // Migra memorias extraidas fora de projeto
     await runAsync('UPDATE memories SET user_id = $1 WHERE user_id = $2', [user_id, guest_id]);
 
-    // Migra as preferências (personalidade, notificações, privacidade) do convidado
-    // para a conta recém-logada — mas só se a conta ainda não tiver preferências
-    // próprias salvas. Isso evita sobrescrever preferências já definidas em uma
-    // conta existente (ex.: usuário loga em um navegador novo, que tem um guestId
-    // diferente; não queremos que o guestId "vazio" desse navegador apague as
-    // preferências já configuradas na conta).
+    // Migra preferencias do guest apenas se a conta ainda nao tem as proprias
     const existingUserSettings = await getAsync('SELECT user_id FROM user_settings WHERE user_id = $1', [user_id]);
     if (!existingUserSettings) {
       await runAsync('UPDATE user_settings SET user_id = $1, updated_at = NOW() WHERE user_id = $2', [user_id, guest_id]);
@@ -123,12 +197,31 @@ router.post('/migrate', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// Compartilhar chat (público) – sem autenticação
+// ---------------------------------------------------------------------------
+// 5. COMPARTILHAMENTO PUBLICO DE CHAT
+// ---------------------------------------------------------------------------
+
+/**
+ * Retorna um chat e suas mensagens para visualizacao publica (somente leitura).
+ *
+ * Rota sem autenticacao — qualquer pessoa com o link pode ver o chat.
+ * Nao expoe dados sensiveis do usuario, apenas o conteudo das mensagens
+ * e metadados basicos do chat (titulo, datas).
+ *
+ * Uso: gerar link compartilhavel de uma conversa.
+ *
+ * GET /api/share/:chatId
+ */
 router.get('/share/:chatId', async (req, res, next) => {
   try {
     const chat = await getAsync('SELECT * FROM chats WHERE id = $1', [req.params.chatId]);
     if (!chat) return res.status(404).json({ error: 'Chat não encontrado' });
-    const messages = await allAsync('SELECT role, content, created_at FROM messages WHERE chat_id = $1 ORDER BY created_at ASC', [req.params.chatId]);
+
+    const messages = await allAsync(
+      'SELECT role, content, created_at FROM messages WHERE chat_id = $1 ORDER BY created_at ASC',
+      [req.params.chatId]
+    );
+
     res.json({ chat, messages });
   } catch (err) { next(err); }
 });

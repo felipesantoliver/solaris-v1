@@ -1,16 +1,93 @@
+# backend-python/requirements.txt
+#
+# Dependencias do microsservico Python (FastAPI).
+# Responsavel por: embeddings, RAG, extracao de memorias,
+# sintese de historico, geracao de titulos, classificacao de
+# intencao, transcricao de voz e otimizacao de personalidade.
+#
+# Organizado por grupo funcional para facilitar manutencao e
+# identificacao de dependencias obsoletas.
+#
+# Dependencias removidas (limpeza):
+#   - scikit-learn: nao era importado em nenhum modulo
+#   - psycopg2-binary: substituido por asyncpg para acesso async;
+#     psycopg2 era legado e incompativel com pools de conexao asyncpg
+#   - httpx: nao era importado diretamente; todas as chamadas HTTP
+#     usam a camada interna do FastAPI/Starlette ou o SDK do Groq
+
+# ---------------------------------------------------------------------------
+# FERRAMENTAS DE BUILD (necessarias para instalar pacotes com C extensions)
+# ---------------------------------------------------------------------------
+
+# setuptools: build backend para pacotes que usam setup.py (ex: spacy)
+# wheel: necessario para instalar pacotes em formato .whl
+# Faixa <81: evita breaking changes do setuptools 81+ com alguns pacotes ML
 setuptools>=68.0.0,<81
 wheel>=0.41.0
+
+# ---------------------------------------------------------------------------
+# WEB FRAMEWORK
+# ---------------------------------------------------------------------------
+
+# FastAPI: framework web assincrono com validacao via Pydantic e OpenAPI auto
 fastapi==0.115.12
+
+# Uvicorn: servidor ASGI para FastAPI (com dependencias extras para watch e logs)
 uvicorn[standard]==0.34.0
+
+# python-multipart: parsing de formularios multipart (upload de arquivos e audio)
 python-multipart==0.0.20
+
+# python-dotenv: carrega variaveis de ambiente do arquivo .env (dev local)
 python-dotenv==1.0.1
-httpx==0.28.1
+
+# ---------------------------------------------------------------------------
+# ML / NLP (MACHINE LEARNING E PROCESSAMENTO DE LINGUAGEM NATURAL)
+# ---------------------------------------------------------------------------
+
+# sentence-transformers: embeddings semanticos (all-MiniLM-L6-v2, 384 dimensoes)
+# Usado para indexacao RAG, busca semantica e similaridade de memorias
 sentence-transformers==3.3.1
+
+# numpy: operacoes vetoriais e matriciais (embeddings, similaridade de cosseno)
+# Versao 2.x: suporte a float32 nativo e melhor performance com arrays grandes
 numpy==2.2.4
-scikit-learn==1.6.1
+
+# spaCy: segmentacao de sentencas e extracao de entidades para NLP
+# Modelo pt_core_news_sm instalado separadamente via: python -m spacy download
+# Usado como fallback quando Groq esta indisponivel (extracao de memorias,
+# sintese de historico)
 spacy==3.8.4
+
+# ---------------------------------------------------------------------------
+# EXTRACAO DE PDF
+# ---------------------------------------------------------------------------
+
+# pypdf: leitura basica de PDF (texto, metadados, numero de paginas)
+# Mais leve e rapido para PDFs com texto simples
 pypdf==5.1.0
+
+# pdfplumber: extracao avancada de PDF (tabelas, layout preservado)
+# Usado como complemento ao pypdf para PDFs com formatacao complexa
 pdfplumber==0.11.4
-psycopg2-binary==2.9.10
+
+# ---------------------------------------------------------------------------
+# BANCO DE DADOS (APENAS ASYNC)
+# ---------------------------------------------------------------------------
+
+# asyncpg: driver PostgreSQL assincrono de alta performance
+# Usado para consultas diretas ao Supabase (embeddings, chunks, memorias)
+# Substituiu psycopg2 por ser compativel com pools de conexao async
 asyncpg==0.30.0
+
+# ---------------------------------------------------------------------------
+# LLM / STT (MODELOS DE LINGUAGEM E TRANSCRICAO DE VOZ)
+# ---------------------------------------------------------------------------
+
+# groq: SDK oficial para API Groq
+# Usado para:
+#   - llama3-8b-8192: extracao/sintese de memorias, sumarizacao de historico,
+#     geracao de titulos, classificacao de intencao, otimizacao de personalidade
+#   - whisper-large-v3-turbo: transcricao de audio (voz para texto)
+# Minimo 0.9.0: suporte a API de completions com parametros atuais
 groq>=0.9.0

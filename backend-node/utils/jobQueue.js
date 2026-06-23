@@ -1,99 +1,176 @@
-// utils/jobQueue.js — Fila de jobs assíncrona com BullMQ
+// utils > JS jobQueue.js
+
+// ---------------------------------------------------------------------------
+// Fila de jobs assincrona baseada em BullMQ
+// ---------------------------------------------------------------------------
 
 import { Queue, Worker } from 'bullmq';
 import { randomUUID } from 'crypto';
 import { runAsync, allAsync, getAsync } from '../db/database.js';
 import { indexFileChunks } from '../domain/ai/embeddings.js';
 
+// ---------------------------------------------------------------------------
+// Configuracao do Redis
+// ---------------------------------------------------------------------------
+
 const REDIS_URL = process.env.REDIS_URL;
+
+// ---------------------------------------------------------------------------
+// Estado interno da fila
+// ---------------------------------------------------------------------------
 
 let queue = null;
 let worker = null;
 let isReady = false;
 
-// Handlers de processamento (mesma lógica anterior)
+// ---------------------------------------------------------------------------
+// Mapeamento de handlers por tipo de job
+// ---------------------------------------------------------------------------
+
 const handlers = {
   upload: processUpload,
   embedding: processEmbedding,
 };
 
+// ---------------------------------------------------------------------------
+// Handler: processamento de upload
+// ---------------------------------------------------------------------------
+
+/**
+ * Processa um job de upload. Se houver texto extraido do arquivo,
+ * encadeia automaticamente um job de embedding para indexacao.
+ */
 async function processUpload(payload) {
   const { fileId, projectId, filePath, extractedText } = payload;
+
   if (extractedText && extractedText.length > 0) {
     await addJob('embedding', { fileId, projectId, text: extractedText }, 1);
   }
+
   return { status: 'uploaded', fileId };
 }
 
+// ---------------------------------------------------------------------------
+// Handler: processamento de embedding
+// ---------------------------------------------------------------------------
+
+/**
+ * Processa um job de embedding. Indexa o texto do arquivo em chunks
+ * para busca semantica via vetores.
+ */
 async function processEmbedding(payload) {
   const { fileId, projectId, text } = payload;
   const db = { runAsync, allAsync, getAsync };
+
   await indexFileChunks(fileId, text, db);
+
   return { status: 'embedded', chunks: Math.ceil(text.length / 500) };
 }
 
-// Inicializa a fila e o worker se Redis estiver disponível
+// ---------------------------------------------------------------------------
+// Inicializacao do BullMQ (fila e worker)
+// ---------------------------------------------------------------------------
+
+/**
+ * Inicializa a conexao com Redis, a fila e o worker.
+ * Retorna false se REDIS_URL nao estiver definida ou se a
+ * inicializacao falhar, true em caso de sucesso.
+ */
 function initBullMQ() {
   if (!REDIS_URL) {
-    console.warn('⚠️ REDIS_URL não definida – fila desabilitada');
+    console.warn('REDIS_URL not defined — job queue disabled');
     return false;
   }
 
   try {
     const connection = { url: REDIS_URL, maxRetriesPerRequest: 3 };
 
+    // -----------------------------------------------------------------------
+    // Fila
+    // -----------------------------------------------------------------------
+
     queue = new Queue('solaris-jobs', {
       connection,
-      defaultJobOptions: { attempts: 3, backoff: { type: 'exponential', delay: 5000 } }
+      defaultJobOptions: {
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 5000 },
+      },
     });
 
-    worker = new Worker('solaris-jobs', async (job) => {
-      const { id, name, data } = job;
-      console.log(`🚀 Iniciando job ${id} (${name})`);
+    // -----------------------------------------------------------------------
+    // Worker
+    // -----------------------------------------------------------------------
 
-      const handler = handlers[name];
-      if (!handler) {
-        throw new Error(`Tipo de job desconhecido: ${name}`);
+    worker = new Worker(
+      'solaris-jobs',
+      async (job) => {
+        const { id, name, data } = job;
+        console.log(`Starting job ${id} (${name})`);
+
+        const handler = handlers[name];
+        if (!handler) {
+          throw new Error(`Unknown job type: ${name}`);
+        }
+
+        try {
+          const result = await handler(data);
+          console.log(`Job ${id} (${name}) completed`);
+          return result;
+        } catch (err) {
+          console.error(`Job ${id} (${name}) failed:`, err.message);
+          throw err; // BullMQ gerencia as retentativas
+        }
+      },
+      {
+        connection,
+        concurrency: 2,
       }
+    );
 
-      try {
-        const result = await handler(data);
-        console.log(`✅ Job ${id} (${name}) concluído`);
-        return result;
-      } catch (err) {
-        console.error(`❌ Job ${id} (${name}) falhou:`, err.message);
-        throw err; // BullMQ cuidará do retry
-      }
-    }, {
-      connection,
-      concurrency: 2,
-    });
+    // -----------------------------------------------------------------------
+    // Eventos do worker
+    // -----------------------------------------------------------------------
 
-    worker.on('completed', (job) => {
-      console.log(`✅ Job ${job.id} (${job.name}) finalizado com sucesso`);
-    });
-
+    // O processador acima ja registra conclusao e falha nos logs.
+    // O evento abaixo trata apenas falhas permanentes (todas as
+    // retentativas esgotadas).
     worker.on('failed', (job, err) => {
-      console.error(`❌ Job ${job.id} (${job.name}) falhou definitivamente:`, err.message);
+      if (job.attemptsMade >= job.opts.attempts) {
+        console.error(
+          `Job ${job.id} (${job.name}) permanently failed after ${job.attemptsMade} attempts:`,
+          err.message
+        );
+      }
     });
 
     worker.on('error', (err) => {
-      console.error('⚠️ Worker BullMQ erro:', err.message);
+      console.error('BullMQ worker error:', err.message);
     });
 
     isReady = true;
-    console.log('🚀 BullMQ Worker iniciado');
+    console.log('BullMQ worker started');
     return true;
   } catch (err) {
-    console.error('❌ Falha ao inicializar BullMQ:', err.message);
+    console.error('Failed to initialize BullMQ:', err.message);
     return false;
   }
 }
 
-// Função pública para adicionar job
-async function addJob(type, payload, priority = 0) {
+// ---------------------------------------------------------------------------
+// API publica: adicionar job a fila
+// ---------------------------------------------------------------------------
+
+/**
+ * Adiciona um job a fila, se o sistema estiver pronto.
+ *
+ * @param {string} type - Tipo do job (chave do mapa handlers).
+ * @param {object} payload - Dados do job.
+ * @param {number} priority - Prioridade (numeros menores = maior prioridade).
+ * @returns {string|null} ID do job enfileirado, ou null se a fila estiver desabilitada.
+ */
+export async function addJob(type, payload, priority = 0) {
   if (!isReady || !queue) {
-    console.warn('⚠️ Fila desabilitada – job não adicionado:', type);
+    console.warn('Job queue disabled — job not enqueued:', type);
     return null;
   }
 
@@ -104,41 +181,57 @@ async function addJob(type, payload, priority = 0) {
     attempts: payload.maxRetries || 3,
     backoff: { type: 'exponential', delay: 5000 },
   });
-  console.log(`📦 Job ${jobId} (${type}) adicionado à fila BullMQ`);
+
+  console.log(`Job ${jobId} (${type}) enqueued`);
   return jobId;
 }
 
-// Inicializa a fila (start)
-function start() {
+// ---------------------------------------------------------------------------
+// API publica: iniciar o sistema de filas
+// ---------------------------------------------------------------------------
+
+/**
+ * Inicia o worker e a fila, se ainda nao estiverem rodando.
+ * Seguro chamar multiplas vezes (idempotente).
+ */
+export function start() {
   if (!isReady) {
     initBullMQ();
   }
 }
 
-// Para o worker (stop)
-async function stop() {
+// ---------------------------------------------------------------------------
+// API publica: parar o sistema de filas
+// ---------------------------------------------------------------------------
+
+/**
+ * Encerra graciosamente o worker e libera recursos.
+ */
+export async function stop() {
   if (worker) {
     await worker.close();
     worker = null;
     isReady = false;
-    console.log('🛑 BullMQ Worker parado');
+    console.log('BullMQ worker stopped');
   }
 }
 
-// Singleton
+// ---------------------------------------------------------------------------
+// Singleton: instancia unica do gerenciador de filas
+// ---------------------------------------------------------------------------
+
 let jobQueueInstance = null;
 
+/**
+ * Obtem a instancia singleton do gerenciador de filas.
+ * Na primeira chamada, inicializa automaticamente o worker.
+ *
+ * @returns {object} Objeto com os metodos addJob, start e stop.
+ */
 export function getJobQueue() {
   if (!jobQueueInstance) {
-    jobQueueInstance = {
-      addJob,
-      start,
-      stop,
-    };
+    jobQueueInstance = { addJob, start, stop };
     jobQueueInstance.start();
   }
   return jobQueueInstance;
 }
-
-// Exporta também para uso direto (compatibilidade)
-export { addJob, start, stop };

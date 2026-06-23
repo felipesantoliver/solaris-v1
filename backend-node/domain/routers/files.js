@@ -1,28 +1,32 @@
-// domain/routers/files.js — Upload, listagem, deleção e download autenticado
+// domain/routers/files.js
 //
-// Problema 5 corrigido: arquivos não são mais salvos no disco (ephemeral no Render).
-//   O buffer binário vai para a coluna "content BYTEA" da tabela files.
-//   O download lê diretamente do banco.
+// Rotas de gerenciamento de arquivos — upload, listagem, deleção e download.
 //
-// Problema 4 corrigido: após inserir o arquivo, indexFileChunks() é chamado para
-//   gerar os file_chunks com embedding, habilitando o RAG.
+// Responsavel por receber arquivos enviados pelo usuario, extrair texto
+// via microsservico Python, persistir binario e metadados no banco,
+// disparar indexacao RAG em background e permitir download posterior.
 //
-// 4.1: arquivos agora podem pertencer a um chat avulso (sem projeto) — colunas
-//   project_id/chat_id são mutuamente opcionais (mas não ambas nulas; ver
-//   migração v7 em db/schema.js, que adiciona CHECK project_id IS NOT NULL OR
-//   chat_id IS NOT NULL). Rotas antigas (/files/:projectId) continuam intactas;
-//   rotas novas (/files/chat/:chatId) cobrem o caso sem projeto.
-//   IMPORTANTE: as rotas /files/chat/... são registradas ANTES de /files/:projectId
-//   — em Express, :projectId é um segmento curinga e capturaria literalmente
-//   "chat" como valor de projectId se viesse primeiro, nunca chegando no handler
-//   correto.
+// Caracteristicas importantes:
+//   - Binario salvo na coluna content BYTEA (nao em disco — evita perda no
+//     Render, que tem sistema de arquivos ephemeral).
+//   - Extracao de texto com timeout (15s via AbortController) para nao
+//     travar a requisicao em PDFs grandes ou servico lento.
+//   - Upload nunca falha por falha na extracao: arquivo e salvo mesmo sem
+//     texto extraido (fica sem indexacao RAG, mas ainda e baixavel).
+//   - Suporte a arquivos em chats avulsos (sem projeto) desde a v4.1.
 //
-// 4.2: a chamada ao microsserviço Python (/files/extract-text) agora tem
-//   timeout com AbortController (15s) — antes, um PDF grande ou o serviço
-//   lento deixava a requisição pendurada indefinidamente, e no Render
-//   (free tier, timeout curto) isso acabava em 502/504 sem mensagem útil
-//   para o usuário. Agora falha de forma previsível e o upload continua
-//   (arquivo é salvo mesmo sem texto extraído — ver comentário no catch).
+// Ordem de registro das rotas (IMPORTANTE):
+//   Rotas /files/chat/... sao registradas ANTES de /files/:projectId
+//   porque :projectId e um segmento curinga no Express. Se viesse primeiro,
+//   capturaria literalmente "chat" como valor de projectId, nunca alcancando
+//   o handler correto.
+//
+// Agrupamento logico:
+//   1. Constantes e configuracao do multer
+//   2. Helpers compartilhados (upload middleware, extracao, persistencia)
+//   3. Rotas de chat avulso (/files/chat/...)
+//   4. Rotas de projeto (/files/:projectId)
+//   5. Download de arquivo
 
 import { Router } from 'express';
 import multer from 'multer';
@@ -35,13 +39,29 @@ import { extractUserId } from '../../middleware/auth.js';
 
 const router = Router();
 
+// ---------------------------------------------------------------------------
+// 1. CONSTANTES E CONFIGURACAO DO MULTER
+// ---------------------------------------------------------------------------
+
+// Extensoes de arquivo permitidas para upload.
+// Foco em formatos textuais e de codigo (para extracao e indexacao RAG).
 const ALLOWED_EXTS = ['.pdf', '.txt', '.md', '.json', '.js', '.ts', '.py', '.css', '.html', '.csv'];
-const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
+
+// Tamanho maximo de arquivo: 10 MB.
+// Limite suficiente para documentos, codigos-fonte e PDFs tipicos.
+const MAX_FILE_SIZE = 10 * 1024 * 1024;
+
+// Timeout para extracao de texto no microsservico Python.
+// 15 segundos cobrem o pior caso (PDF grande e complexo) sem travar
+// a requisicao do usuario por tempo excessivo.
 const EXTRACT_TIMEOUT_MS = 15_000;
 
+// URL base do microsservico Python para extracao de texto.
 const PYTHON_SERVICE_URL = process.env.PYTHON_SERVICE_URL || 'http://localhost:8000';
 
-// Armazena o arquivo em memória para depois salvar no banco
+// Configuracao do multer: armazenamento em memoria (memoryStorage).
+// O buffer resultante e salvo diretamente na coluna BYTEA do banco,
+// sem passar pelo sistema de arquivos (que e ephemeral no Render).
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: MAX_FILE_SIZE },
@@ -59,9 +79,20 @@ const upload = multer({
   },
 });
 
-// Middleware compartilhado: parseia multipart, traduz erros do multer em
-// respostas HTTP apropriadas (413/415) — usado tanto no upload por projeto
-// quanto no upload por chat.
+// ---------------------------------------------------------------------------
+// 2. HELPERS COMPARTILHADOS
+// ---------------------------------------------------------------------------
+
+/**
+ * Middleware compartilhado de upload.
+ *
+ * Faz o parsing do multipart/form-data e traduz erros do multer em
+ * respostas HTTP apropriadas:
+ *   - LIMIT_FILE_SIZE -> 413 (Payload Too Large)
+ *   - INVALID_FILE_TYPE -> 415 (Unsupported Media Type)
+ *
+ * Usado tanto no upload por projeto quanto no upload por chat avulso.
+ */
 function handleUpload(req, res, next) {
   upload.single('file')(req, res, (err) => {
     if (err?.code === 'LIMIT_FILE_SIZE')
@@ -73,11 +104,22 @@ function handleUpload(req, res, next) {
   });
 }
 
-// Extrai texto via microsserviço Python, com timeout protegido por
-// AbortController. Nunca lança — em qualquer falha (timeout, 4xx/5xx, rede
-// fora do ar), retorna string vazia e loga o motivo; o upload do arquivo
-// em si não deve falhar só porque a extração de texto falhou (o arquivo
-// continua sendo salvo e baixável, só fica sem indexação RAG).
+/**
+ * Extrai texto de um arquivo via microsservico Python, com timeout.
+ *
+ * Comportamento:
+ *   - Envia o buffer do arquivo como multipart/form-data para o Python.
+ *   - Timeout de EXTRACT_TIMEOUT_MS (15s) via AbortController.
+ *   - Status 415 (tipo nao suportado) e esperado e nao e tratado como erro:
+ *     significa que o formato nao tem texto extraivel (ex: binario).
+ *   - Em qualquer falha (timeout, rede, erro do Python), retorna string vazia
+ *     e loga o motivo. O upload do arquivo NAO DEVE FALHAR por causa da
+ *     extracao de texto — o arquivo continua salvo e baixavel, apenas fica
+ *     sem indexacao RAG.
+ *
+ * @param {Object} file - Objeto do multer com { buffer, originalname, mimetype }
+ * @returns {Promise<string>} Texto extraido ou string vazia em caso de falha
+ */
 async function extractTextSafely(file) {
   try {
     const formData = new FormData();
@@ -100,8 +142,8 @@ async function extractTextSafely(file) {
     }
 
     if (!response.ok) {
-      // 415 (tipo não suportado pelo parser de texto, ex: binário não-PDF) é
-      // esperado e não é um erro de verdade — apenas não há texto a extrair.
+      // 415: tipo nao suportado pelo parser de texto (ex: binario nao-PDF).
+      // Nao e um erro real — apenas nao ha texto a extrair.
       if (response.status !== 415) {
         const detail = await response.text().catch(() => '');
         console.error(`Erro ao extrair texto com Python (${response.status}): ${detail}`);
@@ -121,8 +163,25 @@ async function extractTextSafely(file) {
   }
 }
 
-// Insere o arquivo no banco e dispara a indexação RAG em background.
-// Compartilhado pelos dois handlers de upload (projeto e chat avulso).
+/**
+ * Persiste um arquivo no banco e dispara indexacao RAG em background.
+ *
+ * Fluxo:
+ *   1. Extrai texto do arquivo via microsservico Python (com timeout)
+ *   2. Insere registro na tabela files (metadados + buffer binario + texto)
+ *   3. Se houve texto extraido, dispara indexFileChunks() em background
+ *      para gerar embeddings e habilitar busca RAG sobre este arquivo
+ *   4. Invalida cache do system prompt para incluir a nova fonte
+ *
+ * Compartilhado pelos handlers de upload em projeto e em chat avulso.
+ *
+ * @param {Object}  params
+ * @param {Object}  params.file      - Arquivo do multer
+ * @param {string}  params.projectId - ID do projeto (ou null)
+ * @param {string}  params.chatId    - ID do chat (ou null)
+ * @param {string}  params.userId    - ID do usuario
+ * @returns {Promise<Object>} Metadados do arquivo persistido
+ */
 async function persistUploadedFile({ file, projectId, chatId, userId }) {
   const extractedText = await extractTextSafely(file);
 
@@ -133,14 +192,15 @@ async function persistUploadedFile({ file, projectId, chatId, userId }) {
     [fileId, projectId || null, chatId || null, file.originalname, file.mimetype, file.size, extractedText, file.buffer]
   );
 
-  // Indexar chunks com embeddings (assíncrono — não bloqueia a resposta)
-  // Problema 4: sem essa chamada o RAG nunca encontra nada.
+  // Dispara indexacao RAG em background (nao bloqueia a resposta ao usuario).
+  // Sem esta chamada, o RAG nunca encontra conteudo de arquivos.
   if (extractedText) {
     indexFileChunks(fileId, extractedText, { runAsync }).catch(err =>
       console.error('❌ Erro ao indexar chunks:', err.message)
     );
   }
 
+  // Invalida cache para que a proxima conversa inclua este arquivo no contexto
   if (userId) invalidateSystemPromptCache(userId, projectId || null);
 
   return {
@@ -151,12 +211,16 @@ async function persistUploadedFile({ file, projectId, chatId, userId }) {
   };
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// Rotas /files/chat/... — registradas ANTES das genéricas /files/:projectId
-// (ver nota no topo do arquivo sobre ordem de matching do Express).
-// ═══════════════════════════════════════════════════════════════════════
+// ---------------------------------------------------------------------------
+// 3. ROTAS DE CHAT AVULSO (/files/chat/...)
+// ---------------------------------------------------------------------------
+// Registradas ANTES das rotas genericas /files/:projectId.
+// Ver nota sobre ordem de matching do Express no cabecalho deste arquivo.
 
-// ─── 4.1: Listar arquivos de um chat avulso (sem projeto) ─────────────────
+/**
+ * Lista arquivos anexados a um chat avulso (sem projeto).
+ * GET /files/chat/:chatId
+ */
 router.get('/files/chat/:chatId', extractUserId, async (req, res, next) => {
   try {
     const rows = await allAsync(
@@ -167,11 +231,16 @@ router.get('/files/chat/:chatId', extractUserId, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ─── 4.1: Upload de arquivo direto num chat (com ou sem projeto) ──────────
-// Usado pelo input de anexo do chat quando não há projeto ativo. Verifica
-// ownership do chat antes de aceitar o upload, e propaga o project_id do
-// chat (se o chat já pertencer a um projeto) — assim o arquivo entra também
-// na indexação/RAG do projeto, em vez de ficar "só visível pelo chat".
+/**
+ * Upload de arquivo diretamente em um chat (com ou sem projeto).
+ *
+ * Verifica ownership do chat antes de aceitar o upload.
+ * Se o chat pertence a um projeto, propaga o project_id para que
+ * o arquivo entre na indexacao RAG do projeto, em vez de ficar
+ * visivel apenas pelo chat.
+ *
+ * POST /files/chat/:chatId
+ */
 router.post('/files/chat/:chatId', extractUserId, handleUpload, async (req, res, next) => {
   const userId = req.userId;
   const { chatId } = req.params;
@@ -192,7 +261,10 @@ router.post('/files/chat/:chatId', extractUserId, handleUpload, async (req, res,
   } catch (err) { next(err); }
 });
 
-// ─── 4.1: Deletar arquivo anexado a um chat avulso ─────────────────────────
+/**
+ * Exclui um arquivo anexado a um chat avulso.
+ * DELETE /files/chat/:chatId/:fileId
+ */
 router.delete('/files/chat/:chatId/:fileId', extractUserId, async (req, res, next) => {
   const userId = req.userId;
   try {
@@ -207,11 +279,15 @@ router.delete('/files/chat/:chatId/:fileId', extractUserId, async (req, res, nex
   } catch (err) { next(err); }
 });
 
-// ═══════════════════════════════════════════════════════════════════════
-// Rotas /files/:projectId — genéricas (rota original, inalteradas)
-// ═══════════════════════════════════════════════════════════════════════
+// ---------------------------------------------------------------------------
+// 4. ROTAS DE PROJETO (/files/:projectId)
+// ---------------------------------------------------------------------------
+// Rotas originais, mantidas inalteradas para compatibilidade.
 
-// ─── Listar arquivos do projeto ────────────────────────────────────────────
+/**
+ * Lista arquivos de um projeto.
+ * GET /files/:projectId
+ */
 router.get('/files/:projectId', async (req, res, next) => {
   try {
     const rows = await allAsync(
@@ -222,7 +298,10 @@ router.get('/files/:projectId', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ─── Upload de arquivo dentro de um projeto (rota original, inalterada) ───
+/**
+ * Upload de arquivo dentro de um projeto.
+ * POST /files/:projectId
+ */
 router.post('/files/:projectId', extractUserId, handleUpload, async (req, res, next) => {
   const userId = req.userId;
   if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo enviado' });
@@ -235,7 +314,10 @@ router.post('/files/:projectId', extractUserId, handleUpload, async (req, res, n
   } catch (err) { next(err); }
 });
 
-// ─── Deletar arquivo de projeto (rota original, inalterada) ───────────────
+/**
+ * Exclui um arquivo de projeto e invalida o cache do system prompt.
+ * DELETE /files/:projectId/:fileId
+ */
 router.delete('/files/:projectId/:fileId', extractUserId, async (req, res, next) => {
   const userId = req.userId;
   try {
@@ -251,12 +333,23 @@ router.delete('/files/:projectId/:fileId', extractUserId, async (req, res, next)
   } catch (err) { next(err); }
 });
 
-// ─── Download de arquivo — lê diretamente do banco (sem depender do disco) ─
-// 4.1: o JOIN original (INNER JOIN projects) excluía qualquer arquivo sem
-// project_id — todo arquivo anexado direto a um chat avulso resultava em 404
-// aqui, mesmo existindo no banco. Trocado por LEFT JOIN em projects E em
-// chats, resolvendo o dono (e o user_id correspondente) por qualquer um dos
-// dois caminhos.
+// ---------------------------------------------------------------------------
+// 5. DOWNLOAD DE ARQUIVO
+// ---------------------------------------------------------------------------
+
+/**
+ * Download do binario original do arquivo.
+ *
+ * Le diretamente da coluna content (BYTEA) do banco, sem depender de
+ * sistema de arquivos em disco (que e ephemeral no Render).
+ *
+ * Resolucao de ownership:
+ *   Usa LEFT JOIN em projects E chats para encontrar o dono do arquivo,
+ *   independente de ele estar vinculado a um projeto ou a um chat avulso.
+ *   O COALESCE garante que o user_id correto seja usado em qualquer caso.
+ *
+ * GET /files/:id/download
+ */
 router.get('/files/:id/download', extractUserId, async (req, res, next) => {
   try {
     const fileId = req.params.id;
@@ -276,9 +369,11 @@ router.get('/files/:id/download', extractUserId, async (req, res, next) => {
     if (!file.content)
       return res.status(404).json({ error: 'Conteúdo do arquivo não disponível' });
 
+    // Define Content-Disposition como inline para exibicao no navegador
+    // (em vez de attachment que forcaria download automatico)
     res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(file.original_name)}"`);
     res.setHeader('Content-Type', file.mime_type || 'application/octet-stream');
-    res.send(file.content); // file.content é um Buffer (pg retorna BYTEA como Buffer)
+    res.send(file.content); // Buffer retornado pelo pg para coluna BYTEA
   } catch (err) { next(err); }
 });
 

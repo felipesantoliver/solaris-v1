@@ -1,7 +1,14 @@
+# Caminho: sandbox/app/main.py
+# Objetivo: Servico de sandbox para execucao segura de codigo Python.
+#           Oferece endpoints para health check e execucao isolada de snippets,
+#           utilizando validacao AST e limites de recursos.
+
 import ast
 import json
 import os
+import re
 import resource
+import shutil
 import subprocess
 import tempfile
 import time
@@ -10,77 +17,112 @@ from fastapi import FastAPI, HTTPException, Header
 from pydantic import BaseModel
 from typing import List, Optional, Any
 
+# =============================================================================
+# CONFIGURACAO DA APLICACAO
+# =============================================================================
+
 app = FastAPI(title="Solaris Sandbox", version="1.0.0")
 
+# Token interno para autenticacao entre servicos.
+# Se nao definido, o servico opera em modo inseguro (apenas para desenvolvimento).
 INTERNAL_TOKEN = os.getenv("INTERNAL_TOKEN", "")
 if not INTERNAL_TOKEN:
-    print("⚠️ INTERNAL_TOKEN não definido. O serviço será inseguro.", flush=True)
+    print("AVISO: INTERNAL_TOKEN nao definido. O servico esta inseguro.", flush=True)
 
-# ─── Modelos ──────────────────────────────────────────────────────
+# =============================================================================
+# MODELOS DE DADOS
+# =============================================================================
+
 class PythonExecRequest(BaseModel):
+    """Payload para requisicao de execucao de codigo Python."""
     code: str
-    timeout: int = 5   # segundos
-    memory_limit_mb: int = 128
+    timeout: int = 5          # Tempo maximo de execucao em segundos
+    memory_limit_mb: int = 128  # Limite de memoria virtual em MB
 
 class PythonExecResponse(BaseModel):
+    """Resposta da execucao de codigo Python."""
     success: bool
     output: str
     error: str
     duration_ms: int
 
+# Modelo mantido para compatibilidade, mas o endpoint nao esta ativo.
 class BatchEmbeddingsRequest(BaseModel):
     texts: List[str]
 
-# ─── Validação AST ────────────────────────────────────────────────
+# =============================================================================
+# VALIDACAO DE SEGURANCA VIA ANALISE ESTATICA (AST)
+# =============================================================================
+
+# Modulos que o usuario tem permissao para importar.
 ALLOWED_MODULES = {
     "math", "statistics", "json", "re", "datetime",
     "collections", "itertools", "numpy", "pandas"
 }
 
+# Nomes proibidos que nao podem ser referenciados no codigo (funcoes, modulos, etc.).
+# A funcao 'open' e tratada separadamente na validacao AST.
 FORBIDDEN_NAMES = {
     "os", "sys", "subprocess", "socket", "shutil",
     "requests", "urllib", "ctypes", "eval", "exec",
     "__import__", "compile", "globals", "locals",
-    "open"  # será permitido apenas para /tmp/solaris_sandbox_*
+    "open"  # Permitido apenas para caminhos dentro de /tmp/solaris_sandbox_*
 }
 
 def validate_ast(code: str) -> bool:
-    """Retorna True se o código é seguro para execução."""
+    """
+    Verifica se o codigo-fonte e seguro para execucao analisando a AST.
+    
+    Bloqueia:
+    - Importacao de modulos fora da lista permitida.
+    - Uso de nomes proibidos (como 'eval', 'exec', 'os', etc.).
+    - Chamadas diretas a funcoes perigosas.
+    
+    Retorna True se o codigo passar em todas as verificacoes.
+    """
     try:
         tree = ast.parse(code)
     except SyntaxError:
         return False
 
     for node in ast.walk(tree):
-        # Nomes globais (ex: __import__, open)
+        # Bloqueia referencias a nomes proibidos (ex: open, eval)
         if isinstance(node, ast.Name):
             if node.id in FORBIDDEN_NAMES:
                 return False
-        # Importações: proibir módulos proibidos
+
+        # Bloqueia importacoes de modulos nao permitidos (import X)
         if isinstance(node, ast.Import):
             for alias in node.names:
                 module_name = alias.name.split('.')[0]
                 if module_name not in ALLOWED_MODULES:
                     return False
+
+        # Bloqueia importacoes de modulos nao permitidos (from X import Y)
         if isinstance(node, ast.ImportFrom):
             module_name = node.module.split('.')[0] if node.module else ""
             if module_name and module_name not in ALLOWED_MODULES:
                 return False
-            # Proibir imports de nomes proibidos (ex: from os import ...)
+            # Bloqueia importacao de nomes proibidos (ex: from os import system)
             for alias in node.names:
                 if alias.name in FORBIDDEN_NAMES:
                     return False
-        # Chamadas a funções proibidas (ex: eval, exec)
+
+        # Bloqueia chamadas diretas a funcoes proibidas (ex: eval())
         if isinstance(node, ast.Call):
             if isinstance(node.func, ast.Name):
                 if node.func.id in FORBIDDEN_NAMES:
                     return False
+
     return True
 
-# ─── Endpoints ──────────────────────────────────────────────────────
+# =============================================================================
+# ENDPOINTS
+# =============================================================================
 
 @app.get("/health")
 async def health():
+    """Verificacao de saude do servico."""
     return {"status": "ok"}
 
 @app.post("/tools/python-exec", response_model=PythonExecResponse)
@@ -88,35 +130,42 @@ async def python_exec(
     req: PythonExecRequest,
     x_internal_token: Optional[str] = Header(None)
 ):
+    """
+    Executa um snippet de codigo Python em ambiente isolado.
+    
+    Requer autenticacao via header X-Internal-Token.
+    Aplica validacao AST, limites de tempo e memoria, e sanitizacao de saida.
+    O codigo e executado em um diretorio temporario removido apos o uso.
+    """
+    # Verifica autenticacao
     if not INTERNAL_TOKEN or x_internal_token != INTERNAL_TOKEN:
-        raise HTTPException(status_code=401, detail="Token inválido")
+        raise HTTPException(status_code=401, detail="Token invalido")
 
+    # Aplica limites maximos de seguranca
     code = req.code
-    timeout = min(req.timeout, 10)   # máximo 10s
-    mem_limit_mb = min(req.memory_limit_mb, 256)
+    timeout = min(req.timeout, 10)          # Forca maximo de 10 segundos
+    mem_limit_mb = min(req.memory_limit_mb, 256)  # Forca maximo de 256 MB
 
-    # 1. Validação AST
+    # Etapa 1: Validacao de seguranca do codigo
     if not validate_ast(code):
         return PythonExecResponse(
             success=False,
             output="",
-            error="Código rejeitado pela política de segurança (módulo ou função proibida).",
+            error="Codigo rejeitado pela politica de seguranca (modulo ou funcao proibida).",
             duration_ms=0
         )
 
-    # 2. Prepara ambiente de execução
+    # Etapa 2: Preparacao do ambiente isolado
     work_dir = tempfile.mkdtemp(prefix="solaris_sandbox_")
     script_path = os.path.join(work_dir, "script.py")
     with open(script_path, "w") as f:
         f.write(code)
 
-    # 3. Executa com subprocess (timeout e limites)
+    # Etapa 3: Execucao com limites de recursos
     start = time.perf_counter()
     try:
-        # Define limites de memória via resource (se disponível no sistema)
-        # Em ambientes Linux, podemos setar limites antes do subprocess
-        # Mas faremos via subprocess com prlimit se disponível? Vamos usar timeout simples.
-        # Para memória, usamos ulimit -v  (virtual memory)
+        # Define limites de memoria virtual via ulimit antes de executar o script.
+        # O PYTHONPATH e limpo para evitar injecao de modulos do ambiente externo.
         cmd = [
             "sh", "-c",
             f"ulimit -v {mem_limit_mb * 1024}; python3 {script_path}"
@@ -127,17 +176,15 @@ async def python_exec(
             capture_output=True,
             text=True,
             timeout=timeout,
-            env={"PYTHONPATH": ""}  # limpa variáveis de ambiente
+            env={"PYTHONPATH": ""}
         )
         duration_ms = int((time.perf_counter() - start) * 1000)
 
         stdout = result.stdout.strip()
         stderr = result.stderr.strip()
 
-        # Sanitiza stderr (remove caminhos)
+        # Sanitiza a saida de erro removendo caminhos absolutos do sistema
         if stderr:
-            # Remove caminhos absolutos (/app, /tmp, etc.)
-            import re
             stderr = re.sub(r'/tmp/solaris_sandbox_[^/]+/', '', stderr)
             stderr = re.sub(r'/app/', '', stderr)
 
@@ -155,6 +202,7 @@ async def python_exec(
                 error=stderr or "Erro desconhecido",
                 duration_ms=duration_ms
             )
+
     except subprocess.TimeoutExpired:
         duration_ms = int((time.perf_counter() - start) * 1000)
         return PythonExecResponse(
@@ -172,34 +220,22 @@ async def python_exec(
             duration_ms=duration_ms
         )
     finally:
-        # Limpeza do diretório temporário (em background)
-        import shutil
+        # Limpeza do diretorio temporario (executada em background)
         try:
             shutil.rmtree(work_dir, ignore_errors=True)
         except:
             pass
 
-
-# ─── Batch Embeddings (para ser chamado pelo backend-python ou Node) ─────
-# Este endpoint pode ser movido para o backend-python, mas mantemos aqui
-# para centralizar tarefas pesadas no sandbox. Entretanto, o backend-python
-# já tem SentenceTransformer, então podemos deixar apenas lá.
-# Para evitar duplicação, deixamos este endpoint comentado, mas se desejar
-# pode ativá-lo. Recomendo manter no backend-python.
-
-# @app.post("/embeddings/batch")
-# async def batch_embeddings(req: BatchEmbeddingsRequest):
-#     try:
-#         from sentence_transformers import SentenceTransformer
-#         model = SentenceTransformer("all-MiniLM-L6-v2")
-#         embeddings = model.encode(req.texts, convert_to_numpy=True)
-#         return {"embeddings": [e.tolist() for e in embeddings]}
-#     except Exception as e:
-#         raise HTTPException(status_code=500, detail=str(e))
-
-
-# ─── Condense Chunk ───────────────────────────────────────────────────────
-# Removido: era duplicata morta de /tools/condense-chunk, que vive em
-# backend-python/app/main.py (versão mais completa: max_chars configurável,
-# mais keywords). Nenhum dos dois é chamado pelo Node hoje; se for reativado
-# no futuro, deve ficar centralizado lá — o sandbox é só para python-exec.
+# =============================================================================
+# NOTAS SOBRE ENDPOINTS COMENTADOS/REMOVIDOS
+# =============================================================================
+#
+# 1) /embeddings/batch: movido permanentemente para o microsservico Python
+#    (backend-python), que ja carrega o SentenceTransformer. Manter aqui
+#    causaria duplicacao de modelos e consumo desnecessario de memoria.
+#
+# 2) /tools/condense-chunk: a versao original foi removida por ser uma
+#    duplicata incompleta. A implementacao completa (com max_chars e mais
+#    keywords) esta em backend-python/app/main.py. Nenhum dos dois endpoints
+#    e chamado pelo backend Node atualmente; se necessario no futuro, deve
+#    ser reativado apenas no microsservico Python.
