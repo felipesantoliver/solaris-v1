@@ -6,6 +6,8 @@
 
 Assistente pessoal de IA com memória persistente, organização por projetos e suporte a múltiplos modelos de linguagem. Projetado para funcionar como um segundo cérebro: lembra do que foi discutido, organiza conhecimento por contexto e executa código em ambiente seguro.
 
+O projeto nasce de um estudo de frontend feito mão, melhoria continua e otimização com python 
+
 ---
 
 ## Sumário
